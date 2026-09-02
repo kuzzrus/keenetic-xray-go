@@ -30,9 +30,11 @@ type State int
 const (
 	// StateActivePrimary: primary is live; probing it directly.
 	StateActivePrimary State = iota
-	// StateActiveBackup: backup is live, not yet retrying recovery --
-	// only reached right after a failed recovery confirmation, waiting
-	// out RollbackBackoffSeconds before trying again.
+	// StateActiveBackup: backup is live, not currently retrying recovery.
+	// Reached either right after a failed recovery confirmation or by an
+	// explicit operator switch to backup; either way a
+	// RollbackBackoffSeconds timer must elapse before recovery testing
+	// (re)starts.
 	StateActiveBackup
 	// StateTestingRecovery: backup is live; an isolated throwaway
 	// instance is probing primary in the background.
@@ -185,7 +187,7 @@ func (m *Machine) tickTestingRecovery(ctx context.Context) {
 		// Roll back immediately -- a known-good backup beats a flapping
 		// primary -- then back off before hammering it with retries.
 		_ = m.actions.SwitchLiveTo(ctx, RoleBackup)
-		m.backoffUntil = m.clock.Now().Add(time.Duration(m.cfg.RollbackBackoffSeconds) * time.Second)
+		m.backoffUntil = m.clock.Now().Add(m.rollbackBackoff())
 		m.transitionTo(StateActiveBackup)
 		return
 	}
@@ -220,14 +222,29 @@ func (m *Machine) transitionTo(next State) {
 	}
 }
 
-// forceState immediately sets the state and clears the failure/success
-// counters and any pending rollback backoff. Used for an explicit
-// external command (CLI/bot force-switch), not the normal tick-driven
-// evaluation, so a stale backoff from a previous automatic rollback can't
-// block an operator-requested switch.
-func (m *Machine) forceState(s State) {
+func (m *Machine) rollbackBackoff() time.Duration {
+	return time.Duration(m.cfg.RollbackBackoffSeconds) * time.Second
+}
+
+// forcePrimary handles an explicit operator command (CLI/bot) to run on
+// primary now, bypassing the failure-counting logic. It clears the
+// failure/success counters and any pending rollback backoff so nothing
+// defers the switch.
+func (m *Machine) forcePrimary() {
 	m.consecutiveFailures = 0
 	m.isolatedSuccesses = 0
 	m.backoffUntil = time.Time{}
-	m.transitionTo(s)
+	m.transitionTo(StateActivePrimary)
+}
+
+// forceBackup handles an explicit operator command to run on backup now.
+// Unlike forcePrimary it arms the rollback backoff (RollbackBackoffSeconds
+// from now) rather than clearing it, so the next Tick doesn't immediately
+// start probing primary for automatic recovery and undo a deliberate
+// operator choice. Once the backoff elapses, normal auto-recovery resumes.
+func (m *Machine) forceBackup() {
+	m.consecutiveFailures = 0
+	m.isolatedSuccesses = 0
+	m.backoffUntil = m.clock.Now().Add(m.rollbackBackoff())
+	m.transitionTo(StateActiveBackup)
 }

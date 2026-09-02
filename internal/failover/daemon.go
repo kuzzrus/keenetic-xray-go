@@ -199,7 +199,9 @@ func (d *Daemon) State(ctx context.Context) (State, bool) {
 
 // ForceSwitch immediately points production at role, bypassing the normal
 // failure-counting logic -- for an explicit operator command (CLI/bot),
-// not the automatic health-check loop. Safe to call concurrently with Run.
+// not the automatic health-check loop. Switching to backup also arms the
+// rollback backoff, so automatic recovery won't undo it on the next tick.
+// Safe to call concurrently with Run.
 func (d *Daemon) ForceSwitch(ctx context.Context, role Role) error {
 	var switchErr error
 	ran := d.do(ctx, func(ctx context.Context) {
@@ -208,9 +210,9 @@ func (d *Daemon) ForceSwitch(ctx context.Context, role Role) error {
 		}
 		if role == RolePrimary {
 			_ = d.actions.StopIsolatedPretest(ctx)
-			d.machine.forceState(StateActivePrimary)
+			d.machine.forcePrimary()
 		} else {
-			d.machine.forceState(StateActiveBackup)
+			d.machine.forceBackup()
 		}
 	})
 	if !ran {

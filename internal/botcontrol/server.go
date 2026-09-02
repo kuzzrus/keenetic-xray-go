@@ -2,6 +2,7 @@ package botcontrol
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
 	"encoding/json"
@@ -11,6 +12,12 @@ import (
 	"strings"
 	"time"
 )
+
+// maxResultBytes caps an /agent/result request body. A command result is
+// a short status string; this just stops a misbehaving or hostile agent
+// (one holding a valid token) from streaming an unbounded body into the
+// decoder.
+const maxResultBytes = 256 * 1024
 
 // RouterAuth resolves a router ID to its expected bearer token, and
 // reports whether that router is known at all. Separated from Server so
@@ -71,9 +78,13 @@ func (s *Server) handleFingerprint(w http.ResponseWriter, _ *http.Request) {
 // authenticated wraps next with Bearer-token authentication. The router
 // ID comes from RouterIDHeader -- needed to know which token to check
 // against before (and regardless of) parsing any body, since /agent/poll
-// has no body at all -- and the token from the Authorization header; the
-// two are compared constant-time so a timing side-channel can't be used
-// to brute-force a valid token.
+// has no body at all -- and the token from the Authorization header.
+//
+// Every failure returns the same bare 401, and a constant-time comparison
+// of fixed-length SHA-256 digests runs on every request (against a
+// throwaway secret when the router ID is unknown), so neither the
+// response body nor the response timing reveals whether a given router ID
+// is registered or how long its token is.
 func (s *Server) authenticated(next func(w http.ResponseWriter, r *http.Request, routerID string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -81,18 +92,19 @@ func (s *Server) authenticated(next func(w http.ResponseWriter, r *http.Request,
 			return
 		}
 		routerID := r.Header.Get(RouterIDHeader)
-		if routerID == "" {
-			http.Error(w, "missing "+RouterIDHeader, http.StatusUnauthorized)
-			return
-		}
-		want, ok := s.cfg.Auth.TokenFor(routerID)
-		if !ok {
-			http.Error(w, "unknown router", http.StatusUnauthorized)
-			return
-		}
 		got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
-			http.Error(w, "invalid token", http.StatusUnauthorized)
+
+		want, known := s.cfg.Auth.TokenFor(routerID)
+		if !known {
+			// Compare against a value no real token can equal, so the
+			// hashing and comparison below still run for an unknown or
+			// missing router ID.
+			want = "\x00unregistered\x00"
+		}
+		gotSum := sha256.Sum256([]byte(got))
+		wantSum := sha256.Sum256([]byte(want))
+		if routerID == "" || !known || subtle.ConstantTimeCompare(gotSum[:], wantSum[:]) != 1 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		next(w, r, routerID)
@@ -111,6 +123,7 @@ func (s *Server) handlePoll(w http.ResponseWriter, _ *http.Request, routerID str
 }
 
 func (s *Server) handleResult(w http.ResponseWriter, r *http.Request, routerID string) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxResultBytes)
 	var result Result
 	if err := json.NewDecoder(r.Body).Decode(&result); err != nil {
 		http.Error(w, "invalid body", http.StatusBadRequest)
@@ -129,10 +142,16 @@ func (s *Server) handleResult(w http.ResponseWriter, r *http.Request, routerID s
 // grace period) and returns ctx.Err().
 func ListenAndServeTLS(ctx context.Context, addr string, cert tls.Certificate, handler http.Handler) error {
 	srv := &http.Server{
-		Addr:              addr,
-		Handler:           handler,
-		TLSConfig:         &tls.Config{Certificates: []tls.Certificate{cert}},
+		Addr:      addr,
+		Handler:   handler,
+		TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}},
+		// The API exchanges only small JSON over a fast path; bounded
+		// timeouts keep a slow or idle peer (this is a public endpoint)
+		// from tying up a connection indefinitely.
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	errCh := make(chan error, 1) // buffered: the goroutine must never block on a send nobody reads

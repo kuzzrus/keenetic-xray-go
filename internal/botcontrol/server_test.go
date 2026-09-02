@@ -76,6 +76,32 @@ func TestServer_Poll_UnknownRouterRejected(t *testing.T) {
 	}
 }
 
+func TestServer_Auth_RejectionIsUniform(t *testing.T) {
+	// An unknown router ID and a known router ID with the wrong token
+	// must be indistinguishable from the client side -- same status,
+	// same body -- so the endpoint can't be used to enumerate which
+	// router IDs are registered.
+	ts, _ := testServer(t)
+
+	readAll := func(routerID, token string) (int, string) {
+		resp := doAuthed(t, ts, "/agent/poll", routerID, token, nil)
+		defer resp.Body.Close()
+		var buf bytes.Buffer
+		_, _ = buf.ReadFrom(resp.Body)
+		return resp.StatusCode, buf.String()
+	}
+
+	unknownCode, unknownBody := readAll("no-such-router", "whatever")
+	wrongCode, wrongBody := readAll("router-1", "wrong-token")
+
+	if unknownCode != http.StatusUnauthorized || wrongCode != http.StatusUnauthorized {
+		t.Fatalf("status codes = %d / %d, want 401 / 401", unknownCode, wrongCode)
+	}
+	if unknownBody != wrongBody {
+		t.Errorf("bodies differ: unknown-router %q vs wrong-token %q", unknownBody, wrongBody)
+	}
+}
+
 func TestServer_Poll_MissingRouterIDHeaderRejected(t *testing.T) {
 	ts, _ := testServer(t)
 	req, err := http.NewRequest(http.MethodPost, ts.URL+"/agent/poll", nil)

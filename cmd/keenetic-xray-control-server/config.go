@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"runtime"
 )
 
 // settings is the control server's own on-disk configuration. It has
@@ -45,6 +46,9 @@ func loadSettings(path string) (settings, error) {
 	}
 	if err != nil {
 		return settings{}, fmt.Errorf("reading %s: %w", path, err)
+	}
+	if info, statErr := os.Stat(path); statErr == nil && runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
+		fmt.Fprintf(os.Stderr, "keenetic-xray-control-server: warning: %s is mode %04o (group/other can read it); it holds the Telegram token and per-router secrets -- run: chmod 600 %s\n", path, info.Mode().Perm(), path)
 	}
 	if err := json.Unmarshal(data, &s); err != nil {
 		return settings{}, fmt.Errorf("parsing %s: %w", path, err)

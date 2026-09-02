@@ -79,7 +79,7 @@ func (b *TelegramBot) Run(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			b.logger().Printf("telegram: getUpdates: %v", err)
+			b.logger().Printf("telegram: getUpdates: %s", b.scrubToken(err))
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -105,6 +105,19 @@ func (b *TelegramBot) logger() *log.Logger {
 		return b.Logger
 	}
 	return log.Default()
+}
+
+// scrubToken renders err for logging with the bot token redacted.
+// Transport failures from b.client are *url.Error values whose message
+// embeds the request URL, and the Telegram API carries the token in the
+// URL path (/bot<token>/...), so logging such an error verbatim would
+// write the token to stderr/syslog.
+func (b *TelegramBot) scrubToken(err error) string {
+	msg := err.Error()
+	if b.Token != "" {
+		msg = strings.ReplaceAll(msg, b.Token, "<redacted>")
+	}
+	return msg
 }
 
 func (b *TelegramBot) apiBase() string {
@@ -159,7 +172,7 @@ func (b *TelegramBot) sendMessage(ctx context.Context, chatID int64, text string
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := b.client.Do(req)
 	if err != nil {
-		b.logger().Printf("telegram: sendMessage: %v", err)
+		b.logger().Printf("telegram: sendMessage: %s", b.scrubToken(err))
 		return
 	}
 	defer resp.Body.Close()

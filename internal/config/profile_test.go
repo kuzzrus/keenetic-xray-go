@@ -139,8 +139,15 @@ func TestConfigSave_RefusesInvalid(t *testing.T) {
 func TestConfigValidate_ProfileIndicesOutOfRange(t *testing.T) {
 	c := Default()
 	c.Profiles = []Profile{validProfile()}
+
 	c.PrimaryIndex = 1 // only index 0 exists
 	if err := c.Validate(); err == nil {
 		t.Error("expected error for out-of-range primary_index")
+	}
+
+	c.PrimaryIndex = 0
+	c.BackupIndex = -2 // below the -1 "unset" sentinel
+	if err := c.Validate(); err == nil {
+		t.Error("expected error for backup_index below the -1 unset sentinel")
 	}
 }

@@ -8,7 +8,7 @@ import (
 
 func cmdVariant(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: keenetic-xray variant {show|set} ...")
+		return fmt.Errorf("usage: keenetic-xray variant {show|set} [args]")
 	}
 	switch args[0] {
 	case "show":

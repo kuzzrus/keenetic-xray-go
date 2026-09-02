@@ -11,7 +11,7 @@ import (
 
 func cmdAgent(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: keenetic-xray agent {configure|enable|disable|status} ...")
+		return fmt.Errorf("usage: keenetic-xray agent {configure|enable|disable|status} [args]")
 	}
 	switch args[0] {
 	case "configure":

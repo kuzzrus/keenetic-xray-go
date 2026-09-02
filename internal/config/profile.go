@@ -192,11 +192,11 @@ func (c *Config) Validate() error {
 	default:
 		return fmt.Errorf("unknown variant %q", c.Variant)
 	}
-	if c.PrimaryIndex >= len(c.Profiles) {
-		return fmt.Errorf("primary_index %d out of range (%d profiles)", c.PrimaryIndex, len(c.Profiles))
+	if c.PrimaryIndex < -1 || c.PrimaryIndex >= len(c.Profiles) {
+		return fmt.Errorf("primary_index %d out of range (-1 for unset, or 0..%d)", c.PrimaryIndex, len(c.Profiles)-1)
 	}
-	if c.BackupIndex >= len(c.Profiles) {
-		return fmt.Errorf("backup_index %d out of range (%d profiles)", c.BackupIndex, len(c.Profiles))
+	if c.BackupIndex < -1 || c.BackupIndex >= len(c.Profiles) {
+		return fmt.Errorf("backup_index %d out of range (-1 for unset, or 0..%d)", c.BackupIndex, len(c.Profiles)-1)
 	}
 	for i, p := range c.Profiles {
 		if err := p.Validate(); err != nil {

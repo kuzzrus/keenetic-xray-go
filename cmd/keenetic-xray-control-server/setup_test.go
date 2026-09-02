@@ -69,7 +69,7 @@ func TestRunSetup_WritesValidConfig(t *testing.T) {
 		t.Errorf("certificate not generated: %v", err)
 	}
 	got := out.String()
-	for _, want := range []string{"fingerprint", "keenetic-xray agent configure https://<this-server-host>:8443 home-router", "office-router"} {
+	for _, want := range []string{"SHA-256", "keenetic-xray agent configure https://<this-server-host>:8443 home-router", "office-router"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("wizard output missing %q\n---\n%s", want, got)
 		}
@@ -92,7 +92,7 @@ func TestRunSetup_RejectsBadChatIDsThenRecovers(t *testing.T) {
 	if len(s.AllowedChatIDs) != 1 || s.AllowedChatIDs[0] != 42 {
 		t.Errorf("AllowedChatIDs = %v, want [42] (after re-prompt)", s.AllowedChatIDs)
 	}
-	if !strings.Contains(out.String(), "try again") {
+	if !strings.Contains(out.String(), "попробуйте ещё раз") {
 		t.Errorf("expected a re-prompt message, got:\n%s", out.String())
 	}
 }

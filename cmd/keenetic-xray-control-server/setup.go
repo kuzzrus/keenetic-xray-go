@@ -29,46 +29,46 @@ func runSetup(stdin io.Reader, stdout io.Writer, configPath string, defaults set
 	in := bufio.NewReader(stdin)
 	p := func(format string, a ...any) { fmt.Fprintf(stdout, format, a...) }
 
-	p("keenetic-xray-control-server setup\n")
-	p("This writes %s\n\n", configPath)
+	p("Настройка keenetic-xray-control-server\n")
+	p("Конфигурация будет записана в %s\n\n", configPath)
 
 	if _, err := os.Stat(configPath); err == nil {
-		yes, err := askYesNo(in, stdout, fmt.Sprintf("%s already exists -- overwrite?", configPath), false)
+		yes, err := askYesNo(in, stdout, fmt.Sprintf("%s уже существует — перезаписать?", configPath), false)
 		if err != nil {
 			return err
 		}
 		if !yes {
-			return fmt.Errorf("aborted; the existing config was left untouched")
+			return fmt.Errorf("отменено; существующий конфиг не изменён")
 		}
 		p("\n")
 	}
 
 	s := defaults
 
-	token, err := askNonEmpty(in, stdout, "Telegram bot token (from @BotFather)")
+	token, err := askNonEmpty(in, stdout, "Токен Telegram-бота (от @BotFather)")
 	if err != nil {
 		return err
 	}
 	if !looksLikeTelegramToken(token) {
-		p("  note: that doesn't look like a bot token (<digits>:<~35 chars>); continuing anyway\n")
+		p("  примечание: не похоже на токен бота (<цифры>:<~35 символов>); продолжаю всё равно\n")
 	}
 	s.TelegramToken = token
 
 	for {
-		raw, err := askNonEmpty(in, stdout, "Allowed Telegram chat IDs (comma-separated numbers)")
+		raw, err := askNonEmpty(in, stdout, "Разрешённые chat ID Telegram (числа через запятую)")
 		if err != nil {
 			return err
 		}
 		ids, perr := parseChatIDs(raw)
 		if perr != nil {
-			p("  %v; try again\n", perr)
+			p("  %v; попробуйте ещё раз\n", perr)
 			continue
 		}
 		s.AllowedChatIDs = ids
 		break
 	}
 
-	n, err := askCount(in, stdout, "How many routers will this server control", 1)
+	n, err := askCount(in, stdout, "Сколько роутеров будет обслуживать этот сервер", 1)
 	if err != nil {
 		return err
 	}
@@ -78,12 +78,12 @@ func runSetup(stdin io.Reader, stdout io.Writer, configPath string, defaults set
 	for i := 0; i < n; i++ {
 		var id string
 		for {
-			id, err = askNonEmpty(in, stdout, fmt.Sprintf("Router %d ID (e.g. home-router)", i+1))
+			id, err = askNonEmpty(in, stdout, fmt.Sprintf("ID роутера %d (например, home-router)", i+1))
 			if err != nil {
 				return err
 			}
 			if _, dup := s.Routers[id]; dup {
-				p("  %q is already used; pick another\n", id)
+				p("  %q уже занят; выберите другой\n", id)
 				continue
 			}
 			break
@@ -94,10 +94,10 @@ func runSetup(stdin io.Reader, stdout io.Writer, configPath string, defaults set
 		}
 		s.Routers[id] = tok
 		creds = append(creds, routerCred{id, tok})
-		p("  generated a bearer token for %s\n", id)
+		p("  сгенерирован токен для %s\n", id)
 	}
 
-	addr, err := askLine(in, stdout, fmt.Sprintf("Listen address [%s]", s.ListenAddr))
+	addr, err := askLine(in, stdout, fmt.Sprintf("Адрес прослушивания [%s]", s.ListenAddr))
 	if err != nil {
 		return err
 	}
@@ -108,13 +108,13 @@ func runSetup(stdin io.Reader, stdout io.Writer, configPath string, defaults set
 	if err := s.save(configPath); err != nil {
 		return err
 	}
-	p("\nWrote %s (mode 0600)\n", configPath)
+	p("\nЗаписано: %s (права 0600)\n", configPath)
 
 	// Generate the certificate now so the operator gets the fingerprint
 	// in this same run; LoadOrGenerateCert is a no-op on later starts.
 	cert, err := botcontrol.LoadOrGenerateCert(s.CertPath, s.KeyPath, "keenetic-xray-control-server")
 	if err != nil {
-		return fmt.Errorf("generating the TLS certificate: %w", err)
+		return fmt.Errorf("генерация TLS-сертификата: %w", err)
 	}
 	fp, err := botcontrol.FingerprintSHA256(cert)
 	if err != nil {
@@ -125,13 +125,13 @@ func runSetup(stdin io.Reader, stdout io.Writer, configPath string, defaults set
 	if strings.HasPrefix(host, ":") {
 		host = "<this-server-host>" + host
 	}
-	p("\nCertificate fingerprint (SHA-256):\n  %s\n", fp)
-	p("\nOn each router (over SSH), run:\n")
+	p("\nОтпечаток сертификата (SHA-256):\n  %s\n", fp)
+	p("\nНа каждом роутере (по SSH) выполните:\n")
 	for _, c := range creds {
 		p("  keenetic-xray agent configure https://%s %s %s %s\n", host, c.id, fp, c.token)
 	}
 	p("  keenetic-xray agent enable\n")
-	p("\nThen start the server:\n  systemctl enable --now keenetic-xray-control-server\n")
+	p("\nЗатем запустите сервер:\n  systemctl enable --now keenetic-xray-control-server\n")
 	return nil
 }
 
@@ -140,7 +140,7 @@ func askLine(in *bufio.Reader, out io.Writer, prompt string) (string, error) {
 	line, err := in.ReadString('\n')
 	line = strings.TrimSpace(line)
 	if line == "" && err != nil {
-		return "", fmt.Errorf("reading input: %w", err)
+		return "", fmt.Errorf("ошибка чтения ввода: %w", err)
 	}
 	return line, nil
 }
@@ -154,7 +154,7 @@ func askNonEmpty(in *bufio.Reader, out io.Writer, prompt string) (string, error)
 		if v != "" {
 			return v, nil
 		}
-		fmt.Fprintln(out, "  required")
+		fmt.Fprintln(out, "  обязательное поле")
 	}
 }
 
@@ -190,7 +190,7 @@ func askCount(in *bufio.Reader, out io.Writer, prompt string, def int) (int, err
 		if cerr == nil && n >= 1 && n <= 100 {
 			return n, nil
 		}
-		fmt.Fprintln(out, "  enter a number between 1 and 100")
+		fmt.Fprintln(out, "  введите число от 1 до 100")
 	}
 }
 
@@ -203,12 +203,12 @@ func parseChatIDs(raw string) ([]int64, error) {
 		}
 		id, err := strconv.ParseInt(part, 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("%q is not a number", part)
+			return nil, fmt.Errorf("%q — не число", part)
 		}
 		ids = append(ids, id)
 	}
 	if len(ids) == 0 {
-		return nil, fmt.Errorf("no chat IDs given")
+		return nil, fmt.Errorf("не указано ни одного chat ID")
 	}
 	return ids, nil
 }
@@ -232,7 +232,7 @@ func looksLikeTelegramToken(s string) bool {
 func randomToken() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("generating a token: %w", err)
+		return "", fmt.Errorf("генерация токена: %w", err)
 	}
 	return hex.EncodeToString(b), nil
 }

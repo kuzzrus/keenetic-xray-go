@@ -88,14 +88,26 @@ func FingerprintSHA256(cert tls.Certificate) (string, error) {
 // pinned -- regenerating it on every start would lock out every router
 // until each one is manually reconfigured with the new fingerprint.
 func LoadOrGenerateCert(certPath, keyPath, commonName string) (tls.Certificate, error) {
-	if _, err := os.Stat(certPath); err == nil {
-		if _, err := os.Stat(keyPath); err == nil {
-			cert, err := tls.LoadX509KeyPair(certPath, keyPath)
-			if err != nil {
-				return tls.Certificate{}, fmt.Errorf("loading existing cert/key: %w", err)
-			}
-			return cert, nil
+	certExists := fileExists(certPath)
+	keyExists := fileExists(keyPath)
+
+	switch {
+	case certExists && keyExists:
+		cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+		if err != nil {
+			return tls.Certificate{}, fmt.Errorf("loading existing cert/key: %w", err)
 		}
+		return cert, nil
+	case certExists != keyExists:
+		// Exactly one half of the pair is present. Regenerating now would
+		// mint a fresh keypair with a new fingerprint and lock out every
+		// agent that has pinned the old one -- so refuse and let the
+		// operator decide (restore the missing file, or delete both).
+		present, missing := certPath, keyPath
+		if keyExists {
+			present, missing = keyPath, certPath
+		}
+		return tls.Certificate{}, fmt.Errorf("%s exists but %s does not: refusing to regenerate (it would change the pinned fingerprint); restore the missing file or remove both to start fresh", present, missing)
 	}
 
 	cert, err := GenerateSelfSignedCert(commonName)
@@ -128,4 +140,9 @@ func LoadOrGenerateCert(certPath, keyPath, commonName string) (tls.Certificate, 
 	}
 
 	return cert, nil
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }

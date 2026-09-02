@@ -146,13 +146,45 @@ config.json`.
 
 ## Running the control server
 
+### Installer (systemd hosts)
+
+```sh
+wget -qO- https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/server-install.sh | sudo sh
+```
+
+`server-install.sh` downloads the latest release binary for the host's
+architecture into `/usr/local/bin`, creates a `keenetic-xray` system
+user, installs `packaging/server/keenetic-xray-control-server.service`
+(hardened: `ProtectSystem=strict`, `NoNewPrivileges`, writable only under
+its config and state dirs), runs the `setup` wizard, and
+`systemctl enable --now`s the service. systemd only -- there's no
+OpenRC/sysvinit path.
+
+### The `setup` wizard
+
+```sh
+keenetic-xray-control-server setup
+```
+
+Interactive, and usable with or without the installer -- it only writes
+`config.json` and generates the TLS certificate, it never touches
+systemd. It prompts for the bot token and chat allowlist, asks how many
+routers this server fronts, generates a bearer token per router itself
+(32 random bytes, hex), writes the config at mode 0600, then prints the
+certificate fingerprint and a ready-to-paste
+`keenetic-xray agent configure <url> <router-id> <fingerprint> <token>`
+line for each router. Re-run it to reconfigure, then
+`systemctl restart keenetic-xray-control-server`.
+
+### Config file
+
 ```json
 // /etc/keenetic-xray-control-server/config.json, 0600
 {
   "listen_addr": ":8443",
   "telegram_token": "<bot token from @BotFather>",
   "allowed_chat_ids": [123456789],
-  "routers": { "router-1": "<a token you generate, shared with that router's `agent configure`>" }
+  "routers": { "router-1": "<bearer token, shared with that router's `agent configure`>" }
 }
 ```
 
@@ -164,13 +196,13 @@ required -- unlike the router's `config.json`, there's no sensible
 allowlist, so a missing or incomplete config file is a startup error,
 not a default.
 
+### Without the installer
+
 ```sh
 KEENETIC_XRAY_CS_CONFIG=/etc/keenetic-xray-control-server/config.json \
   keenetic-xray-control-server
 ```
 
-Deploying this (systemd unit, reverse proxy or not, whether it replaces
-or runs alongside an existing control server from
-`keenetic_xray_installer`) is left to the operator -- see the note in the
-implementation plan: it's a deployment decision, not a protocol one, and
+Whether it replaces or runs alongside an existing control server from
+`keenetic_xray_installer` is a deployment decision, not a protocol one;
 the agent side works identically either way.

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 )
 
@@ -53,14 +54,42 @@ func loadSettings(path string) (settings, error) {
 	if err := json.Unmarshal(data, &s); err != nil {
 		return settings{}, fmt.Errorf("parsing %s: %w", path, err)
 	}
-	if s.TelegramToken == "" {
-		return settings{}, fmt.Errorf("telegram_token is required in %s", path)
-	}
-	if len(s.AllowedChatIDs) == 0 {
-		return settings{}, fmt.Errorf("allowed_chat_ids must list at least one chat ID in %s", path)
-	}
-	if len(s.Routers) == 0 {
-		return settings{}, fmt.Errorf("routers must list at least one router ID -> token pair in %s", path)
+	if err := s.validate(); err != nil {
+		return settings{}, fmt.Errorf("%s: %w", path, err)
 	}
 	return s, nil
+}
+
+// validate reports the first missing required field. These three have no
+// sensible default (see loadSettings), so both loading and the setup
+// wizard reject a config without them.
+func (s settings) validate() error {
+	switch {
+	case s.TelegramToken == "":
+		return fmt.Errorf("telegram_token is required")
+	case len(s.AllowedChatIDs) == 0:
+		return fmt.Errorf("allowed_chat_ids must list at least one chat ID")
+	case len(s.Routers) == 0:
+		return fmt.Errorf("routers must list at least one router ID -> token pair")
+	}
+	return nil
+}
+
+// save writes s to path as indented JSON at mode 0600 (it holds the
+// Telegram token and every router's bearer token), creating the parent
+// directory at 0700 if needed.
+func (s settings) save(path string) error {
+	if err := s.validate(); err != nil {
+		return fmt.Errorf("refusing to save an incomplete config: %w", err)
+	}
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("creating %s: %w", dir, err)
+		}
+	}
+	data, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encoding config: %w", err)
+	}
+	return os.WriteFile(path, append(data, '\n'), 0o600)
 }

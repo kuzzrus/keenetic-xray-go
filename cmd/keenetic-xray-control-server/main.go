@@ -30,7 +30,12 @@ func run(args []string) error {
 		return nil
 	}
 
-	configPath := envOr("KEENETIC_XRAY_CS_CONFIG", "/etc/keenetic-xray-control-server/config.json")
+	configPath := envOr("KEENETIC_XRAY_CS_CONFIG", defaultConfigPath)
+
+	if len(args) >= 1 && args[0] == "setup" {
+		return cmdSetup(configPath)
+	}
+
 	cfg, err := loadSettings(configPath)
 	if err != nil {
 		return err

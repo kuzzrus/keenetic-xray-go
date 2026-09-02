@@ -3,7 +3,7 @@ package subscription
 import (
 	"testing"
 
-	"github.com/Kuzz007/keenetic-xray-go/internal/config"
+	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 )
 
 func TestApplyResult_UniqueMatches(t *testing.T) {

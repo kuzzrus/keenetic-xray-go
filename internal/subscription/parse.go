@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Kuzz007/keenetic-xray-go/internal/config"
+	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 )
 
 // Parse splits decoded subscription content into lines and parses each

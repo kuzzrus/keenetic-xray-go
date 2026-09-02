@@ -1,0 +1,18 @@
+# Keep line endings deterministic. The repo stores LF and every file is
+# checked out with LF regardless of a contributor's core.autocrlf. This
+# matters most for the shell scripts and the init.d file: they ship inside
+# the .ipk and run on the router, where a stray CRLF breaks the shebang
+# ("bad interpreter: /bin/sh^M"). It also keeps the CI gofmt gate honest.
+* text=auto eol=lf
+
+*.go   text eol=lf
+*.sh   text eol=lf
+*.mod  text eol=lf
+*.sum  text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.md   text eol=lf
+
+packaging/init.d/S99keenetic-xray text eol=lf
+packaging/ipk/postinst            text eol=lf
+packaging/ipk/prerm               text eol=lf

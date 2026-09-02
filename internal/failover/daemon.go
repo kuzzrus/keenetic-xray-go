@@ -6,8 +6,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/Kuzz007/keenetic-xray-go/internal/config"
-	"github.com/Kuzz007/keenetic-xray-go/internal/xrayctl"
+	"github.com/kuzzrus/keenetic-xray-go/internal/config"
+	"github.com/kuzzrus/keenetic-xray-go/internal/xrayctl"
 )
 
 // Paths are the filesystem locations the daemon reads/writes.

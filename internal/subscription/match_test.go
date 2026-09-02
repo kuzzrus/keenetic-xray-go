@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/Kuzz007/keenetic-xray-go/internal/config"
+	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 )
 
 func TestMatchByRemark(t *testing.T) {

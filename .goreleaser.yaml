@@ -12,8 +12,8 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
-      - -X github.com/Kuzz007/keenetic-xray-go/internal/version.Version={{.Version}}
-      - -X github.com/Kuzz007/keenetic-xray-go/internal/version.Commit={{.ShortCommit}}
+      - -X github.com/kuzzrus/keenetic-xray-go/internal/version.Version={{.Version}}
+      - -X github.com/kuzzrus/keenetic-xray-go/internal/version.Commit={{.ShortCommit}}
 
   - id: keenetic-xray-mipsle
     main: ./cmd/keenetic-xray
@@ -27,8 +27,8 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
-      - -X github.com/Kuzz007/keenetic-xray-go/internal/version.Version={{.Version}}
-      - -X github.com/Kuzz007/keenetic-xray-go/internal/version.Commit={{.ShortCommit}}
+      - -X github.com/kuzzrus/keenetic-xray-go/internal/version.Version={{.Version}}
+      - -X github.com/kuzzrus/keenetic-xray-go/internal/version.Commit={{.ShortCommit}}
 
   # keenetic-xray-control-server never runs on a router -- it's the VPS
   # side of bot control -- so it targets ordinary VPS architectures, not
@@ -44,8 +44,8 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
-      - -X github.com/Kuzz007/keenetic-xray-go/internal/version.Version={{.Version}}
-      - -X github.com/Kuzz007/keenetic-xray-go/internal/version.Commit={{.ShortCommit}}
+      - -X github.com/kuzzrus/keenetic-xray-go/internal/version.Version={{.Version}}
+      - -X github.com/kuzzrus/keenetic-xray-go/internal/version.Commit={{.ShortCommit}}
 
   - id: keenetic-xray-control-server-arm64
     main: ./cmd/keenetic-xray-control-server
@@ -58,8 +58,8 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
-      - -X github.com/Kuzz007/keenetic-xray-go/internal/version.Version={{.Version}}
-      - -X github.com/Kuzz007/keenetic-xray-go/internal/version.Commit={{.ShortCommit}}
+      - -X github.com/kuzzrus/keenetic-xray-go/internal/version.Version={{.Version}}
+      - -X github.com/kuzzrus/keenetic-xray-go/internal/version.Commit={{.ShortCommit}}
 
 archives:
   - formats: [binary]

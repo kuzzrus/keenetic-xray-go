@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Kuzz007/keenetic-xray-go/internal/config"
-	"github.com/Kuzz007/keenetic-xray-go/internal/failover"
+	"github.com/kuzzrus/keenetic-xray-go/internal/config"
+	"github.com/kuzzrus/keenetic-xray-go/internal/failover"
 )
 
 // TestMain lets `go test` re-exec the test binary itself as a stand-in

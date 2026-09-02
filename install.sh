@@ -8,10 +8,10 @@
 # handing it to opkg.
 #
 # Usage (on the router):
-#   wget -qO- https://raw.githubusercontent.com/Kuzz007/keenetic-xray-go/main/install.sh | sh
+#   wget -qO- https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/install.sh | sh
 set -eu
 
-REPO="Kuzz007/keenetic-xray-go"
+REPO="kuzzrus/keenetic-xray-go"
 TMP_IPK="/opt/keenetic-xray-install.ipk"
 
 # fetch <url> [output-file] -- prints to stdout if no output file is

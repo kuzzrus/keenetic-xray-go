@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/Kuzz007/keenetic-xray-go/internal/config"
-	"github.com/Kuzz007/keenetic-xray-go/internal/diskspace"
+	"github.com/kuzzrus/keenetic-xray-go/internal/config"
+	"github.com/kuzzrus/keenetic-xray-go/internal/diskspace"
 )
 
 // DefaultMiniThresholdBytes is the free-space cutoff below which a fresh

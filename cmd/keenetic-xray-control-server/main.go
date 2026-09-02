@@ -13,8 +13,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/Kuzz007/keenetic-xray-go/internal/botcontrol"
-	"github.com/Kuzz007/keenetic-xray-go/internal/version"
+	"github.com/kuzzrus/keenetic-xray-go/internal/botcontrol"
+	"github.com/kuzzrus/keenetic-xray-go/internal/version"
 )
 
 func main() {

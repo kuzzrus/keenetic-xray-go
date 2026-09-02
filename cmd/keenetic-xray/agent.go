@@ -5,8 +5,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/Kuzz007/keenetic-xray-go/internal/botcontrol"
-	"github.com/Kuzz007/keenetic-xray-go/internal/config"
+	"github.com/kuzzrus/keenetic-xray-go/internal/botcontrol"
+	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 )
 
 func cmdAgent(args []string) error {

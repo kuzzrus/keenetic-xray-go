@@ -1,3 +1,3 @@
-module github.com/Kuzz007/keenetic-xray-go
+module github.com/kuzzrus/keenetic-xray-go
 
 go 1.23

@@ -31,8 +31,9 @@ const DefaultResultTimeout = 20 * time.Second
 type TelegramBot struct {
 	Token         string
 	AllowedChats  map[int64]bool
-	KnownRouters  []string // "" / nil -> don't validate router IDs against a registry
-	Store         *Store
+	Store         *Store        // router registry + command queues
+	Fingerprint   string        // control-server cert SHA-256, echoed in `agent configure` hints
+	ServerURL     string        // public URL routers dial, e.g. https://vps.example.com:8443; "" -> a placeholder in hints
 	APIBase       string        // "" -> telegramAPIBase
 	ResultTimeout time.Duration // 0 -> DefaultResultTimeout
 	Logger        *log.Logger   // nil -> log.Default()
@@ -187,8 +188,12 @@ func (b *TelegramBot) handleMessage(ctx context.Context, msg tgMessage) {
 	}
 }
 
-const helpText = `commands (all take a router ID as the first argument):
-/routers -- list known router IDs
+const helpText = `Команды:
+/routers — список роутеров
+/add_router <id> [имя] — зарегистрировать роутер, получить строку agent configure
+/remove_router <id> — убрать роутер из реестра
+
+Дальше первым аргументом идёт id роутера:
 /status <router>
 /switch <router> primary|backup
 /profile_list <router>
@@ -210,6 +215,10 @@ func (b *TelegramBot) dispatch(ctx context.Context, text string) string {
 		return helpText
 	case "/routers":
 		return b.listRouters()
+	case "/add_router":
+		return b.dispatchAddRouter(args)
+	case "/remove_router":
+		return b.dispatchRemoveRouter(args)
 	case "/status":
 		return b.runRouterCommand(ctx, args, ActionStatus, nil)
 	case "/switch":
@@ -232,10 +241,66 @@ func (b *TelegramBot) dispatch(ctx context.Context, text string) string {
 }
 
 func (b *TelegramBot) listRouters() string {
-	if len(b.KnownRouters) == 0 {
-		return "no routers configured"
+	routers := b.Store.Routers()
+	if len(routers) == 0 {
+		return "Роутеров пока нет. Добавьте: /add_router <id> [имя]"
 	}
-	return "known routers:\n" + strings.Join(b.KnownRouters, "\n")
+	var sb strings.Builder
+	sb.WriteString("Роутеры:\n")
+	for _, r := range routers {
+		line := r.ID
+		if r.Name != "" {
+			line += " (" + r.Name + ")"
+		}
+		if r.LastPollAt.IsZero() {
+			line += " — ещё не подключался"
+		} else {
+			line += " — последний poll " + r.LastPollAt.Format("2006-01-02 15:04:05")
+		}
+		if r.Pending > 0 {
+			line += fmt.Sprintf(", в очереди: %d", r.Pending)
+		}
+		sb.WriteString(line)
+		sb.WriteByte('\n')
+	}
+	return strings.TrimRight(sb.String(), "\n")
+}
+
+func (b *TelegramBot) dispatchAddRouter(args []string) string {
+	if len(args) < 1 || args[0] == "" {
+		return "формат: /add_router <id> [имя]"
+	}
+	id := args[0]
+	if !ValidRouterID(id) {
+		return "id роутера: латиница, цифры, _ или -, до 64 символов"
+	}
+	name := strings.Join(args[1:], " ")
+	token, err := b.Store.AddRouter(id, name)
+	if err != nil {
+		return fmt.Sprintf("не добавлено: %v", err)
+	}
+	return b.agentConfigureHint(id, token)
+}
+
+func (b *TelegramBot) dispatchRemoveRouter(args []string) string {
+	if len(args) != 1 || args[0] == "" {
+		return "формат: /remove_router <id>"
+	}
+	if err := b.Store.RemoveRouter(args[0]); err != nil {
+		return fmt.Sprintf("не удалено: %v", err)
+	}
+	return fmt.Sprintf("роутер %q убран из реестра. Агент на самом роутере не трогается.", args[0])
+}
+
+// agentConfigureHint returns the two commands to run on the router to
+// bind it to this control server.
+func (b *TelegramBot) agentConfigureHint(id, token string) string {
+	url := b.ServerURL
+	if url == "" {
+		url = "https://<адрес-сервера>:8443"
+	}
+	return fmt.Sprintf("роутер %q добавлен.\n\nНа роутере выполните:\n  keenetic-xray agent configure %s %s %s %s\n  keenetic-xray agent enable",
+		id, url, id, b.Fingerprint, token)
 }
 
 func (b *TelegramBot) dispatchSwitch(ctx context.Context, args []string) string {
@@ -276,8 +341,8 @@ func (b *TelegramBot) runRouterCommand(ctx context.Context, args []string, actio
 		return "usage: missing router ID"
 	}
 	routerID := args[0]
-	if !b.knownRouter(routerID) {
-		return fmt.Sprintf("unknown router %q; send /routers to list known routers", routerID)
+	if !b.Store.HasRouter(routerID) {
+		return fmt.Sprintf("unknown router %q; send /routers to list registered routers", routerID)
 	}
 
 	id, err := b.Store.Enqueue(routerID, action, cmdArgs)
@@ -293,16 +358,4 @@ func (b *TelegramBot) runRouterCommand(ctx context.Context, args []string, actio
 		return fmt.Sprintf("%s: error: %s", routerID, result.Err)
 	}
 	return fmt.Sprintf("%s: %s", routerID, result.Output)
-}
-
-func (b *TelegramBot) knownRouter(id string) bool {
-	if len(b.KnownRouters) == 0 {
-		return true
-	}
-	for _, k := range b.KnownRouters {
-		if k == id {
-			return true
-		}
-	}
-	return false
 }

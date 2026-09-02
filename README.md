@@ -108,11 +108,22 @@ wget -qO- https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/server
 This downloads the latest release binary for the host's architecture,
 installs a hardened systemd unit, and runs an interactive wizard
 (`keenetic-xray-control-server setup`) that writes
-`/etc/keenetic-xray-control-server/config.json`, generates a bearer token
-per router, and prints the certificate fingerprint plus a ready-to-paste
-`keenetic-xray agent configure` line for each router. To reconfigure
-later, run `keenetic-xray-control-server setup` again and
-`systemctl restart keenetic-xray-control-server`.
+`/etc/keenetic-xray-control-server/config.json` (bot token, chat
+allowlist, and the public URL routers dial) and generates the
+certificate. To reconfigure later, run `keenetic-xray-control-server
+setup` again and `systemctl restart keenetic-xray-control-server`.
+
+Routers are then registered from the Telegram chat itself — no restart,
+no config edit:
+
+```
+/add_router home-router Дом
+```
+
+The bot generates a bearer token, stores it, and replies with the exact
+`keenetic-xray agent configure <url> <id> <fingerprint> <token>` line to
+run on that router. `/remove_router <id>` unregisters one; `/routers`
+lists them.
 
 <details>
 <summary>Manual setup (no installer)</summary>

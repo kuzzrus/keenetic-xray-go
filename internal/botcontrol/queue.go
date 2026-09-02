@@ -21,7 +21,8 @@ type RouterState struct {
 }
 
 type storeState struct {
-	Routers map[string]*RouterState `json:"routers"`
+	Routers  map[string]*RouterState  `json:"routers"`
+	Registry map[string]*RouterRecord `json:"registry,omitempty"`
 }
 
 // Store tracks per-router command queues and results, persisted to a JSON
@@ -49,7 +50,7 @@ func newCommandID() string {
 // error. Pass an empty path to get a Store that never persists, e.g. in
 // tests.
 func LoadStore(path string) (*Store, error) {
-	s := &Store{path: path, state: storeState{Routers: make(map[string]*RouterState)}}
+	s := &Store{path: path, state: newStoreState()}
 	if path == "" {
 		return s, nil
 	}
@@ -66,7 +67,17 @@ func LoadStore(path string) (*Store, error) {
 	if s.state.Routers == nil {
 		s.state.Routers = make(map[string]*RouterState)
 	}
+	if s.state.Registry == nil {
+		s.state.Registry = make(map[string]*RouterRecord)
+	}
 	return s, nil
+}
+
+func newStoreState() storeState {
+	return storeState{
+		Routers:  make(map[string]*RouterState),
+		Registry: make(map[string]*RouterRecord),
+	}
 }
 
 // Enqueue appends a command to routerID's pending queue and returns the

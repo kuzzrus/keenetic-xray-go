@@ -2,8 +2,6 @@ package main
 
 import (
 	"bufio"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -68,35 +66,6 @@ func runSetup(stdin io.Reader, stdout io.Writer, configPath string, defaults set
 		break
 	}
 
-	n, err := askCount(in, stdout, "Сколько роутеров будет обслуживать этот сервер", 1)
-	if err != nil {
-		return err
-	}
-	s.Routers = make(map[string]string, n)
-	type routerCred struct{ id, token string }
-	creds := make([]routerCred, 0, n)
-	for i := 0; i < n; i++ {
-		var id string
-		for {
-			id, err = askNonEmpty(in, stdout, fmt.Sprintf("ID роутера %d (например, home-router)", i+1))
-			if err != nil {
-				return err
-			}
-			if _, dup := s.Routers[id]; dup {
-				p("  %q уже занят; выберите другой\n", id)
-				continue
-			}
-			break
-		}
-		tok, terr := randomToken()
-		if terr != nil {
-			return terr
-		}
-		s.Routers[id] = tok
-		creds = append(creds, routerCred{id, tok})
-		p("  сгенерирован токен для %s\n", id)
-	}
-
 	addr, err := askLine(in, stdout, fmt.Sprintf("Адрес прослушивания [%s]", s.ListenAddr))
 	if err != nil {
 		return err
@@ -104,6 +73,12 @@ func runSetup(stdin io.Reader, stdout io.Writer, configPath string, defaults set
 	if addr != "" {
 		s.ListenAddr = addr
 	}
+
+	pub, err := askLine(in, stdout, "Публичный адрес сервера для роутеров, напр. https://vps.example.com:8443 (можно пропустить)")
+	if err != nil {
+		return err
+	}
+	s.PublicURL = pub
 
 	if err := s.save(configPath); err != nil {
 		return err
@@ -121,17 +96,9 @@ func runSetup(stdin io.Reader, stdout io.Writer, configPath string, defaults set
 		return err
 	}
 
-	host := s.ListenAddr
-	if strings.HasPrefix(host, ":") {
-		host = "<this-server-host>" + host
-	}
 	p("\nОтпечаток сертификата (SHA-256):\n  %s\n", fp)
-	p("\nНа каждом роутере (по SSH) выполните:\n")
-	for _, c := range creds {
-		p("  keenetic-xray agent configure https://%s %s %s %s\n", host, c.id, fp, c.token)
-	}
-	p("  keenetic-xray agent enable\n")
-	p("\nЗатем запустите сервер:\n  systemctl enable --now keenetic-xray-control-server\n")
+	p("\nЗапустите сервер:\n  systemctl enable --now keenetic-xray-control-server\n")
+	p("\nЗатем добавляйте роутеры прямо в чате бота:\n  /add_router <id> [имя]\nБот вернёт готовую строку keenetic-xray agent configure для этого роутера.\n")
 	return nil
 }
 
@@ -177,23 +144,6 @@ func askYesNo(in *bufio.Reader, out io.Writer, prompt string, def bool) (bool, e
 	}
 }
 
-func askCount(in *bufio.Reader, out io.Writer, prompt string, def int) (int, error) {
-	for {
-		line, err := askLine(in, out, fmt.Sprintf("%s [%d]", prompt, def))
-		if err != nil {
-			return 0, err
-		}
-		if line == "" {
-			return def, nil
-		}
-		n, cerr := strconv.Atoi(line)
-		if cerr == nil && n >= 1 && n <= 100 {
-			return n, nil
-		}
-		fmt.Fprintln(out, "  введите число от 1 до 100")
-	}
-}
-
 func parseChatIDs(raw string) ([]int64, error) {
 	var ids []int64
 	for _, part := range strings.Split(raw, ",") {
@@ -227,12 +177,4 @@ func looksLikeTelegramToken(s string) bool {
 		}
 	}
 	return len(s[i+1:]) >= 30
-}
-
-func randomToken() (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("генерация токена: %w", err)
-	}
-	return hex.EncodeToString(b), nil
 }

@@ -109,11 +109,20 @@ VPS side either, beyond the agent-facing HTTPS port). Messages from chat
 IDs outside `allowed_chat_ids` are silently ignored -- no error reply,
 so an unlisted chat can't even confirm the bot exists.
 
-Every command takes a router ID as its first argument (one control
-server can front several routers):
+One control server can front several routers. Routers are registered from
+the chat at runtime -- the registry lives in the state file next to the
+command queues, so `/add_router` needs neither a restart nor a config
+edit:
 
 ```
-/routers                                list known router IDs
+/add_router <id> [name]    register a router; the bot replies with its agent configure line
+/remove_router <id>        unregister a router (the agent on the router is left alone)
+/routers                   list registered routers
+```
+
+The rest take a registered router ID as their first argument:
+
+```
 /status <router>
 /switch <router> primary|backup
 /profile_list <router>
@@ -168,12 +177,10 @@ keenetic-xray-control-server setup
 
 Interactive, and usable with or without the installer -- it only writes
 `config.json` and generates the TLS certificate, it never touches
-systemd. It prompts for the bot token and chat allowlist, asks how many
-routers this server fronts, generates a bearer token per router itself
-(32 random bytes, hex), writes the config at mode 0600, then prints the
-certificate fingerprint and a ready-to-paste
-`keenetic-xray agent configure <url> <router-id> <fingerprint> <token>`
-line for each router. Re-run it to reconfigure, then
+systemd. It prompts for the bot token, the chat allowlist, the listen
+address, and the public URL routers dial, writes the config at mode
+0600, and prints the certificate fingerprint. Routers are added later
+from the chat with `/add_router`. Re-run it to reconfigure, then
 `systemctl restart keenetic-xray-control-server`.
 
 ### Config file
@@ -182,19 +189,22 @@ line for each router. Re-run it to reconfigure, then
 // /etc/keenetic-xray-control-server/config.json, 0600
 {
   "listen_addr": ":8443",
+  "public_url": "https://vps.example.com:8443",
   "telegram_token": "<bot token from @BotFather>",
-  "allowed_chat_ids": [123456789],
-  "routers": { "router-1": "<bearer token, shared with that router's `agent configure`>" }
+  "allowed_chat_ids": [123456789]
 }
 ```
 
 `cert_path`/`key_path`/`queue_path` all have working defaults (see
 `cmd/keenetic-xray-control-server/config.go`) and don't need to be set
-explicitly. `telegram_token`, `allowed_chat_ids`, and `routers` are
-required -- unlike the router's `config.json`, there's no sensible
-"not configured yet" mode for a Telegram bot with no token or chat
-allowlist, so a missing or incomplete config file is a startup error,
-not a default.
+explicitly. `public_url` is optional -- if unset, the bot's `agent
+configure` hints use a `<host>` placeholder the operator fills in.
+`telegram_token` and `allowed_chat_ids` are the only required fields:
+there's no sensible "not configured yet" mode for a Telegram bot with no
+token or chat allowlist, so a missing or incomplete config file is a
+startup error, not a default. A `routers` object is still accepted as a
+one-time bootstrap -- its entries are copied into the runtime registry
+at startup and then the registry is authoritative.
 
 ### Without the installer
 

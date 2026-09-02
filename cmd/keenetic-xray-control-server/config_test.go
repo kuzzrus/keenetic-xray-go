@@ -36,10 +36,16 @@ func TestLoadSettings_MissingAllowedChats(t *testing.T) {
 	}
 }
 
-func TestLoadSettings_MissingRouters(t *testing.T) {
+func TestLoadSettings_RoutersOptional(t *testing.T) {
+	// Routers are registered at runtime through the bot, so a config
+	// without a `routers` block is valid.
 	path := writeConfig(t, `{"telegram_token":"x","allowed_chat_ids":[1]}`)
-	if _, err := loadSettings(path); err == nil {
-		t.Error("expected error when routers is empty")
+	s, err := loadSettings(path)
+	if err != nil {
+		t.Fatalf("loadSettings: %v", err)
+	}
+	if len(s.Routers) != 0 {
+		t.Errorf("Routers = %v, want empty", s.Routers)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -76,6 +77,9 @@ func TestLoadOrGenerateCert_GeneratesThenReuses(t *testing.T) {
 }
 
 func TestLoadOrGenerateCert_KeyFileIsPrivate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX file mode bits aren't meaningful on Windows; the daemon only runs on Linux")
+	}
 	dir := t.TempDir()
 	certPath := filepath.Join(dir, "server.crt")
 	keyPath := filepath.Join(dir, "server.key")

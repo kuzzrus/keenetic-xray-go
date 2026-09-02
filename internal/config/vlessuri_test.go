@@ -79,6 +79,36 @@ func TestParseVLESSURI(t *testing.T) {
 			},
 		},
 		{
+			name: "http transport, type=http",
+			uri:  "vless://uuid-7@h2.example:443?type=http&security=tls&sni=h2.example&path=%2Fh2#h2",
+			want: Profile{
+				Remark:     "h2",
+				UUID:       "uuid-7",
+				Address:    "h2.example",
+				Port:       443,
+				Encryption: "none",
+				Network:    "http",
+				Security:   "tls",
+				SNI:        "h2.example",
+				Path:       "/h2",
+			},
+		},
+		{
+			name: "http transport, legacy type=h2 alias normalises to http",
+			uri:  "vless://uuid-8@h2.example:443?type=h2&security=tls&sni=h2.example&path=%2Fh2#h2",
+			want: Profile{
+				Remark:     "h2",
+				UUID:       "uuid-8",
+				Address:    "h2.example",
+				Port:       443,
+				Encryption: "none",
+				Network:    "http",
+				Security:   "tls",
+				SNI:        "h2.example",
+				Path:       "/h2",
+			},
+		},
+		{
 			name: "no fragment falls back to address as remark",
 			uri:  "vless://uuid-3@host.example:443?type=tcp&security=none",
 			want: Profile{
@@ -159,6 +189,7 @@ func TestProfileURI_RoundTrip(t *testing.T) {
 		"vless://uuid-1@1.2.3.4:8443?type=ws&security=tls&sni=cdn.example.com&fp=chrome&path=%2Fws&host=cdn.example.com#ws-tls",
 		"vless://uuid-2@10.0.0.1:443?type=grpc&security=reality&pbk=PUBKEY&sid=SHORTID&spx=%2F&flow=xtls-rprx-vision&serviceName=grpcsvc#reality-grpc",
 		"vless://uuid-6@cdn.example.net:443?type=xhttp&security=tls&sni=cdn.example.net&fp=chrome&path=%2Fxhttp&host=cdn.example.net&mode=stream-up#xhttp-tls",
+		"vless://uuid-7@h2.example:443?type=http&security=tls&sni=h2.example&path=%2Fh2#h2",
 	}
 
 	for _, uri := range uris {

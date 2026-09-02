@@ -43,7 +43,7 @@ func ParseVLESSURI(raw string) (Profile, error) {
 		Encryption: firstNonEmpty(q.Get("encryption"), "none"),
 		Flow:       q.Get("flow"),
 
-		Network:  firstNonEmpty(q.Get("type"), "tcp"),
+		Network:  normalizeNetwork(firstNonEmpty(q.Get("type"), "tcp")),
 		Security: firstNonEmpty(q.Get("security"), "none"),
 
 		SNI:         q.Get("sni"),
@@ -100,6 +100,16 @@ func (p Profile) URI() string {
 	u.RawQuery = q.Encode()
 
 	return u.String()
+}
+
+// normalizeNetwork maps share-link transport aliases onto the value Xray's
+// config expects. "h2" is an older name some providers still emit for the
+// HTTP/2 transport; Xray calls it "http".
+func normalizeNetwork(n string) string {
+	if n == "h2" {
+		return "http"
+	}
+	return n
 }
 
 func firstNonEmpty(values ...string) string {

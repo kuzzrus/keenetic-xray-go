@@ -126,6 +126,7 @@ func TestGenerateXrayConfig_GRPCReality(t *testing.T) {
 	p.Security = "reality"
 	p.PublicKey = "PUBKEY"
 	p.ShortID = "SHORTID"
+	p.SNI = "www.example.com"
 	p.ServiceName = "grpcsvc"
 
 	data, err := GenerateXrayConfig(XrayConfigOptions{SOCKSPort: 1080, Outbound: p})
@@ -147,9 +148,52 @@ func TestGenerateXrayConfig_GRPCReality(t *testing.T) {
 	if reality["publicKey"] != "PUBKEY" || reality["shortId"] != "SHORTID" {
 		t.Errorf("realitySettings = %#v", reality)
 	}
+	if reality["serverName"] != "www.example.com" {
+		t.Errorf("realitySettings.serverName = %v, want www.example.com", reality["serverName"])
+	}
 	grpcSettings := stream["grpcSettings"].(map[string]any)
 	if grpcSettings["serviceName"] != "grpcsvc" {
 		t.Errorf("grpcSettings.serviceName = %v, want grpcsvc", grpcSettings["serviceName"])
+	}
+}
+
+func TestGenerateXrayConfig_HTTP2(t *testing.T) {
+	// A profile stored as "h2" (an older share-link alias) must still
+	// produce an "http" transport -- the name Xray-core expects -- with
+	// httpSettings, not a config Xray rejects as an unknown network.
+	for _, network := range []string{"h2", "http"} {
+		t.Run(network, func(t *testing.T) {
+			p := validProfile()
+			p.Network = network
+			p.Security = "tls"
+			p.SNI = "cdn.example.com"
+			p.Path = "/h2"
+			p.Host = "cdn.example.com"
+
+			data, err := GenerateXrayConfig(XrayConfigOptions{SOCKSPort: 1080, Outbound: p})
+			if err != nil {
+				t.Fatalf("GenerateXrayConfig: %v", err)
+			}
+			var decoded map[string]any
+			if err := json.Unmarshal(data, &decoded); err != nil {
+				t.Fatalf("invalid JSON: %v", err)
+			}
+			stream := decoded["outbounds"].([]any)[0].(map[string]any)["streamSettings"].(map[string]any)
+
+			if stream["network"] != "http" {
+				t.Errorf("network = %v, want http", stream["network"])
+			}
+			httpSettings, ok := stream["httpSettings"].(map[string]any)
+			if !ok {
+				t.Fatalf("httpSettings missing: %#v", stream)
+			}
+			if httpSettings["path"] != "/h2" {
+				t.Errorf("httpSettings.path = %v, want /h2", httpSettings["path"])
+			}
+			if hosts, ok := httpSettings["host"].([]any); !ok || len(hosts) != 1 || hosts[0] != "cdn.example.com" {
+				t.Errorf("httpSettings.host = %#v, want [cdn.example.com]", httpSettings["host"])
+			}
+		})
 	}
 }
 

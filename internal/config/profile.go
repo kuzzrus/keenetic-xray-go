@@ -21,7 +21,7 @@ type Profile struct {
 	Encryption string `json:"encryption"` // almost always "none"
 	Flow       string `json:"flow,omitempty"`
 
-	Network  string `json:"network"`  // tcp | ws | grpc | h2 | xhttp
+	Network  string `json:"network"`  // tcp | ws | grpc | http ("h2" accepted as an alias) | xhttp
 	Security string `json:"security"` // none | tls | reality
 
 	SNI         string   `json:"sni,omitempty"`
@@ -51,7 +51,7 @@ func (p *Profile) Validate() error {
 		return fmt.Errorf("invalid port %d", p.Port)
 	}
 	switch p.Network {
-	case "tcp", "ws", "grpc", "h2", "xhttp":
+	case "tcp", "ws", "grpc", "h2", "http", "xhttp":
 	default:
 		return fmt.Errorf("unsupported network %q", p.Network)
 	}
@@ -60,8 +60,13 @@ func (p *Profile) Validate() error {
 	default:
 		return fmt.Errorf("unsupported security %q", p.Security)
 	}
-	if p.Security == "reality" && (p.PublicKey == "" || p.ShortID == "") {
-		return fmt.Errorf("reality security requires public_key and short_id")
+	if p.Security == "reality" {
+		if p.PublicKey == "" || p.ShortID == "" {
+			return fmt.Errorf("reality security requires public_key and short_id")
+		}
+		if p.SNI == "" {
+			return fmt.Errorf("reality security requires sni (the server name to present in the TLS handshake)")
+		}
 	}
 	return nil
 }

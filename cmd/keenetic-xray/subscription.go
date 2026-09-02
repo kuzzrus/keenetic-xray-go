@@ -12,7 +12,7 @@ import (
 
 func cmdSubscription(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: keenetic-xray subscription {set-url|refresh|list|set-primary|set-backup} ...")
+		return fmt.Errorf("usage: keenetic-xray subscription {set-url|refresh|list|set-primary|set-backup} [args]")
 	}
 	switch args[0] {
 	case "set-url":

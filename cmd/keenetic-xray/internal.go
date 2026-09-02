@@ -12,7 +12,7 @@ import (
 // scripts call -- not meant for interactive use.
 func cmdInternal(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: keenetic-xray internal {postinst-setup|prerm-cleanup} ...")
+		return fmt.Errorf("usage: keenetic-xray internal {postinst-setup|prerm-cleanup} [args]")
 	}
 	switch args[0] {
 	case "postinst-setup":

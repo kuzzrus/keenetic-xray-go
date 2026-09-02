@@ -9,7 +9,7 @@ import (
 
 func cmdProfile(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: keenetic-xray profile {add|list|remove} ...")
+		return fmt.Errorf("usage: keenetic-xray profile {add|list|remove} [args]")
 	}
 	switch args[0] {
 	case "add":

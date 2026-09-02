@@ -32,6 +32,14 @@ func TestDecode_Base64URL(t *testing.T) {
 	}
 }
 
+func TestDecode_Base64RawURL(t *testing.T) {
+	encoded := base64.RawURLEncoding.EncodeToString([]byte(samplePlaintext))
+	got := Decode([]byte(encoded))
+	if string(got) != samplePlaintext {
+		t.Errorf("Decode(raw-url-base64) = %q, want %q", got, samplePlaintext)
+	}
+}
+
 func TestDecode_PlaintextFallback(t *testing.T) {
 	got := Decode([]byte(samplePlaintext))
 	if string(got) != samplePlaintext {

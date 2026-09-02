@@ -30,12 +30,20 @@ func TestProfileValidate(t *testing.T) {
 		{"port too large", func(p *Profile) { p.Port = 70000 }, true},
 		{"bad network", func(p *Profile) { p.Network = "kcp" }, true},
 		{"xhttp network valid", func(p *Profile) { p.Network = "xhttp" }, false},
+		{"http network valid", func(p *Profile) { p.Network = "http" }, false},
+		{"h2 network valid (alias)", func(p *Profile) { p.Network = "h2" }, false},
 		{"bad security", func(p *Profile) { p.Security = "aes" }, true},
 		{"reality without pbk/sid", func(p *Profile) { p.Security = "reality" }, true},
-		{"reality with pbk/sid", func(p *Profile) {
+		{"reality without sni", func(p *Profile) {
 			p.Security = "reality"
 			p.PublicKey = "pk"
 			p.ShortID = "sid"
+		}, true},
+		{"reality with pbk/sid/sni", func(p *Profile) {
+			p.Security = "reality"
+			p.PublicKey = "pk"
+			p.ShortID = "sid"
+			p.SNI = "www.example.com"
 		}, false},
 	}
 

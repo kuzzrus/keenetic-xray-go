@@ -165,15 +165,16 @@ func buildStreamSettings(p Profile) (map[string]any, error) {
 		stream["grpcSettings"] = map[string]any{
 			"serviceName": firstNonEmpty(p.ServiceName, p.Path),
 		}
-	case "h2":
-		h2Settings := map[string]any{}
+	case "h2", "http":
+		stream["network"] = "http" // Xray's canonical name; some share links say "h2"
+		httpSettings := map[string]any{}
 		if p.Path != "" {
-			h2Settings["path"] = p.Path
+			httpSettings["path"] = p.Path
 		}
 		if p.Host != "" {
-			h2Settings["host"] = []string{p.Host}
+			httpSettings["host"] = []string{p.Host}
 		}
-		stream["httpSettings"] = h2Settings
+		stream["httpSettings"] = httpSettings
 	case "xhttp":
 		xhttpSettings := map[string]any{}
 		if p.Path != "" {

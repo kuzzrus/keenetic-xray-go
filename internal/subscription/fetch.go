@@ -18,6 +18,13 @@ const (
 	// subscriptions are normally a few KB; this just caps the worst case
 	// against a broken or adversarial endpoint.
 	MaxBodyBytes = 2 * 1024 * 1024
+	// maxRedirects caps redirect-following. A subscription host commonly
+	// 301s once to a CDN; a longer chain is more likely a
+	// misconfiguration or an attempt to bounce the fetch elsewhere.
+	maxRedirects = 5
+	// userAgent is sent on every fetch -- some providers reject requests
+	// without one.
+	userAgent = "keenetic-xray"
 )
 
 // Fetch retrieves the raw body of a subscription URL, enforcing
@@ -34,8 +41,18 @@ func fetch(ctx context.Context, url string, timeout time.Duration, maxBytes int6
 	if err != nil {
 		return nil, fmt.Errorf("building request: %w", err)
 	}
+	req.Header.Set("User-Agent", userAgent)
 
-	resp, err := http.DefaultClient.Do(req)
+	client := &http.Client{
+		CheckRedirect: func(_ *http.Request, via []*http.Request) error {
+			if len(via) >= maxRedirects {
+				return fmt.Errorf("stopped after %d redirects", maxRedirects)
+			}
+			return nil
+		},
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetching %s: %w", url, err)
 	}

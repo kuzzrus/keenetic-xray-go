@@ -34,31 +34,31 @@ via `opkg` itself and installs the matching `.ipk` from the latest
 release:
 
 ```sh
-wget -qO- https://raw.githubusercontent.com/Kuzz007/keenetic-xray-go/main/install.sh | sh
+wget -qO- https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/install.sh | sh
 ```
 
 ### Manual install
 
 If you'd rather install a specific `.ipk` yourself: grab the one
 matching your router's architecture from the
-[latest release](https://github.com/Kuzz007/keenetic-xray-go/releases/latest)
+[latest release](https://github.com/kuzzrus/keenetic-xray-go/releases/latest)
 — no package feed to add first, `opkg` can install straight from a URL:
 
 ```sh
-opkg install https://github.com/Kuzz007/keenetic-xray-go/releases/download/v0.1.0/keenetic-xray_0.1.0-1_aarch64-3.10.ipk   # newer, ARM-based models
-opkg install https://github.com/Kuzz007/keenetic-xray-go/releases/download/v0.1.0/keenetic-xray_0.1.0-1_mipsel-3.4.ipk     # older, MIPS-based models
+opkg install https://github.com/kuzzrus/keenetic-xray-go/releases/download/v0.1.0/keenetic-xray_0.1.0-1_aarch64-3.10.ipk   # newer, ARM-based models
+opkg install https://github.com/kuzzrus/keenetic-xray-go/releases/download/v0.1.0/keenetic-xray_0.1.0-1_mipsel-3.4.ipk     # older, MIPS-based models
 ```
 
 If your `opkg` build doesn't handle the release CDN's HTTPS redirect,
 download first and install the local file instead:
 
 ```sh
-wget https://github.com/Kuzz007/keenetic-xray-go/releases/download/v0.1.0/keenetic-xray_0.1.0-1_aarch64-3.10.ipk -O /opt/keenetic-xray.ipk
+wget https://github.com/kuzzrus/keenetic-xray-go/releases/download/v0.1.0/keenetic-xray_0.1.0-1_aarch64-3.10.ipk -O /opt/keenetic-xray.ipk
 opkg install /opt/keenetic-xray.ipk
 ```
 
 (Substitute the filename/version for whatever's on the
-[latest release](https://github.com/Kuzz007/keenetic-xray-go/releases/latest)
+[latest release](https://github.com/kuzzrus/keenetic-xray-go/releases/latest)
 page once newer versions ship — `install.sh` above does this for you
 automatically.)
 

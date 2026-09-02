@@ -3,8 +3,8 @@ package main
 import (
 	"fmt"
 
-	"github.com/Kuzz007/keenetic-xray-go/internal/config"
-	"github.com/Kuzz007/keenetic-xray-go/internal/diskspace"
+	"github.com/kuzzrus/keenetic-xray-go/internal/config"
+	"github.com/kuzzrus/keenetic-xray-go/internal/diskspace"
 )
 
 func cmdStatus(args []string) error {

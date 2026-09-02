@@ -3,9 +3,10 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
-	"github.com/Kuzz007/keenetic-xray-go/internal/config"
+	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 )
 
 func TestCmdAgent_ConfigureEnableDisable(t *testing.T) {
@@ -37,12 +38,14 @@ func TestCmdAgent_ConfigureEnableDisable(t *testing.T) {
 	if string(tokenBytes) != "s3cr3t\n" {
 		t.Errorf("token file contents = %q, want %q", tokenBytes, "s3cr3t\n")
 	}
-	info, err := os.Stat(tokenFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Errorf("token file mode = %o, want 0600", perm)
+	if runtime.GOOS != "windows" { // POSIX mode bits aren't meaningful on Windows; the agent only runs on Linux
+		info, err := os.Stat(tokenFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if perm := info.Mode().Perm(); perm != 0o600 {
+			t.Errorf("token file mode = %o, want 0600", perm)
+		}
 	}
 
 	if err := run([]string{"agent", "enable"}); err != nil {

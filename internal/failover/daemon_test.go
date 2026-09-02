@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Kuzz007/keenetic-xray-go/internal/config"
+	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 )
 
 // TestMain lets `go test` re-exec the test binary itself as a stand-in
@@ -120,6 +120,13 @@ func TestDaemon_ForceSwitchAndState_NotRunning(t *testing.T) {
 // moment) -- this is what `go test -race` is for. Machine's fields must
 // never be touched by two goroutines at once; if a future change breaks
 // that, this test is what would catch it.
+//
+// The failover config below is tuned so the state stays put across those
+// overlapping ticks: the assertions check that a force command took
+// effect, not tick timing. FailuresRequired is effectively infinite so
+// tickActivePrimary never fails over on its own, and forceBackup arms
+// RollbackBackoffSeconds so tickActiveBackup never starts recovery
+// testing for the duration of the test.
 func TestDaemon_ForceSwitchAndStateConcurrentWithRun(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -129,7 +136,8 @@ func TestDaemon_ForceSwitchAndStateConcurrentWithRun(t *testing.T) {
 	}
 	cfg.PrimaryIndex = 0
 	cfg.BackupIndex = 1
-	cfg.Failover.CheckIntervalSeconds = 1 // fast ticks so Tick() genuinely overlaps the test's own calls
+	cfg.Failover.CheckIntervalSeconds = 1   // fast ticks so Tick() genuinely overlaps the test's own calls
+	cfg.Failover.FailuresRequired = 1 << 30 // effectively never fail over automatically (see doc comment)
 
 	paths := Paths{
 		XrayBinary:       os.Args[0],
@@ -169,7 +177,7 @@ func TestDaemon_ForceSwitchAndStateConcurrentWithRun(t *testing.T) {
 		if err != context.Canceled {
 			t.Errorf("Run returned %v, want context.Canceled", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(20 * time.Second): // generous: platforms without SIGTERM (Windows) wait out xrayctl's 5s kill grace on each Stop()
 		t.Fatal("Run did not return after ctx cancellation")
 	}
 }

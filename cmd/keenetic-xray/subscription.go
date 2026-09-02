@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/Kuzz007/keenetic-xray-go/internal/config"
-	"github.com/Kuzz007/keenetic-xray-go/internal/subscription"
+	"github.com/kuzzrus/keenetic-xray-go/internal/config"
+	"github.com/kuzzrus/keenetic-xray-go/internal/subscription"
 )
 
 func cmdSubscription(args []string) error {

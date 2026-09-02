@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/Kuzz007/keenetic-xray-go/internal/config"
-	"github.com/Kuzz007/keenetic-xray-go/internal/install"
+	"github.com/kuzzrus/keenetic-xray-go/internal/config"
+	"github.com/kuzzrus/keenetic-xray-go/internal/install"
 )
 
 // cmdInternal dispatches the hidden subcommands the .ipk's postinst/prerm

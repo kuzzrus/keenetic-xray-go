@@ -45,15 +45,15 @@ matching your router's architecture from the
 — no package feed to add first, `opkg` can install straight from a URL:
 
 ```sh
-opkg install https://github.com/kuzzrus/keenetic-xray-go/releases/download/v0.1.0/keenetic-xray_0.1.0-1_aarch64-3.10.ipk   # newer, ARM-based models
-opkg install https://github.com/kuzzrus/keenetic-xray-go/releases/download/v0.1.0/keenetic-xray_0.1.0-1_mipsel-3.4.ipk     # older, MIPS-based models
+opkg install https://github.com/kuzzrus/keenetic-xray-go/releases/download/v0.1.1/keenetic-xray_0.1.1-1_aarch64-3.10.ipk   # newer, ARM-based models
+opkg install https://github.com/kuzzrus/keenetic-xray-go/releases/download/v0.1.1/keenetic-xray_0.1.1-1_mipsel-3.4.ipk     # older, MIPS-based models
 ```
 
 If your `opkg` build doesn't handle the release CDN's HTTPS redirect,
 download first and install the local file instead:
 
 ```sh
-wget https://github.com/kuzzrus/keenetic-xray-go/releases/download/v0.1.0/keenetic-xray_0.1.0-1_aarch64-3.10.ipk -O /opt/keenetic-xray.ipk
+wget https://github.com/kuzzrus/keenetic-xray-go/releases/download/v0.1.1/keenetic-xray_0.1.1-1_aarch64-3.10.ipk -O /opt/keenetic-xray.ipk
 opkg install /opt/keenetic-xray.ipk
 ```
 

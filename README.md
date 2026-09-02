@@ -97,13 +97,39 @@ requires the Full variant; see `docs/bot-control-design.md`.
 independent of the router installer. It queues commands from a Telegram
 bot and serves them to polling router agents over self-signed,
 fingerprint-pinned TLS. See `docs/bot-control-design.md` for the full
-design, including the config file format and how to fetch a fresh
-server's fingerprint for `keenetic-xray agent configure`.
+design.
+
+Install it on a systemd host (as root):
+
+```sh
+wget -qO- https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/server-install.sh | sudo sh
+```
+
+This downloads the latest release binary for the host's architecture,
+installs a hardened systemd unit, and runs an interactive wizard
+(`keenetic-xray-control-server setup`) that writes
+`/etc/keenetic-xray-control-server/config.json`, generates a bearer token
+per router, and prints the certificate fingerprint plus a ready-to-paste
+`keenetic-xray agent configure` line for each router. To reconfigure
+later, run `keenetic-xray-control-server setup` again and
+`systemctl restart keenetic-xray-control-server`.
+
+<details>
+<summary>Manual setup (no installer)</summary>
+
+Build or download `keenetic-xray-control-server`, write
+`/etc/keenetic-xray-control-server/config.json` by hand (mode 0600) —
+`docs/bot-control-design.md` has the format — and run it directly:
 
 ```sh
 KEENETIC_XRAY_CS_CONFIG=/etc/keenetic-xray-control-server/config.json \
   keenetic-xray-control-server
 ```
+
+`keenetic-xray-control-server setup` still works without the installer: it
+only writes the config and generates the certificate, it doesn't touch
+systemd.
+</details>
 
 ## Relationship to `keenetic_xray_installer`
 

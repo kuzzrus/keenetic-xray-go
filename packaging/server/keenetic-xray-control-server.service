@@ -1,0 +1,33 @@
+[Unit]
+Description=keenetic-xray control server (Telegram bot and router command queue)
+Documentation=https://github.com/kuzzrus/keenetic-xray-go/blob/main/docs/bot-control-design.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=keenetic-xray
+Group=keenetic-xray
+Environment=KEENETIC_XRAY_CS_CONFIG=/etc/keenetic-xray-control-server/config.json
+ExecStart=/usr/local/bin/keenetic-xray-control-server
+Restart=on-failure
+RestartSec=5
+
+# The process only ever reads its config and TLS material under
+# /etc/keenetic-xray-control-server and reads/writes its queue file under
+# /var/lib/keenetic-xray-control-server. /etc stays writable too so a
+# first start can still generate the cert if `setup` was skipped.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+ReadWritePaths=/etc/keenetic-xray-control-server /var/lib/keenetic-xray-control-server
+
+[Install]
+WantedBy=multi-user.target

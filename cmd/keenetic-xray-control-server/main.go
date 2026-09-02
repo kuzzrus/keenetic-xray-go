@@ -55,11 +55,21 @@ func run(args []string) error {
 		return fmt.Errorf("loading queue store: %w", err)
 	}
 
+	// Carry any routers pinned in config.json into the runtime registry
+	// (once; a no-op for IDs already there). After this the registry --
+	// mutable from the bot with /add_router and /remove_router -- is the
+	// source of truth for which routers may authenticate.
+	for id, token := range cfg.Routers {
+		if err := store.SeedRouter(id, token, ""); err != nil {
+			return fmt.Errorf("seeding router %q from config: %w", id, err)
+		}
+	}
+
 	logger := log.New(os.Stderr, "", log.LstdFlags)
 
 	server := botcontrol.NewServer(botcontrol.ServerConfig{
 		Store:       store,
-		Auth:        botcontrol.StaticRouterAuth(cfg.Routers),
+		Auth:        store,
 		Fingerprint: fingerprint,
 		Logger:      logger,
 	})
@@ -68,15 +78,12 @@ func run(args []string) error {
 	for _, id := range cfg.AllowedChatIDs {
 		allowedChats[id] = true
 	}
-	knownRouters := make([]string, 0, len(cfg.Routers))
-	for id := range cfg.Routers {
-		knownRouters = append(knownRouters, id)
-	}
 	bot := &botcontrol.TelegramBot{
 		Token:        cfg.TelegramToken,
 		AllowedChats: allowedChats,
-		KnownRouters: knownRouters,
 		Store:        store,
+		Fingerprint:  fingerprint,
+		ServerURL:    cfg.PublicURL,
 		Logger:       logger,
 	}
 
@@ -94,7 +101,7 @@ func run(args []string) error {
 	go func() { errCh <- botcontrol.ListenAndServeTLS(ctx, cfg.ListenAddr, cert, server) }()
 	go func() { errCh <- bot.Run(ctx) }()
 
-	logger.Printf("listening on %s (fingerprint %s, %d router(s) registered)", cfg.ListenAddr, fingerprint, len(cfg.Routers))
+	logger.Printf("listening on %s (fingerprint %s, %d router(s) registered)", cfg.ListenAddr, fingerprint, len(store.Routers()))
 
 	firstErr := <-errCh
 	shuttingDown := ctx.Err() != nil // true if the signal handler already cancelled ctx

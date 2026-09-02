@@ -97,6 +97,22 @@ func (f *fakeTelegram) waitForReply(t *testing.T, timeout time.Duration) string 
 	return ""
 }
 
+func newBotStore(t *testing.T) *Store {
+	t.Helper()
+	store, err := LoadStore("")
+	if err != nil {
+		t.Fatalf("LoadStore: %v", err)
+	}
+	return store
+}
+
+func mustRegister(t *testing.T, store *Store, id string) {
+	t.Helper()
+	if _, err := store.AddRouter(id, ""); err != nil {
+		t.Fatalf("AddRouter(%q): %v", id, err)
+	}
+}
+
 func runBotInBackground(t *testing.T, bot *TelegramBot) context.CancelFunc {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -114,10 +130,8 @@ func runBotInBackground(t *testing.T, bot *TelegramBot) context.CancelFunc {
 
 func TestTelegramBot_UnauthorizedChatIsIgnored(t *testing.T) {
 	srv, fake := newFakeTelegram(t)
-	store, err := LoadStore("")
-	if err != nil {
-		t.Fatalf("LoadStore: %v", err)
-	}
+	store := newBotStore(t)
+	mustRegister(t, store, "router-1")
 	bot := &TelegramBot{
 		Token:        "test-token",
 		AllowedChats: map[int64]bool{1: true},
@@ -135,10 +149,8 @@ func TestTelegramBot_UnauthorizedChatIsIgnored(t *testing.T) {
 
 func TestTelegramBot_Help(t *testing.T) {
 	srv, fake := newFakeTelegram(t)
-	store, err := LoadStore("")
-	if err != nil {
-		t.Fatalf("LoadStore: %v", err)
-	}
+	store := newBotStore(t)
+	mustRegister(t, store, "router-1")
 	bot := &TelegramBot{
 		Token:        "test-token",
 		AllowedChats: map[int64]bool{1: true},
@@ -154,16 +166,98 @@ func TestTelegramBot_Help(t *testing.T) {
 	}
 }
 
-func TestTelegramBot_UnknownRouterRejected(t *testing.T) {
+func TestTelegramBot_AddRouterReturnsConfigureLine(t *testing.T) {
 	srv, fake := newFakeTelegram(t)
-	store, err := LoadStore("")
-	if err != nil {
-		t.Fatalf("LoadStore: %v", err)
-	}
+	store := newBotStore(t)
 	bot := &TelegramBot{
 		Token:        "test-token",
 		AllowedChats: map[int64]bool{1: true},
-		KnownRouters: []string{"router-1"},
+		Store:        store,
+		Fingerprint:  "deadbeef",
+		ServerURL:    "https://vps.example.com:8443",
+		APIBase:      srv.URL,
+	}
+	runBotInBackground(t, bot)
+
+	fake.push(1, "/add_router home Дом")
+	reply := fake.waitForReply(t, 3*time.Second)
+
+	if !store.HasRouter("home") {
+		t.Fatal("router not registered after /add_router")
+	}
+	tok, _ := store.TokenFor("home")
+	want := "keenetic-xray agent configure https://vps.example.com:8443 home deadbeef " + tok
+	if !strings.Contains(reply, want) {
+		t.Errorf("reply = %q\nwant it to contain %q", reply, want)
+	}
+}
+
+func TestTelegramBot_AddRouterRejectsBadID(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL}
+	runBotInBackground(t, bot)
+
+	fake.push(1, "/add_router bad/id")
+	reply := fake.waitForReply(t, 3*time.Second)
+	if !strings.Contains(reply, "id роутера") {
+		t.Errorf("reply = %q, want an invalid-id message", reply)
+	}
+	if len(store.Routers()) != 0 {
+		t.Error("an invalid id must not be registered")
+	}
+}
+
+func TestTelegramBot_RemoveRouter(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	mustRegister(t, store, "home")
+	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL}
+	runBotInBackground(t, bot)
+
+	fake.push(1, "/remove_router home")
+	reply := fake.waitForReply(t, 3*time.Second)
+	if !strings.Contains(reply, "убран из реестра") {
+		t.Errorf("reply = %q", reply)
+	}
+	if store.HasRouter("home") {
+		t.Error("router still registered after /remove_router")
+	}
+}
+
+func TestTelegramBot_ListRoutersEmpty(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL}
+	runBotInBackground(t, bot)
+
+	fake.push(1, "/routers")
+	if reply := fake.waitForReply(t, 3*time.Second); !strings.Contains(reply, "/add_router") {
+		t.Errorf("empty /routers = %q, want a hint to add one", reply)
+	}
+}
+
+func TestTelegramBot_ListRoutersWithEntries(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	mustRegister(t, store, "home")
+	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL}
+	runBotInBackground(t, bot)
+
+	fake.push(1, "/routers")
+	reply := fake.waitForReply(t, 3*time.Second)
+	if !strings.Contains(reply, "home") || !strings.Contains(reply, "ещё не подключался") {
+		t.Errorf("/routers = %q, want it to list 'home'", reply)
+	}
+}
+
+func TestTelegramBot_UnknownRouterRejected(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	mustRegister(t, store, "router-1")
+	bot := &TelegramBot{
+		Token:        "test-token",
+		AllowedChats: map[int64]bool{1: true},
 		Store:        store,
 		APIBase:      srv.URL,
 	}
@@ -178,14 +272,11 @@ func TestTelegramBot_UnknownRouterRejected(t *testing.T) {
 
 func TestTelegramBot_StatusRoundTrip(t *testing.T) {
 	srv, fake := newFakeTelegram(t)
-	store, err := LoadStore("")
-	if err != nil {
-		t.Fatalf("LoadStore: %v", err)
-	}
+	store := newBotStore(t)
+	mustRegister(t, store, "router-1")
 	bot := &TelegramBot{
 		Token:         "test-token",
 		AllowedChats:  map[int64]bool{1: true},
-		KnownRouters:  []string{"router-1"},
 		Store:         store,
 		APIBase:       srv.URL,
 		ResultTimeout: 3 * time.Second,
@@ -218,14 +309,11 @@ func TestTelegramBot_StatusRoundTrip(t *testing.T) {
 
 func TestTelegramBot_TimesOutWhenRouterNeverAnswers(t *testing.T) {
 	srv, fake := newFakeTelegram(t)
-	store, err := LoadStore("")
-	if err != nil {
-		t.Fatalf("LoadStore: %v", err)
-	}
+	store := newBotStore(t)
+	mustRegister(t, store, "router-1")
 	bot := &TelegramBot{
 		Token:         "test-token",
 		AllowedChats:  map[int64]bool{1: true},
-		KnownRouters:  []string{"router-1"},
 		Store:         store,
 		APIBase:       srv.URL,
 		ResultTimeout: 100 * time.Millisecond,
@@ -241,14 +329,11 @@ func TestTelegramBot_TimesOutWhenRouterNeverAnswers(t *testing.T) {
 
 func TestTelegramBot_SwitchDispatchesCorrectAction(t *testing.T) {
 	srv, fake := newFakeTelegram(t)
-	store, err := LoadStore("")
-	if err != nil {
-		t.Fatalf("LoadStore: %v", err)
-	}
+	store := newBotStore(t)
+	mustRegister(t, store, "router-1")
 	bot := &TelegramBot{
 		Token:         "test-token",
 		AllowedChats:  map[int64]bool{1: true},
-		KnownRouters:  []string{"router-1"},
 		Store:         store,
 		APIBase:       srv.URL,
 		ResultTimeout: 2 * time.Second,
@@ -276,14 +361,11 @@ func TestTelegramBot_SwitchDispatchesCorrectAction(t *testing.T) {
 
 func TestTelegramBot_SwitchInvalidRoleRejectedWithoutEnqueue(t *testing.T) {
 	srv, fake := newFakeTelegram(t)
-	store, err := LoadStore("")
-	if err != nil {
-		t.Fatalf("LoadStore: %v", err)
-	}
+	store := newBotStore(t)
+	mustRegister(t, store, "router-1")
 	bot := &TelegramBot{
 		Token:        "test-token",
 		AllowedChats: map[int64]bool{1: true},
-		KnownRouters: []string{"router-1"},
 		Store:        store,
 		APIBase:      srv.URL,
 	}

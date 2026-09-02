@@ -40,6 +40,7 @@ jobs:
           sudo apt-get install -y shellcheck
           shellcheck -s sh -S warning \
             install.sh \
+            server-install.sh \
             packaging/build-ipk.sh \
             packaging/ipk/postinst \
             packaging/ipk/prerm \

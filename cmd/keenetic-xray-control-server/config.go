@@ -16,12 +16,13 @@ import (
 // fields are secrets.
 type settings struct {
 	ListenAddr     string            `json:"listen_addr"`
+	PublicURL      string            `json:"public_url,omitempty"` // e.g. https://vps.example.com:8443 -- what routers dial; used in the bot's `agent configure` hints
 	CertPath       string            `json:"cert_path"`
 	KeyPath        string            `json:"key_path"`
 	QueuePath      string            `json:"queue_path"`
 	TelegramToken  string            `json:"telegram_token"`
 	AllowedChatIDs []int64           `json:"allowed_chat_ids"`
-	Routers        map[string]string `json:"routers"` // router ID -> bearer token
+	Routers        map[string]string `json:"routers,omitempty"` // optional bootstrap seed: router ID -> bearer token, carried into the runtime registry once at startup
 }
 
 func defaultSettings() settings {
@@ -60,17 +61,16 @@ func loadSettings(path string) (settings, error) {
 	return s, nil
 }
 
-// validate reports the first missing required field. These three have no
-// sensible default (see loadSettings), so both loading and the setup
-// wizard reject a config without them.
+// validate reports the first missing required field. Only the bot token
+// and the chat allowlist have no sensible default (see loadSettings);
+// routers are registered at runtime through the bot, so an empty or
+// absent `routers` is fine.
 func (s settings) validate() error {
 	switch {
 	case s.TelegramToken == "":
 		return fmt.Errorf("telegram_token is required")
 	case len(s.AllowedChatIDs) == 0:
 		return fmt.Errorf("allowed_chat_ids must list at least one chat ID")
-	case len(s.Routers) == 0:
-		return fmt.Errorf("routers must list at least one router ID -> token pair")
 	}
 	return nil
 }

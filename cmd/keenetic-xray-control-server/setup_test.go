@@ -22,8 +22,8 @@ func TestRunSetup_WritesValidConfig(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
 
-	// token / chat IDs / router count / router id / listen addr (blank = default)
-	in := strings.NewReader("111222333:AA_this_is_a_pretend_bot_token_value_00\n111, 222\n2\nhome-router\noffice-router\n\n")
+	// bot token / chat IDs / listen addr (blank = default) / public URL
+	in := strings.NewReader("111222333:AA_this_is_a_pretend_bot_token_value_00\n111, 222\n\nhttps://vps.example.com:8443\n")
 	var out strings.Builder
 
 	if err := runSetup(in, &out, cfgPath, testDefaults(dir)); err != nil {
@@ -40,16 +40,11 @@ func TestRunSetup_WritesValidConfig(t *testing.T) {
 	if len(s.AllowedChatIDs) != 2 || s.AllowedChatIDs[0] != 111 || s.AllowedChatIDs[1] != 222 {
 		t.Errorf("AllowedChatIDs = %v, want [111 222]", s.AllowedChatIDs)
 	}
-	if len(s.Routers) != 2 {
-		t.Fatalf("Routers = %v, want 2 entries", s.Routers)
+	if s.PublicURL != "https://vps.example.com:8443" {
+		t.Errorf("PublicURL = %q", s.PublicURL)
 	}
-	for _, id := range []string{"home-router", "office-router"} {
-		if len(s.Routers[id]) != 64 { // hex-encoded 32 bytes
-			t.Errorf("Routers[%q] = %q, want a 64-hex-char token", id, s.Routers[id])
-		}
-	}
-	if s.Routers["home-router"] == s.Routers["office-router"] {
-		t.Error("both routers got the same token")
+	if len(s.Routers) != 0 {
+		t.Errorf("Routers = %v, want none (registered at runtime now)", s.Routers)
 	}
 	if s.ListenAddr != ":8443" {
 		t.Errorf("ListenAddr = %q, want default :8443", s.ListenAddr)
@@ -69,7 +64,7 @@ func TestRunSetup_WritesValidConfig(t *testing.T) {
 		t.Errorf("certificate not generated: %v", err)
 	}
 	got := out.String()
-	for _, want := range []string{"SHA-256", "keenetic-xray agent configure https://<this-server-host>:8443 home-router", "office-router"} {
+	for _, want := range []string{"SHA-256", "/add_router"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("wizard output missing %q\n---\n%s", want, got)
 		}
@@ -79,7 +74,7 @@ func TestRunSetup_WritesValidConfig(t *testing.T) {
 func TestRunSetup_RejectsBadChatIDsThenRecovers(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
-	in := strings.NewReader("123:token_token_token_token_token_token\nnope\n42\n1\nr1\n\n")
+	in := strings.NewReader("123:token_token_token_token_token_token\nnope\n42\n\n\n")
 	var out strings.Builder
 
 	if err := runSetup(in, &out, cfgPath, testDefaults(dir)); err != nil {
@@ -126,7 +121,7 @@ func TestRunSetup_OverwritesExistingConfigOnConfirm(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	in := strings.NewReader("y\n999:brand_new_token_brand_new_token_brand\n7\n1\nr1\n\n")
+	in := strings.NewReader("y\n999:brand_new_token_brand_new_token_brand\n7\n\n\n")
 	var out strings.Builder
 	if err := runSetup(in, &out, cfgPath, testDefaults(dir)); err != nil {
 		t.Fatalf("runSetup: %v", err)

@@ -37,7 +37,15 @@ fits together, `docs/full-vs-mini.md` for the Mini/Full variant split, and
 
 Run this on the router (over SSH) — it detects the router's architecture
 via `opkg` itself and installs the matching `.ipk` from the latest
-release:
+release. Pass your `vless://` link or subscription URL and it configures
+itself with nothing else to run — profile selection, Keenetic `Proxy0`
+wiring, and the daemon all set up in one go:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/install.sh | sh -s -- --sub="https://provider.example/sub/token"
+```
+
+Without a link it installs and waits for `keenetic-xray setup`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/install.sh | sh
@@ -45,7 +53,9 @@ curl -fsSL https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/insta
 
 `curl`, not `wget`: some Keenetic routers ship a busybox `wget` that
 can't fetch `https://` at all (`not an http or ftp url`). If `curl` is
-missing, `opkg update && opkg install curl` first.
+missing, `opkg update && opkg install curl` first. Add `--no-proxy0` to
+skip the automatic `Proxy0` wiring, `--xray-core=entware` to use the
+Entware feed for the core.
 
 ### Manual install
 
@@ -88,7 +98,7 @@ keenetic-xray daemon    # run the failover daemon in the foreground
 
 ```
 keenetic-xray version
-keenetic-xray setup
+keenetic-xray setup [--from <link|url>] [--primary <sel>] [--backup <sel>] [--proxy0|--no-proxy0] [--yes]
 keenetic-xray daemon
 keenetic-xray profile {add <vless-uri>|list|remove <index>}
 keenetic-xray subscription {set-url <url>|refresh|list|set-primary <i>|set-backup <i>}

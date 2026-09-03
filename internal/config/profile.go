@@ -126,6 +126,18 @@ const (
 	VariantFull = "full"
 )
 
+// Proxy0Config controls whether the daemon points Keenetic's Proxy
+// interface at the local Xray inbound (via `keenetic-xray proxy0`), so
+// LAN traffic can be policy-routed through the proxy. Disabled by
+// default; when enabled the inbound binds 0.0.0.0 instead of loopback so
+// Proxy0 can reach it.
+type Proxy0Config struct {
+	Enabled   bool   `json:"enabled"`
+	Interface string `json:"interface,omitempty"` // "" -> "Proxy0"
+	Protocol  string `json:"protocol,omitempty"`  // "" -> "socks5"; also "http"
+	LANIP     string `json:"lan_ip,omitempty"`    // override; "" -> auto-detect via ndmc
+}
+
 // Config is the full persisted /opt/etc/keenetic-xray/config.json shape.
 type Config struct {
 	Variant      string         `json:"variant"` // "mini" | "full"
@@ -135,6 +147,7 @@ type Config struct {
 	Subscription *Subscription  `json:"subscription,omitempty"`
 	Failover     FailoverConfig `json:"failover"`
 	Agent        AgentConfig    `json:"agent"`
+	Proxy0       Proxy0Config   `json:"proxy0"`
 }
 
 // Default returns a fresh Config with no profiles configured yet, ready to
@@ -203,7 +216,21 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("profile %d (%s): %w", i, p.Remark, err)
 		}
 	}
+	switch c.Proxy0.Protocol {
+	case "", "socks5", "http":
+	default:
+		return fmt.Errorf("proxy0.protocol %q: want socks5 or http", c.Proxy0.Protocol)
+	}
 	return nil
+}
+
+// Proxy0Port is the local inbound port Keenetic's Proxy0 should be
+// pointed at, chosen to match Proxy0.Protocol.
+func (c *Config) Proxy0Port() int {
+	if c.Proxy0.Protocol == "http" {
+		return c.Failover.HTTPPort
+	}
+	return c.Failover.SOCKSPort
 }
 
 // Primary returns the currently-selected primary profile, or nil if unset.

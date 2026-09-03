@@ -78,10 +78,18 @@ func (a *realActions) SwitchLiveTo(ctx context.Context, role Role) error {
 		return fmt.Errorf("no %s profile configured", role)
 	}
 
+	// When Proxy0 is enabled the production inbound must be reachable from
+	// Keenetic's Proxy interface over the LAN, so bind all interfaces
+	// rather than loopback. The pretest instance stays loopback-only.
+	listen := ""
+	if a.cfg.Proxy0.Enabled {
+		listen = "0.0.0.0"
+	}
 	data, err := config.GenerateXrayConfig(config.XrayConfigOptions{
-		SOCKSPort: a.cfg.Failover.SOCKSPort,
-		HTTPPort:  a.cfg.Failover.HTTPPort,
-		Outbound:  *profile,
+		SOCKSPort:  a.cfg.Failover.SOCKSPort,
+		HTTPPort:   a.cfg.Failover.HTTPPort,
+		ListenHost: listen,
+		Outbound:   *profile,
 	})
 	if err != nil {
 		return fmt.Errorf("generating production config: %w", err)

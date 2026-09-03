@@ -286,6 +286,28 @@ func TestTelegramBot_RoutersCommandWithBotSuffix(t *testing.T) {
 	}
 }
 
+func TestBot_ServerURL(t *testing.T) {
+	// public_url wins outright.
+	b := &TelegramBot{ServerURL: "https://vps.example.com:8443", ListenAddr: ":9999"}
+	if got := b.serverURL(); got != "https://vps.example.com:8443" {
+		t.Errorf("serverURL() = %q, want the configured public_url", got)
+	}
+
+	// No public_url: port comes from ListenAddr, host is the detected
+	// outbound IP (or the placeholder if there's no route).
+	b = &TelegramBot{ListenAddr: ":9000"}
+	got := b.serverURL()
+	if !strings.HasPrefix(got, "https://") || !strings.HasSuffix(got, ":9000") {
+		t.Errorf("serverURL() = %q, want https://<host>:9000", got)
+	}
+
+	// An explicit listen host is used as-is.
+	b = &TelegramBot{ListenAddr: "10.0.0.5:8443"}
+	if got := b.serverURL(); got != "https://10.0.0.5:8443" {
+		t.Errorf("serverURL() = %q, want https://10.0.0.5:8443", got)
+	}
+}
+
 func TestTelegramBot_UnknownCommandIsRussian(t *testing.T) {
 	srv, fake := newFakeTelegram(t)
 	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: newBotStore(t), APIBase: srv.URL}

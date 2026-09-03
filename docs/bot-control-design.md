@@ -210,7 +210,9 @@ from the chat with `/add_router`. Re-run it to reconfigure, then
 `cert_path`/`key_path`/`queue_path` all have working defaults (see
 `cmd/keenetic-xray-control-server/config.go`) and don't need to be set
 explicitly. `public_url` is optional -- if unset, the bot's `agent
-configure` hints use a `<host>` placeholder the operator fills in.
+configure` hints use the `listen_addr` port plus the machine's detected
+outbound IP (a `<адрес-сервера>` placeholder only if there's no route);
+set it when the server is behind NAT or should be reached by hostname.
 `telegram_token` and `allowed_chat_ids` are the only required fields:
 there's no sensible "not configured yet" mode for a Telegram bot with no
 token or chat allowlist, so a missing or incomplete config file is a

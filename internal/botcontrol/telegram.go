@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -35,7 +36,8 @@ type TelegramBot struct {
 	AllowedChats  map[int64]bool
 	Store         *Store        // router registry + command queues
 	Fingerprint   string        // control-server cert SHA-256, echoed in `agent configure` hints
-	ServerURL     string        // public URL routers dial, e.g. https://vps.example.com:8443; "" -> a placeholder in hints
+	ServerURL     string        // public URL routers dial, e.g. https://vps.example.com:8443; "" -> derived from ListenAddr + the detected outbound IP
+	ListenAddr    string        // the server's own listen address, used to derive a URL when ServerURL is unset
 	APIBase       string        // "" -> telegramAPIBase
 	ResultTimeout time.Duration // 0 -> DefaultResultTimeout
 	Logger        *log.Logger   // nil -> log.Default()
@@ -426,12 +428,49 @@ func (b *TelegramBot) dispatchRemoveRouter(args []string) string {
 // agentConfigureLines is the two-command block to run on a router to bind
 // it to this control server.
 func (b *TelegramBot) agentConfigureLines(id, token string) string {
-	url := b.ServerURL
-	if url == "" {
-		url = "https://<адрес-сервера>:8443"
-	}
 	return fmt.Sprintf("keenetic-xray agent configure %s %s %s %s\nkeenetic-xray agent enable",
-		url, id, b.Fingerprint, token)
+		b.serverURL(), id, b.Fingerprint, token)
+}
+
+// serverURL is what routers should dial. ServerURL (config public_url)
+// wins; otherwise it's the ListenAddr port plus, when the listen host is
+// a wildcard, the machine's outbound IP -- a placeholder if that can't be
+// determined.
+func (b *TelegramBot) serverURL() string {
+	if b.ServerURL != "" {
+		return b.ServerURL
+	}
+	host, port := "", "8443"
+	if h, p, err := net.SplitHostPort(b.ListenAddr); err == nil {
+		host, port = h, p
+	} else if strings.HasPrefix(b.ListenAddr, ":") {
+		port = strings.TrimPrefix(b.ListenAddr, ":")
+	}
+	switch host {
+	case "", "0.0.0.0", "::":
+		if ip := detectOutboundIP(); ip != "" {
+			host = ip
+		} else {
+			host = "<адрес-сервера>"
+		}
+	}
+	return "https://" + net.JoinHostPort(host, port)
+}
+
+// detectOutboundIP returns the local address the kernel would use to
+// reach the public internet. The UDP "connect" sends nothing; it only
+// forces a route lookup and a socket bind, so it works offline-ish and
+// returns "" only when there is no route at all.
+func detectOutboundIP() string {
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+	if addr, ok := conn.LocalAddr().(*net.UDPAddr); ok && addr.IP != nil {
+		return addr.IP.String()
+	}
+	return ""
 }
 
 // agentConfigureHint is what the bot replies with just after a router is

@@ -116,11 +116,11 @@ exists.
 per-router card. `setMyCommands` registers `/menu /routers /add_router
 /help` so Telegram shows them in its command list.
 
-A card's buttons (`📊 Статус`, `⬆️ primary`, `⬇️ backup`, `📋 Профили`,
-`🔄 Подписка`, `📄 Список`) enqueue the matching command, edit the same
-message to `⏳ команда в очереди…`, then a goroutine waits up to
-`ResultTimeout` (default 20s) and edits it again with the result (or a
-"not answered, will run on its next poll" note). `📦 Установка агента`
+A card's buttons (`📊 Статус`, `🩺 Doctor`, `⬆️ primary`, `⬇️ backup`,
+`📋 Профили`, `🔄 Подписка`, `📄 Список`) enqueue the matching command,
+edit the same message to `⏳ команда в очереди…`, then a goroutine waits
+up to `ResultTimeout` (default 20s) and edits it again with the result
+(or a "not answered, will run on its next poll" note). `📦 Установка агента`
 re-shows the `agent configure` line; `🗑 Удалить роутер` asks for
 confirmation before `RemoveRouter`. Callback data is a short `kind:arg`
 string routed by `handleCallback`.
@@ -138,7 +138,8 @@ ones are text-only:
 /add_router <id> [name]    register a router; the bot replies with its agent configure commands in a copyable <pre> block
 /remove_router <id>        unregister a router (the agent on the router is left alone)
 /routers                   list registered routers
-/status <router>
+/status <router>           rich snapshot: failover state + live profile, uptime, last switch, listening ports, proxy0, subscription age
+/doctor <router>           pass/fail health checks (profiles, config, xray-core runnable, proxy0 upstream, free disk)
 /switch <router> primary|backup
 /profile_list <router>
 /sub_seturl <router> <url>

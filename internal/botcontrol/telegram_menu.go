@@ -44,7 +44,7 @@ func (b *TelegramBot) routersListKB() inlineKeyboard {
 
 func routerCardKB(id string) inlineKeyboard {
 	return inlineKeyboard{InlineKeyboard: [][]inlineButton{
-		{{Text: "📊 Статус", CallbackData: "act:status:" + id}},
+		{{Text: "📊 Статус", CallbackData: "act:status:" + id}, {Text: "🩺 Doctor", CallbackData: "act:doctor:" + id}},
 		{{Text: "⬆️ primary", CallbackData: "act:sw_pri:" + id}, {Text: "⬇️ backup", CallbackData: "act:sw_bak:" + id}},
 		{{Text: "📋 Профили", CallbackData: "act:profiles:" + id}},
 		{{Text: "🔄 Подписка", CallbackData: "act:sub_refresh:" + id}, {Text: "📄 Список", CallbackData: "act:sub_list:" + id}},
@@ -68,6 +68,8 @@ func callbackAction(name string) string {
 	switch name {
 	case "status":
 		return ActionStatus
+	case "doctor":
+		return ActionDoctor
 	case "sw_pri":
 		return ActionSwitchPrimary
 	case "sw_bak":

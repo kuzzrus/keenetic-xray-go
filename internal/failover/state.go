@@ -111,7 +111,7 @@ type Machine struct {
 	cooldownNext        State     // Cooldown: state to enter once it elapses
 	backoffUntil        time.Time // ActiveBackup: don't retry recovery testing before this
 
-	onTransition func(from, to State) // test hook
+	onTransition func(from, to State) // nil, or a sink for state changes (Daemon records history + emits events); also used by tests
 }
 
 // NewMachine builds a Machine starting in the given state. A nil clock

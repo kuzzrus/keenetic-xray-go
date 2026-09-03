@@ -129,6 +129,17 @@ func (s *Store) TokenFor(routerID string) (string, bool) {
 	return "", false
 }
 
+// NameFor returns a registered router's human label, or "" if it has
+// none or is not registered.
+func (s *Store) NameFor(routerID string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if rec, ok := s.state.Registry[routerID]; ok {
+		return rec.Name
+	}
+	return ""
+}
+
 // HasRouter reports whether routerID is registered.
 func (s *Store) HasRouter(routerID string) bool {
 	s.mu.Lock()

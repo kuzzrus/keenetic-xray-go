@@ -163,19 +163,44 @@ type Daemon struct {
 
 	startedAt   time.Time
 	transitions []Transition // bounded history, oldest first; appended on the Run goroutine only
+	events      chan Event   // buffered; non-blocking sends, dropped if full
 }
 
 // Transition is one recorded failover state change, for `status` output
-// and (later) push notifications.
+// and push notifications.
 type Transition struct {
 	At   time.Time
 	From State
 	To   State
 }
 
+// EventKind tags a Daemon Event.
+type EventKind int
+
+const (
+	// EventDaemonStart: Run has started and production is up on primary.
+	EventDaemonStart EventKind = iota
+	// EventFailover: the state machine changed phase (From -> To).
+	EventFailover
+)
+
+// Event is a noteworthy daemon occurrence, for out-of-band notification
+// (the bot DMs the operator). Rendering to human text is the consumer's
+// job -- this package stays free of UX strings.
+type Event struct {
+	At   time.Time
+	Kind EventKind
+	From State // EventFailover
+	To   State // EventFailover
+}
+
 // maxTransitions bounds the in-memory history: it feeds `status` output
 // and push notifications, it is not an audit log.
 const maxTransitions = 20
+
+// eventBuffer is how many unconsumed events are held before new ones are
+// dropped -- if nothing is draining Events() there is nobody to notify.
+const eventBuffer = 16
 
 type daemonCommand struct {
 	fn   func(context.Context)
@@ -192,6 +217,7 @@ func NewDaemon(paths Paths, cfg *config.Config) *Daemon {
 		cfg:       cfg,
 		commands:  make(chan daemonCommand),
 		startedAt: time.Now(),
+		events:    make(chan Event, eventBuffer),
 	}
 	// transitionTo runs only on the Run goroutine (via Tick) or on a
 	// command closure (via ForceSwitch), both serialized by Run's select
@@ -202,11 +228,27 @@ func NewDaemon(paths Paths, cfg *config.Config) *Daemon {
 }
 
 func (d *Daemon) recordTransition(from, to State) {
-	d.transitions = append(d.transitions, Transition{At: time.Now(), From: from, To: to})
+	now := time.Now()
+	d.transitions = append(d.transitions, Transition{At: now, From: from, To: to})
 	if len(d.transitions) > maxTransitions {
 		d.transitions = d.transitions[len(d.transitions)-maxTransitions:]
 	}
+	d.emit(Event{At: now, Kind: EventFailover, From: from, To: to})
 }
+
+// emit does a non-blocking send on the events channel -- a full buffer
+// (nobody draining) drops the event rather than stalling the Run loop.
+func (d *Daemon) emit(ev Event) {
+	select {
+	case d.events <- ev:
+	default:
+	}
+}
+
+// Events is a stream of noteworthy daemon occurrences for out-of-band
+// notification. Buffered and lossy: an event is dropped if the consumer
+// falls too far behind. Never closed; it stops producing when Run stops.
+func (d *Daemon) Events() <-chan Event { return d.events }
 
 // Snapshot is a consistent read of the daemon's observable state.
 type Snapshot struct {
@@ -319,6 +361,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return fmt.Errorf("starting production instance: %w", err)
 	}
 	defer d.actions.prod.Stop()
+	d.emit(Event{At: time.Now(), Kind: EventDaemonStart})
 
 	ticker := time.NewTicker(d.actions.probeTimeout())
 	defer ticker.Stop()

@@ -43,6 +43,11 @@ type ServerConfig struct {
 	Auth        RouterAuth
 	Fingerprint string      // hex SHA256 of the serving certificate's leaf, served unauthenticated at /fingerprint
 	Logger      *log.Logger // nil -> log.Default()
+
+	// OnEvent, if set, is called for each authenticated POST /agent/event.
+	// It runs on the request goroutine; keep it quick or hand off. nil ->
+	// events are accepted and discarded.
+	OnEvent func(routerID string, ev Event)
 }
 
 // Server is the control-server's HTTP API: unauthenticated /fingerprint
@@ -64,6 +69,7 @@ func NewServer(cfg ServerConfig) *Server {
 	s.mux.HandleFunc("/fingerprint", s.handleFingerprint)
 	s.mux.HandleFunc("/agent/poll", s.authenticated(s.handlePoll))
 	s.mux.HandleFunc("/agent/result", s.authenticated(s.handleResult))
+	s.mux.HandleFunc("/agent/event", s.authenticated(s.handleEvent))
 	return s
 }
 
@@ -133,6 +139,19 @@ func (s *Server) handleResult(w http.ResponseWriter, r *http.Request, routerID s
 		s.cfg.Logger.Printf("record result for %s: %v", routerID, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handleEvent(w http.ResponseWriter, r *http.Request, routerID string) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxResultBytes)
+	var ev Event
+	if err := json.NewDecoder(r.Body).Decode(&ev); err != nil {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	if s.cfg.OnEvent != nil {
+		s.cfg.OnEvent(routerID, ev)
 	}
 	w.WriteHeader(http.StatusOK)
 }

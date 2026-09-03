@@ -67,13 +67,6 @@ func run(args []string) error {
 
 	logger := log.New(os.Stderr, "", log.LstdFlags)
 
-	server := botcontrol.NewServer(botcontrol.ServerConfig{
-		Store:       store,
-		Auth:        store,
-		Fingerprint: fingerprint,
-		Logger:      logger,
-	})
-
 	allowedChats := make(map[int64]bool, len(cfg.AllowedChatIDs))
 	for _, id := range cfg.AllowedChatIDs {
 		allowedChats[id] = true
@@ -87,6 +80,16 @@ func run(args []string) error {
 		ListenAddr:   cfg.ListenAddr,
 		Logger:       logger,
 	}
+
+	// The agent pushes failover/daemon-start events to /agent/event; the
+	// bot fans them out to the allowed chats.
+	server := botcontrol.NewServer(botcontrol.ServerConfig{
+		Store:       store,
+		Auth:        store,
+		Fingerprint: fingerprint,
+		Logger:      logger,
+		OnEvent:     bot.NotifyEvent,
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

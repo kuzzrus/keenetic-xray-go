@@ -34,6 +34,11 @@ type AgentOptions struct {
 	Token             string        // Bearer token; compared constant-time server-side
 	FingerprintSHA256 string        // hex SHA256 of the server's leaf cert, pinned SSH-host-key style
 	PollInterval      time.Duration // 0 -> DefaultPollInterval
+
+	// Events, if set, is drained by Run and each value POSTed to
+	// /agent/event (best-effort). Optional -- a nil channel is simply
+	// never selected.
+	Events <-chan Event
 }
 
 func (o AgentOptions) validate() error {
@@ -70,8 +75,20 @@ func Run(ctx context.Context, opts AgentOptions, handle Handler) error {
 			return ctx.Err()
 		case <-ticker.C:
 			pollOnce(ctx, client, opts, handle)
+		case ev := <-opts.Events:
+			postEvent(ctx, client, opts, ev)
 		}
 	}
+}
+
+// postEvent forwards one unsolicited Event to the control server. Best
+// -effort: a failure is dropped, the next poll proceeds regardless.
+func postEvent(ctx context.Context, client *http.Client, opts AgentOptions, ev Event) {
+	body, err := json.Marshal(ev)
+	if err != nil {
+		return
+	}
+	_ = doJSON(ctx, client, opts, "/agent/event", body, nil)
 }
 
 func pollOnce(ctx context.Context, client *http.Client, opts AgentOptions, handle Handler) {

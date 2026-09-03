@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
+	"github.com/kuzzrus/keenetic-xray-go/internal/keenetic"
 	"github.com/kuzzrus/keenetic-xray-go/internal/subscription"
 )
 
@@ -102,8 +103,50 @@ func runSetup(stdin io.Reader) error {
 	}
 
 	fmt.Printf("\nSaved: primary=%s, backup=%s\n", profiles[primaryIdx].Remark, profiles[backupIdx].Remark)
+
+	maybeSetupProxy0(reader, cfg)
+
 	fmt.Println("Start the failover daemon with: keenetic-xray daemon")
 	return nil
+}
+
+// maybeSetupProxy0 offers to point Keenetic's Proxy0 at the local inbound
+// so the whole LAN can be policy-routed through the proxy. Router-only;
+// silently skipped where ndmc isn't present.
+func maybeSetupProxy0(reader *bufio.Reader, cfg *config.Config) {
+	if !keenetic.Available() {
+		return
+	}
+	fmt.Print("\nPoint Keenetic's Proxy0 at the proxy now (route the LAN through it)? [y/N]: ")
+	line, _ := reader.ReadString('\n')
+	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "y") {
+		fmt.Println("skipped -- set it up later with: keenetic-xray proxy0 set")
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	ip, err := keenetic.LANIP(ctx, cfg.Proxy0.LANIP)
+	if err != nil {
+		fmt.Println("  could not detect the router LAN IP:", err)
+		fmt.Println("  run: keenetic-xray proxy0 set --lan-ip=192.168.x.1")
+		return
+	}
+	if err := keenetic.ConfigureProxy0(ctx, keenetic.Proxy0Options{
+		Interface:    cfg.Proxy0.Interface,
+		UpstreamHost: ip,
+		UpstreamPort: cfg.Proxy0Port(),
+		Protocol:     cfg.Proxy0.Protocol,
+	}); err != nil {
+		fmt.Println("  Proxy0 setup failed:", err)
+		return
+	}
+	cfg.Proxy0.Enabled = true
+	if err := cfg.Save(configPath()); err != nil {
+		fmt.Println("  Proxy0 configured on the router but saving config failed:", err)
+		return
+	}
+	fmt.Printf("  Proxy0 -> %s:%d. Assign devices/policies to Proxy0 in the Keenetic UI.\n", ip, cfg.Proxy0Port())
 }
 
 // promptIndex reads a line, re-prompting on invalid input; an empty line

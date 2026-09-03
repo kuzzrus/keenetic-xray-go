@@ -51,6 +51,8 @@ func run(args []string) error {
 		return cmdVariant(rest)
 	case "agent":
 		return cmdAgent(rest)
+	case "proxy0":
+		return cmdProxy0(rest)
 	case "internal":
 		return cmdInternal(rest)
 	default:
@@ -78,7 +80,8 @@ commands:
   status                                            show configured profiles and variant
   doctor                                            run diagnostic checks
   variant {show|set mini|set full}
-  agent {configure <url> <router-id> <fingerprint> <token>|enable|disable|status}`)
+  agent {configure <url> <router-id> <fingerprint> <token>|enable|disable|status}
+  proxy0 {show|set [--lan-ip=192.168.x.1]|off}   point Keenetic's Proxy0 at the local inbound`)
 }
 
 func cmdDaemon(args []string) error {
@@ -107,6 +110,8 @@ func cmdDaemon(args []string) error {
 	if p, b := cfg.Primary(), cfg.Backup(); p != nil && b != nil {
 		fmt.Printf("starting failover daemon (primary=%s, backup=%s)\n", p.Remark, b.Remark)
 	}
+
+	applyProxy0AtStartup(cfg, func(format string, a ...any) { fmt.Printf(format+"\n", a...) })
 
 	if cfg.Agent.Enabled {
 		opts, err := loadAgentOptions(cfg)

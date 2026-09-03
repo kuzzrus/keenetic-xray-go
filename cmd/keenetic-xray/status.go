@@ -1,13 +1,43 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 	"github.com/kuzzrus/keenetic-xray-go/internal/diskspace"
+	"github.com/kuzzrus/keenetic-xray-go/internal/keenetic"
 )
+
+// checkProxy0 verifies Keenetic's Proxy interface actually forwards to
+// the port Xray listens on.
+func checkProxy0(cfg *config.Config, check func(bool, string)) {
+	if !keenetic.Available() {
+		check(false, "proxy0 enabled but ndmc is not available -- run on the router")
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	iface := cfg.Proxy0.Interface
+	if iface == "" {
+		iface = "Proxy0"
+	}
+	host, port, ok, err := keenetic.Proxy0Upstream(ctx, iface)
+	if err != nil {
+		check(false, fmt.Sprintf("reading %s upstream: %v", iface, err))
+		return
+	}
+	if !ok {
+		check(false, fmt.Sprintf("%s has no upstream -- run: keenetic-xray proxy0 set", iface))
+		return
+	}
+	check(port == cfg.Proxy0Port(),
+		fmt.Sprintf("%s upstream %s:%d matches the inbound port %d", iface, host, port, cfg.Proxy0Port()))
+}
 
 // xrayCoreVersion runs `<xray> version` and returns its first line, e.g.
 // "Xray 26.3.27 (Xray, Penetrates Everything.) ...".
@@ -44,6 +74,7 @@ func cmdStatus(args []string) error {
 		fmt.Printf("subscription: %s\n", cfg.Subscription.URL)
 	}
 	fmt.Printf("agent enabled: %v\n", cfg.Agent.Enabled)
+	fmt.Printf("proxy0: %v\n", cfg.Proxy0.Enabled)
 	if line, err := xrayCoreVersion(); err != nil {
 		fmt.Printf("xray-core: not installed (%v)\n", err)
 	} else {
@@ -82,6 +113,10 @@ func cmdDoctor(args []string) error {
 		check(false, fmt.Sprintf("xray-core runnable at %s (%v) -- run: keenetic-xray internal ensure-xray-core", xrayBinaryPath(), err))
 	} else {
 		check(true, "xray-core: "+line)
+	}
+
+	if cfg.Proxy0.Enabled {
+		checkProxy0(cfg, check)
 	}
 
 	if free, err := diskspace.FreeBytes(optPath()); err != nil {

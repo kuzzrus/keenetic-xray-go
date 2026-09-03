@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -35,7 +36,8 @@ type TelegramBot struct {
 	AllowedChats  map[int64]bool
 	Store         *Store        // router registry + command queues
 	Fingerprint   string        // control-server cert SHA-256, echoed in `agent configure` hints
-	ServerURL     string        // public URL routers dial, e.g. https://vps.example.com:8443; "" -> a placeholder in hints
+	ServerURL     string        // public URL routers dial, e.g. https://vps.example.com:8443; "" -> derived from ListenAddr + the detected outbound IP
+	ListenAddr    string        // the server's own listen address, used to derive a URL when ServerURL is unset
 	APIBase       string        // "" -> telegramAPIBase
 	ResultTimeout time.Duration // 0 -> DefaultResultTimeout
 	Logger        *log.Logger   // nil -> log.Default()
@@ -220,12 +222,25 @@ func (b *TelegramBot) sendMessage(ctx context.Context, chatID int64, text string
 	b.sendMessageKB(ctx, chatID, text, inlineKeyboard{})
 }
 
-// sendMessageKB sends text with an optional inline keyboard and returns
-// the new message's ID (0 if the send failed).
+// sendMessageKB sends plain text with an optional inline keyboard and
+// returns the new message's ID (0 if the send failed).
 func (b *TelegramBot) sendMessageKB(ctx context.Context, chatID int64, text string, kb inlineKeyboard) int {
+	return b.send(ctx, chatID, text, kb, "")
+}
+
+// sendMessageHTML sends text parsed as Telegram HTML -- used for <pre>
+// blocks so the client shows a per-block copy button.
+func (b *TelegramBot) sendMessageHTML(ctx context.Context, chatID int64, text string, kb inlineKeyboard) int {
+	return b.send(ctx, chatID, text, kb, "HTML")
+}
+
+func (b *TelegramBot) send(ctx context.Context, chatID int64, text string, kb inlineKeyboard, parseMode string) int {
 	payload := map[string]any{"chat_id": chatID, "text": text}
 	if len(kb.InlineKeyboard) > 0 {
 		payload["reply_markup"] = kb
+	}
+	if parseMode != "" {
+		payload["parse_mode"] = parseMode
 	}
 	data, err := b.apiPost(ctx, "sendMessage", payload)
 	if err != nil {
@@ -239,6 +254,13 @@ func (b *TelegramBot) sendMessageKB(ctx context.Context, chatID int64, text stri
 	}
 	_ = json.Unmarshal(data, &out)
 	return out.Result.MessageID
+}
+
+// htmlPre wraps s in a Telegram <pre> block (monospace, own copy button),
+// escaping the three characters that matter for HTML parse mode.
+func htmlPre(s string) string {
+	esc := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(s)
+	return "<pre>" + esc + "</pre>"
 }
 
 // editMessageText replaces an existing message's text and keyboard in
@@ -298,9 +320,15 @@ func (b *TelegramBot) handleMessage(ctx context.Context, msg tgMessage) {
 	if b.handleWizardText(ctx, msg.Chat.ID, text) {
 		return
 	}
-	if text == "/start" || text == "/menu" {
-		b.sendMainMenu(ctx, msg.Chat.ID)
-		return
+	if fields := strings.Fields(text); len(fields) > 0 {
+		switch normalizeCommand(fields[0]) {
+		case "/start", "/menu":
+			b.sendMainMenu(ctx, msg.Chat.ID)
+			return
+		case "/add_router":
+			b.cmdAddRouter(ctx, msg.Chat.ID, fields[1:])
+			return
+		}
 	}
 	if reply := b.dispatch(ctx, text); reply != "" {
 		b.sendMessage(ctx, msg.Chat.ID, reply)
@@ -327,15 +355,13 @@ func (b *TelegramBot) dispatch(ctx context.Context, text string) string {
 	if len(fields) == 0 {
 		return ""
 	}
-	cmd, args := fields[0], fields[1:]
+	cmd, args := normalizeCommand(fields[0]), fields[1:]
 
 	switch cmd {
 	case "/help":
 		return helpText
 	case "/routers":
 		return b.listRouters()
-	case "/add_router":
-		return b.dispatchAddRouter(args)
 	case "/remove_router":
 		return b.dispatchRemoveRouter(args)
 	case "/status":
@@ -355,8 +381,17 @@ func (b *TelegramBot) dispatch(ctx context.Context, text string) string {
 	case "/sub_setbackup":
 		return b.dispatchSubSetRole(ctx, args, ActionSubSetBackup)
 	default:
-		return "unknown command; send /help"
+		return "неизвестная команда. Откройте /menu или /help"
 	}
+}
+
+// normalizeCommand strips the "@botname" suffix Telegram appends to
+// commands sent in group chats (e.g. "/menu@my_bot" -> "/menu").
+func normalizeCommand(cmd string) string {
+	if i := strings.IndexByte(cmd, '@'); i > 0 {
+		return cmd[:i]
+	}
+	return cmd
 }
 
 func (b *TelegramBot) listRouters() string {
@@ -385,20 +420,35 @@ func (b *TelegramBot) listRouters() string {
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-func (b *TelegramBot) dispatchAddRouter(args []string) string {
+// cmdAddRouter registers a router and sends back a short line plus the
+// two agent-configure commands in their own copyable <pre> block. It
+// sends directly (rather than returning a string) so the command block
+// can carry HTML parse mode.
+func (b *TelegramBot) cmdAddRouter(ctx context.Context, chatID int64, args []string) {
 	if len(args) < 1 || args[0] == "" {
-		return "формат: /add_router <id> [имя]"
+		b.sendMessage(ctx, chatID, "формат: /add_router <id> [имя]")
+		return
 	}
 	id := args[0]
 	if !ValidRouterID(id) {
-		return "id роутера: латиница, цифры, _ или -, до 64 символов"
+		b.sendMessage(ctx, chatID, "id роутера: латиница, цифры, _ или -, до 64 символов")
+		return
 	}
-	name := strings.Join(args[1:], " ")
-	token, err := b.Store.AddRouter(id, name)
+	token, err := b.Store.AddRouter(id, strings.Join(args[1:], " "))
 	if err != nil {
-		return fmt.Sprintf("не добавлено: %v", err)
+		b.sendMessage(ctx, chatID, fmt.Sprintf("не добавлено: %v", err))
+		return
 	}
-	return b.agentConfigureHint(id, token)
+	b.sendConfigureHint(ctx, chatID, id, token)
+}
+
+// sendConfigureHint posts the "run this on the router" block: one line of
+// context, then the commands alone in a <pre> block so Telegram shows a
+// copy button on the block itself.
+func (b *TelegramBot) sendConfigureHint(ctx context.Context, chatID int64, id, token string) {
+	b.sendMessageHTML(ctx, chatID,
+		fmt.Sprintf("Роутер %s — выполните на нём:\n%s", id, htmlPre(b.agentConfigureLines(id, token))),
+		routerCardKB(id))
 }
 
 func (b *TelegramBot) dispatchRemoveRouter(args []string) string {
@@ -414,23 +464,54 @@ func (b *TelegramBot) dispatchRemoveRouter(args []string) string {
 // agentConfigureLines is the two-command block to run on a router to bind
 // it to this control server.
 func (b *TelegramBot) agentConfigureLines(id, token string) string {
-	url := b.ServerURL
-	if url == "" {
-		url = "https://<адрес-сервера>:8443"
-	}
 	return fmt.Sprintf("keenetic-xray agent configure %s %s %s %s\nkeenetic-xray agent enable",
-		url, id, b.Fingerprint, token)
+		b.serverURL(), id, b.Fingerprint, token)
 }
 
-// agentConfigureHint is what the bot replies with just after a router is
-// registered.
-func (b *TelegramBot) agentConfigureHint(id, token string) string {
-	return fmt.Sprintf("роутер %q добавлен.\n\nНа роутере выполните:\n%s", id, b.agentConfigureLines(id, token))
+// serverURL is what routers should dial. ServerURL (config public_url)
+// wins; otherwise it's the ListenAddr port plus, when the listen host is
+// a wildcard, the machine's outbound IP -- a placeholder if that can't be
+// determined.
+func (b *TelegramBot) serverURL() string {
+	if b.ServerURL != "" {
+		return b.ServerURL
+	}
+	host, port := "", "8443"
+	if h, p, err := net.SplitHostPort(b.ListenAddr); err == nil {
+		host, port = h, p
+	} else if strings.HasPrefix(b.ListenAddr, ":") {
+		port = strings.TrimPrefix(b.ListenAddr, ":")
+	}
+	switch host {
+	case "", "0.0.0.0", "::":
+		if ip := detectOutboundIP(); ip != "" {
+			host = ip
+		} else {
+			host = "<адрес-сервера>"
+		}
+	}
+	return "https://" + net.JoinHostPort(host, port)
+}
+
+// detectOutboundIP returns the local address the kernel would use to
+// reach the public internet. The UDP "connect" sends nothing; it only
+// forces a route lookup and a socket bind, so it works offline-ish and
+// returns "" only when there is no route at all.
+func detectOutboundIP() string {
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+	if addr, ok := conn.LocalAddr().(*net.UDPAddr); ok && addr.IP != nil {
+		return addr.IP.String()
+	}
+	return ""
 }
 
 func (b *TelegramBot) dispatchSwitch(ctx context.Context, args []string) string {
 	if len(args) != 2 {
-		return "usage: /switch <router> primary|backup"
+		return "формат: /switch <роутер> primary|backup"
 	}
 	switch args[1] {
 	case "primary":
@@ -438,23 +519,23 @@ func (b *TelegramBot) dispatchSwitch(ctx context.Context, args []string) string 
 	case "backup":
 		return b.runRouterCommand(ctx, args[:1], ActionSwitchBackup, nil)
 	default:
-		return "usage: /switch <router> primary|backup"
+		return "формат: /switch <роутер> primary|backup"
 	}
 }
 
 func (b *TelegramBot) dispatchSubSetURL(ctx context.Context, args []string) string {
 	if len(args) < 2 {
-		return "usage: /sub_seturl <router> <url>"
+		return "формат: /sub_seturl <роутер> <url>"
 	}
 	return b.runRouterCommand(ctx, args[:1], ActionSubSetURL, []string{args[1]})
 }
 
 func (b *TelegramBot) dispatchSubSetRole(ctx context.Context, args []string, action string) string {
 	if len(args) != 2 {
-		return "usage: /sub_setprimary|/sub_setbackup <router> <index>"
+		return "формат: /sub_setprimary|/sub_setbackup <роутер> <индекс>"
 	}
 	if _, err := strconv.Atoi(args[1]); err != nil {
-		return fmt.Sprintf("invalid index %q", args[1])
+		return fmt.Sprintf("неверный индекс %q", args[1])
 	}
 	return b.runRouterCommand(ctx, args[:1], action, []string{args[1]})
 }
@@ -463,24 +544,24 @@ func (b *TelegramBot) dispatchSubSetRole(ctx context.Context, args []string, act
 // waits up to resultTimeout for that router to answer.
 func (b *TelegramBot) runRouterCommand(ctx context.Context, args []string, action string, cmdArgs []string) string {
 	if len(args) < 1 || args[0] == "" {
-		return "usage: missing router ID"
+		return "формат: не указан id роутера"
 	}
 	routerID := args[0]
 	if !b.Store.HasRouter(routerID) {
-		return fmt.Sprintf("unknown router %q; send /routers to list registered routers", routerID)
+		return fmt.Sprintf("нет такого роутера %q. Список: /routers", routerID)
 	}
 
 	id, err := b.Store.Enqueue(routerID, action, cmdArgs)
 	if err != nil {
-		return fmt.Sprintf("failed to queue command: %v", err)
+		return fmt.Sprintf("не удалось поставить команду в очередь: %v", err)
 	}
 
 	result, ok := b.Store.AwaitResult(ctx, routerID, id, b.resultTimeout())
 	if !ok {
-		return fmt.Sprintf("command queued (id %s) but %s hasn't answered yet -- it will run on its next poll", id, routerID)
+		return fmt.Sprintf("команда в очереди (id %s), но %s ещё не ответил — выполнится при следующем poll", id, routerID)
 	}
 	if result.Err != "" {
-		return fmt.Sprintf("%s: error: %s", routerID, result.Err)
+		return fmt.Sprintf("%s: ошибка: %s", routerID, result.Err)
 	}
 	return fmt.Sprintf("%s: %s", routerID, result.Output)
 }

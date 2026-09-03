@@ -30,6 +30,7 @@ type sentMessage struct {
 	MessageID int
 	Text      string
 	Buttons   []string // flattened callback_data of the inline keyboard, if any
+	ParseMode string
 }
 
 func flattenKB(markup *inlineKeyboard) []string {
@@ -71,13 +72,14 @@ func newFakeTelegram(t *testing.T) (*httptest.Server, *fakeTelegram) {
 			var body struct {
 				ChatID      int64           `json:"chat_id"`
 				Text        string          `json:"text"`
+				ParseMode   string          `json:"parse_mode"`
 				ReplyMarkup *inlineKeyboard `json:"reply_markup"`
 			}
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			f.mu.Lock()
 			f.nextMsg++
 			id := f.nextMsg
-			f.sent = append(f.sent, sentMessage{ChatID: body.ChatID, MessageID: id, Text: body.Text, Buttons: flattenKB(body.ReplyMarkup)})
+			f.sent = append(f.sent, sentMessage{ChatID: body.ChatID, MessageID: id, Text: body.Text, Buttons: flattenKB(body.ReplyMarkup), ParseMode: body.ParseMode})
 			f.mu.Unlock()
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{"message_id": id}})
 		case strings.HasSuffix(r.URL.Path, "/editMessageText"):
@@ -262,6 +264,70 @@ func TestTelegramBot_Help(t *testing.T) {
 	}
 }
 
+func TestTelegramBot_MenuCommandWithBotSuffix(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: newBotStore(t), APIBase: srv.URL}
+	runBotInBackground(t, bot)
+
+	// Telegram appends @botname to commands in group chats.
+	fake.push(1, "/menu@keenetic_bot")
+	fake.waitForReply(t, 3*time.Second)
+	if !fake.lastSent(t).hasButton("routers") {
+		t.Errorf("/menu@bot did not open the menu: %v", fake.lastSent(t))
+	}
+}
+
+func TestTelegramBot_RoutersCommandWithBotSuffix(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: newBotStore(t), APIBase: srv.URL}
+	runBotInBackground(t, bot)
+
+	fake.push(1, "/routers@keenetic_bot")
+	if reply := fake.waitForReply(t, 3*time.Second); !strings.Contains(reply, "/add_router") {
+		t.Errorf("/routers@bot = %q", reply)
+	}
+}
+
+func TestHTMLPre(t *testing.T) {
+	if got := htmlPre("cmd <адрес> & x"); got != "<pre>cmd &lt;адрес&gt; &amp; x</pre>" {
+		t.Errorf("htmlPre = %q", got)
+	}
+}
+
+func TestBot_ServerURL(t *testing.T) {
+	// public_url wins outright.
+	b := &TelegramBot{ServerURL: "https://vps.example.com:8443", ListenAddr: ":9999"}
+	if got := b.serverURL(); got != "https://vps.example.com:8443" {
+		t.Errorf("serverURL() = %q, want the configured public_url", got)
+	}
+
+	// No public_url: port comes from ListenAddr, host is the detected
+	// outbound IP (or the placeholder if there's no route).
+	b = &TelegramBot{ListenAddr: ":9000"}
+	got := b.serverURL()
+	if !strings.HasPrefix(got, "https://") || !strings.HasSuffix(got, ":9000") {
+		t.Errorf("serverURL() = %q, want https://<host>:9000", got)
+	}
+
+	// An explicit listen host is used as-is.
+	b = &TelegramBot{ListenAddr: "10.0.0.5:8443"}
+	if got := b.serverURL(); got != "https://10.0.0.5:8443" {
+		t.Errorf("serverURL() = %q, want https://10.0.0.5:8443", got)
+	}
+}
+
+func TestTelegramBot_UnknownCommandIsRussian(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: newBotStore(t), APIBase: srv.URL}
+	runBotInBackground(t, bot)
+
+	fake.push(1, "/nope")
+	reply := fake.waitForReply(t, 3*time.Second)
+	if !strings.Contains(reply, "неизвестная команда") || !strings.Contains(reply, "/menu") {
+		t.Errorf("unknown-command reply = %q", reply)
+	}
+}
+
 func TestTelegramBot_AddRouterReturnsConfigureLine(t *testing.T) {
 	srv, fake := newFakeTelegram(t)
 	store := newBotStore(t)
@@ -285,6 +351,14 @@ func TestTelegramBot_AddRouterReturnsConfigureLine(t *testing.T) {
 	want := "keenetic-xray agent configure https://vps.example.com:8443 home deadbeef " + tok
 	if !strings.Contains(reply, want) {
 		t.Errorf("reply = %q\nwant it to contain %q", reply, want)
+	}
+	// The command must be a separately-copyable <pre> block (HTML mode).
+	msg := fake.lastSent(t)
+	if msg.ParseMode != "HTML" {
+		t.Errorf("parse_mode = %q, want HTML", msg.ParseMode)
+	}
+	if !strings.Contains(msg.Text, "<pre>") || !strings.Contains(msg.Text, "</pre>") {
+		t.Errorf("reply not wrapped in <pre>: %q", msg.Text)
 	}
 }
 
@@ -361,7 +435,7 @@ func TestTelegramBot_UnknownRouterRejected(t *testing.T) {
 
 	fake.push(1, "/status router-99")
 	reply := fake.waitForReply(t, 3*time.Second)
-	if !strings.Contains(reply, "unknown router") {
+	if !strings.Contains(reply, "нет такого роутера") {
 		t.Errorf("reply = %q, want an unknown-router message", reply)
 	}
 }
@@ -418,7 +492,7 @@ func TestTelegramBot_TimesOutWhenRouterNeverAnswers(t *testing.T) {
 
 	fake.push(1, "/status router-1")
 	reply := fake.waitForReply(t, 3*time.Second)
-	if !strings.Contains(reply, "hasn't answered yet") {
+	if !strings.Contains(reply, "ещё не ответил") {
 		t.Errorf("reply = %q, want a not-answered-yet message", reply)
 	}
 }
@@ -469,7 +543,7 @@ func TestTelegramBot_SwitchInvalidRoleRejectedWithoutEnqueue(t *testing.T) {
 
 	fake.push(1, "/switch router-1 sideways")
 	reply := fake.waitForReply(t, 3*time.Second)
-	if !strings.Contains(reply, "usage") {
+	if !strings.Contains(reply, "формат") {
 		t.Errorf("reply = %q, want a usage message", reply)
 	}
 	if n := store.PendingCount("router-1"); n != 0 {

@@ -84,6 +84,7 @@ func run(args []string) error {
 		Store:        store,
 		Fingerprint:  fingerprint,
 		ServerURL:    cfg.PublicURL,
+		ListenAddr:   cfg.ListenAddr,
 		Logger:       logger,
 	}
 

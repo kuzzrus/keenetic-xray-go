@@ -146,7 +146,9 @@ func (b *TelegramBot) handleCallback(ctx context.Context, cb tgCallbackQuery) {
 			b.editCB(ctx, cb, "нет такого роутера: "+id, b.routersListKB())
 			return
 		}
-		b.editCB(ctx, cb, "Установка агента для "+id+":\n\n"+b.agentConfigureLines(id, tok), routerCardKB(id))
+		// Leave the card in place; send the commands as their own
+		// message so the <pre> block is separately copyable.
+		b.sendConfigureHint(ctx, cb.Message.Chat.ID, id, tok)
 	case strings.HasPrefix(data, "del:"):
 		id := strings.TrimPrefix(data, "del:")
 		b.editCB(ctx, cb, "Удалить роутер "+id+" из реестра?\nАгент на самом роутере не трогается.", deleteConfirmKB(id))

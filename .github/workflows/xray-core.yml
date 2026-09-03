@@ -120,6 +120,21 @@ jobs:
 
           ls -l "$base" "${base}.xz" "${base}.sha256" "${base}.provenance.txt"
 
+      - name: Smoke test under QEMU
+        env:
+          VER: ${{ inputs.xray_version }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -eu
+          sudo apt-get install -y -qq qemu-user-static
+          case "$GOARCH" in
+            arm64)  Q=qemu-aarch64-static ;;
+            mipsle) Q=qemu-mipsel-static ;;
+          esac
+          cd "$RUNNER_TEMP"
+          echo "== unpacked =="; "$Q" ./xray version
+          echo "== packed ==";   "$Q" "./xray-${VER}-linux-${GOARCH}" version
+
       - name: Upload to xray-core/${{ inputs.xray_version }}
         env:
           GH_TOKEN: ${{ github.token }}

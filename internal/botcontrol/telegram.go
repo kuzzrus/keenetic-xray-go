@@ -350,7 +350,6 @@ func (b *TelegramBot) setMyCommands(ctx context.Context) error {
 		{"command": "menu", "description": "меню управления"},
 		{"command": "routers", "description": "список роутеров"},
 		{"command": "add_router", "description": "добавить роутер"},
-		{"command": "setup", "description": "пошаговая настройка роутера"},
 		{"command": "help", "description": "справка"},
 	}}
 	_, err := b.apiPost(ctx, "setMyCommands", payload)
@@ -373,9 +372,6 @@ func (b *TelegramBot) handleMessage(ctx context.Context, msg tgMessage) {
 		case "/add_router":
 			b.cmdAddRouter(ctx, msg.Chat.ID, fields[1:])
 			return
-		case "/setup":
-			b.cmdSetupStart(ctx, msg.Chat.ID, fields[1:])
-			return
 		}
 	}
 	if reply := b.dispatch(ctx, text); reply != "" {
@@ -388,7 +384,6 @@ const helpText = `/menu — меню с кнопками (проще всего)
 /add_router <id> [имя] — зарегистрировать роутер, получить строку agent configure
 /remove_router <id> — убрать роутер из реестра
 /rename <id> <имя> — переименовать роутер
-/setup <router> — пошаговая настройка: источник → выбор primary/backup
 /status — обзор всех роутеров (онлайн/оффлайн, очередь)
 
 Дальше первым аргументом идёт id роутера:
@@ -685,20 +680,33 @@ func (b *TelegramBot) enqueueAndWait(ctx context.Context, routerID, action strin
 	return result.Output, true, result.Err
 }
 
-// parseProfileList turns profileList() output ("0: remark -- addr:port
-// [primary]\n1: ...") into the remark per profile index.
-func parseProfileList(s string) []string {
-	var out []string
+// profileRow is one line of profileList() output, parsed.
+type profileRow struct {
+	remark  string
+	primary bool
+	backup  bool
+}
+
+// parseProfileRows turns profileList() output ("0: remark -- addr:port
+// [primary]\n1: ...") into a row per profile index, keeping the role
+// markers so the 📋 Профили screen can show current state.
+func parseProfileRows(s string) []profileRow {
+	var out []profileRow
 	for _, line := range strings.Split(strings.TrimSpace(s), "\n") {
 		i := strings.Index(line, ": ")
 		if i < 0 {
 			continue
 		}
 		rest := line[i+2:]
+		row := profileRow{
+			primary: strings.Contains(rest, "[primary]"),
+			backup:  strings.Contains(rest, "[backup]"),
+		}
 		if j := strings.Index(rest, " -- "); j >= 0 {
 			rest = rest[:j]
 		}
-		out = append(out, strings.TrimSpace(rest))
+		row.remark = strings.TrimSpace(rest)
+		out = append(out, row)
 	}
 	return out
 }

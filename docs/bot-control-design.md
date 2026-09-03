@@ -135,27 +135,32 @@ exists.
 
 `/menu` (also `/start`) opens a button UI: main menu -> router list ->
 per-router card. `setMyCommands` registers `/menu /routers /add_router
-/setup /help` so Telegram shows them in its command list.
+/help` so Telegram shows them in its command list.
 
-A card's buttons (`📊 Статус`, `🩺 Doctor`, `⬆️ primary`, `⬇️ backup`,
-`📋 Профили`, `⚙️ Настроить`, `🔄 Подписка`, `📄 Список`, `🌐 Proxy0
-вкл/выкл`, `♻️ Рестарт демона`) enqueue the matching command, edit the
-same message to `⏳ команда в очереди…`, then a goroutine waits up to
-`ResultTimeout` (default 20s) and edits it again with the result (or a
-"not answered, will run on its next poll" note). `📦 Установка агента`
+Most card buttons (`📊 Статус`, `🩺 Doctor`, `⬆️ primary`, `⬇️ backup`,
+`🔄 Обновить подписку`, `🌐 Proxy0 вкл/выкл`, `♻️ Рестарт демона`) enqueue
+the matching command, edit the message to `⏳ команда в очереди…`, then a
+goroutine waits up to `ResultTimeout` (default 20s) and edits it again
+with the result (or a "not answered" note). `📦 Установка агента`
 re-shows the `agent configure` line; `🗑 Удалить роутер` asks for
 confirmation before `RemoveRouter`. Callback data is a short `kind:arg`
 string routed by `handleCallback`.
 
+`📋 Профили` opens an interactive screen: one row per profile with
+`⬆️ N основным` / `⬇️ N резервным` buttons (`pfp:` / `pfb:` callbacks ->
+`sub_setprimary` / `sub_setbackup`), the body text showing current role
+markers. It re-renders after each tap.
+
 `➕ Добавить роутер` starts a two-step text dialog (`telegram_wizard.go`):
-id, then display name. `⚙️ Настроить` (or `/setup <router>`) starts a
-longer one: paste a `vless://` link or subscription URL, then -- for a
-subscription -- pick primary and backup by number from the fetched list.
-Each step drives the router through the existing `setup_link` /
-`sub_seturl` / `sub_refresh` / `profile_list` / `sub_setprimary` /
-`sub_setbackup` actions. `✏️ Переименовать` (or `/rename <id> <name>`) is
-a one-step dialog over `Store.RenameRouter`. State is per-chat; any
-`/command` other than `/cancel` aborts it and still runs.
+id, then display name. `🔗 Ссылка` (`src:`) is a one-step dialog: paste a
+subscription URL -> `sub_seturl` + `sub_refresh`. `✏️ Переименовать` (or
+`/rename <id> <name>`) is one step over `Store.RenameRouter`. State is
+per-chat; any `/command` other than `/cancel` aborts it and still runs.
+
+There is deliberately no "paste one vless:// link" flow -- a single link
+would fill both the primary and backup slot with the same server (no
+failover). Point the bot at a subscription, or use `keenetic-xray setup`
+on the router.
 
 The router list and every list button carry a status dot -- 🟢 polled
 within `DefaultOfflineThreshold`, 🔴 silent longer, ⚪ never connected
@@ -171,7 +176,6 @@ ones are text-only:
 ```
 /add_router <id> [name]    register a router; the bot replies with its agent configure commands in a copyable <pre> block
 /remove_router <id>        unregister a router (the agent on the router is left alone)
-/setup <router>            step-by-step: paste a source, then pick primary/backup
 /rename <id> <name>        change a router's display name
 /routers                   list registered routers with a status dot
 /status                    overview of all routers (dot, last poll, queue depth)
@@ -184,12 +188,20 @@ ones are text-only:
 /sub_list <router>
 /sub_setprimary <router> <index>
 /sub_setbackup <router> <index>
-/proxy0 <router> [show|on|off]   point Keenetic's Proxy0 at the local inbound (on/off also rebind xray)
+/proxy0 <router> [show|on|off]   point Keenetic's Proxy0 at the local inbound
 /restart <router>               restart the failover daemon (detached; the replacement emits daemon_start)
 /ensure_core <router>           (re)install the xray-core binary -- vendored build, opkg fallback
 ```
 
 `proxy0 on`/`off` and `restart` are also router-card buttons.
+
+`sub_refresh`, `sub_setprimary`, `sub_setbackup` and `proxy0 on`/`off`
+call `RouterHandler.rebindXray` after saving: it re-forces the current
+live role, so the daemon regenerates `xray-production.json` and restarts
+the supervised xray process -- picking up the new profile/link/bind
+**without a full daemon restart and without touching the Proxy0
+interface**. It no-ops if the daemon is still idling (no primary/backup
+yet); that case still needs `♻️ Рестарт демона`.
 
 A text command enqueues and then blocks up to `ResultTimeout` for the
 router to answer before replying (an online router, default poll interval

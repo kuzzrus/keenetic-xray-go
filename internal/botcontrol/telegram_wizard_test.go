@@ -2,30 +2,52 @@ package botcontrol
 
 import (
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
-func TestParseProfileList(t *testing.T) {
-	in := "0: alpha -- a.example.com:443 [primary]\n1: beta -- b.example.com:443 [backup]\n2: gamma -- c:80"
-	got := parseProfileList(in)
-	want := []string{"alpha", "beta", "gamma"}
-	if len(got) != len(want) {
-		t.Fatalf("parseProfileList = %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("[%d] = %q, want %q", i, got[i], want[i])
-		}
-	}
-	if parseProfileList("no profiles configured") != nil {
-		t.Error("a non-list string should parse to nil")
-	}
+// recorder is a concurrency-safe list of the actions a fakeAgent saw.
+type recorder struct {
+	mu   sync.Mutex
+	seen []string
 }
 
-func TestNumberedProfiles(t *testing.T) {
-	if got := numberedProfiles([]string{"a", "b"}); got != "0: a\n1: b" {
-		t.Errorf("numberedProfiles = %q", got)
+func (r *recorder) add(a string) {
+	r.mu.Lock()
+	r.seen = append(r.seen, a)
+	r.mu.Unlock()
+}
+
+func (r *recorder) has(a string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return contains(r.seen, a)
+}
+
+func (r *recorder) list() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.seen...)
+}
+
+func TestParseProfileRows(t *testing.T) {
+	in := "0: alpha -- a.example.com:443 [primary]\n1: beta -- b.example.com:443 [backup]\n2: gamma -- c:80"
+	got := parseProfileRows(in)
+	if len(got) != 3 {
+		t.Fatalf("parseProfileRows returned %d rows: %+v", len(got), got)
+	}
+	if got[0].remark != "alpha" || !got[0].primary || got[0].backup {
+		t.Errorf("row 0 = %+v", got[0])
+	}
+	if got[1].remark != "beta" || got[1].primary || !got[1].backup {
+		t.Errorf("row 1 = %+v", got[1])
+	}
+	if got[2].remark != "gamma" || got[2].primary || got[2].backup {
+		t.Errorf("row 2 = %+v", got[2])
+	}
+	if parseProfileRows("no profiles configured") != nil {
+		t.Error("a non-list string should parse to nil")
 	}
 }
 
@@ -82,68 +104,100 @@ func fakeAgent(t *testing.T, store *Store, routerID string, reply func(action st
 	}()
 }
 
-func TestTelegramBot_SetupWizard_UnknownRouter(t *testing.T) {
+func TestTelegramBot_SourceWizard_UnknownRouter(t *testing.T) {
 	srv, fake := newFakeTelegram(t)
-	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: newBotStore(t), APIBase: srv.URL}
+	store := newBotStore(t)
+	mustRegister(t, store, "r1")
+	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL}
 	runBotInBackground(t, bot)
 
-	fake.push(1, "/setup nope")
-	if reply := fake.waitForReply(t, 3*time.Second); !strings.Contains(reply, "нет такого роутера") {
-		t.Errorf("reply = %q", reply)
+	// Open the router card, then tap 🔗 Ссылка for a router that isn't there.
+	fake.push(1, "/menu")
+	fake.waitForReply(t, 3*time.Second)
+	msgID := fake.lastSent(t).MessageID
+	fake.pushCallback(1, msgID, "src:nope")
+	if reply := waitSent(t, fake, 3*time.Second, "нет такого роутера"); reply == "" {
+		t.Error("expected an unknown-router reply")
 	}
 }
 
-func TestTelegramBot_SetupWizard_VlessLink(t *testing.T) {
+func TestTelegramBot_SourceWizard_SetsAndRefreshes(t *testing.T) {
 	srv, fake := newFakeTelegram(t)
 	store := newBotStore(t)
 	mustRegister(t, store, "r1")
 	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL, ResultTimeout: 2 * time.Second}
 	runBotInBackground(t, bot)
+
+	rec := &recorder{}
 	fakeAgent(t, store, "r1", func(action string) string {
-		if action == ActionSetupLink {
-			return "готово: My Node"
+		rec.add(action)
+		if action == ActionSubRefresh {
+			return "refreshed: 3 profiles"
 		}
 		return "ok"
 	})
 
-	fake.push(1, "/setup r1")
-	waitSent(t, fake, 3*time.Second, "Вставьте vless")
+	fake.push(1, "/menu")
+	fake.waitForReply(t, 3*time.Second)
+	msgID := fake.lastSent(t).MessageID
+	fake.pushCallback(1, msgID, "src:r1")
+	waitSent(t, fake, 3*time.Second, "URL подписки")
 
-	fake.push(1, "vless://11111111-2222-3333-4444-555555555555@host.example:443?type=tcp&security=none#My%20Node")
-	got := waitSent(t, fake, 3*time.Second, "готово")
-	if !strings.Contains(got, "My Node") {
-		t.Errorf("final message = %q", got)
-	}
-}
-
-func TestTelegramBot_SetupWizard_Subscription(t *testing.T) {
-	srv, fake := newFakeTelegram(t)
-	store := newBotStore(t)
-	mustRegister(t, store, "r1")
-	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL, ResultTimeout: 2 * time.Second}
-	runBotInBackground(t, bot)
-	fakeAgent(t, store, "r1", func(action string) string {
-		if action == ActionProfileList {
-			return "0: alpha -- a.example.com:443\n1: beta -- b.example.com:443"
-		}
-		return "ok"
-	})
-
-	fake.push(1, "/setup r1")
-	waitSent(t, fake, 3*time.Second, "Вставьте vless")
+	// A non-URL is rejected without ending the dialog.
+	fake.push(1, "not a url")
+	waitSent(t, fake, 3*time.Second, "нужен URL")
 
 	fake.push(1, "https://provider.example/sub/token")
-	primaryPrompt := waitSent(t, fake, 4*time.Second, "Номер PRIMARY")
-	if !strings.Contains(primaryPrompt, "alpha") || !strings.Contains(primaryPrompt, "beta") {
-		t.Errorf("PRIMARY prompt missing the profile list: %q", primaryPrompt)
+	got := waitSent(t, fake, 4*time.Second, "refreshed: 3 profiles")
+	if !strings.Contains(got, "Профили") {
+		t.Errorf("final message should point at 📋 Профили: %q", got)
+	}
+	if !rec.has(ActionSubSetURL) || !rec.has(ActionSubRefresh) {
+		t.Errorf("router did not receive seturl+refresh, saw %v", rec.list())
+	}
+}
+
+func TestTelegramBot_ProfilesScreen_ShowsRolesAndSets(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	mustRegister(t, store, "r1")
+	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL, ResultTimeout: 2 * time.Second}
+	runBotInBackground(t, bot)
+
+	rec := &recorder{}
+	fakeAgent(t, store, "r1", func(action string) string {
+		rec.add(action)
+		if action == ActionProfileList {
+			return "0: alpha -- a:443 [primary] [backup]\n1: beta -- b:443"
+		}
+		return "ok"
+	})
+
+	fake.push(1, "/menu")
+	fake.waitForReply(t, 3*time.Second)
+	msgID := fake.lastSent(t).MessageID
+
+	fake.pushCallback(1, msgID, "pf:r1")
+	screen := fake.waitForEditContaining(t, 4*time.Second, "1: beta")
+	if !strings.Contains(screen, "0: alpha ⬆️осн ⬇️рез") {
+		t.Errorf("profiles screen = %q", screen)
 	}
 
-	fake.push(1, "0")
-	waitSent(t, fake, 3*time.Second, "Номер BACKUP")
-
-	fake.push(1, "1")
-	got := waitSent(t, fake, 3*time.Second, "настроено")
-	if !strings.Contains(got, "primary=alpha") || !strings.Contains(got, "backup=beta") {
-		t.Errorf("final message = %q", got)
+	fake.pushCallback(1, msgID, "pfp:r1:1") // make profile 1 primary
+	deadline := time.Now().Add(4 * time.Second)
+	for !rec.has(ActionSubSetPrimary) {
+		if time.Now().After(deadline) {
+			t.Fatalf("pfp button did not enqueue sub_setprimary, saw %v", rec.list())
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
+}
+
+func contains(xs []string, want string) bool {
+	for _, x := range xs {
+		if x == want {
+			return true
+		}
+	}
+	return false
 }

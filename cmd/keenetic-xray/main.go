@@ -37,6 +37,8 @@ func run(args []string) error {
 		return nil
 	case "setup":
 		return cmdSetup(rest)
+	case "menu":
+		return cmdMenu(rest)
 	case "daemon":
 		return cmdDaemon(rest)
 	case "profile":
@@ -74,6 +76,7 @@ func printUsage() {
 commands:
   version                                          print version and exit
   setup                                             interactive first-run configuration menu
+  menu                                              interactive control panel (manage the router over SSH, no bot)
   daemon                                            run the failover daemon in the foreground
   profile {add <vless-uri>|list|remove <index>}
   subscription {set-url <url>|refresh|list|set-primary <i>|set-backup <i>}

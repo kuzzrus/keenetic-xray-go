@@ -88,6 +88,7 @@ installed:
 
 ```sh
 keenetic-xray setup     # paste a vless:// link or a subscription URL
+keenetic-xray menu      # interactive control panel (manage the router over SSH)
 keenetic-xray daemon    # run the failover daemon in the foreground
 ```
 
@@ -99,6 +100,7 @@ keenetic-xray daemon    # run the failover daemon in the foreground
 ```
 keenetic-xray version
 keenetic-xray setup [--from <link|url>] [--primary <sel>] [--backup <sel>] [--proxy0|--no-proxy0] [--yes]
+keenetic-xray menu
 keenetic-xray daemon
 keenetic-xray profile {add <vless-uri>|list|remove <index>}
 keenetic-xray subscription {set-url <url>|refresh|list|set-primary <i>|set-backup <i>}
@@ -114,6 +116,12 @@ daemon to bind `0.0.0.0` (so `Proxy0` can reach it) instead of loopback;
 the daemon re-asserts it on every start. `setup` offers this
 interactively. Then assign devices or policies to `Proxy0` in the
 Keenetic UI.
+
+`menu` is a numbered control panel for running the router from an SSH
+session without the Telegram bot: status, `doctor`, profile list,
+refresh the subscription, re-run `setup` to change the source, toggle
+`Proxy0`, restart the daemon, tail the logs. Every item is also a
+subcommand above -- the menu is just the discoverable front door.
 
 `status`/`doctor` currently report saved configuration only (`config.json`),
 not live daemon state -- there's no CLI↔daemon IPC layer yet. `agent enable`

@@ -99,6 +99,8 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 		return h.daemonRestart()
 	case ActionEnsureCore:
 		return h.ensureCore(ctx)
+	case ActionSetupLink:
+		return h.setupLink(cmd.Args)
 	default:
 		return "", fmt.Errorf("unknown action %q", cmd.Action)
 	}
@@ -426,6 +428,26 @@ func (h *RouterHandler) profileList() string {
 		fmt.Fprintf(&b, "%d: %s -- %s:%d%s\n", i, p.Remark, p.Address, p.Port, marker)
 	}
 	return b.String()
+}
+
+// setupLink makes a pasted raw vless:// URI the router's sole profile
+// (primary == backup), clearing any subscription. The multi-profile
+// case goes through sub_seturl + sub_refresh instead.
+func (h *RouterHandler) setupLink(args []string) (string, error) {
+	if len(args) != 1 {
+		return "", fmt.Errorf("usage: setup_link <vless-uri>")
+	}
+	p, err := config.ParseVLESSURI(args[0])
+	if err != nil {
+		return "", fmt.Errorf("разбор vless: %w", err)
+	}
+	h.Config.Profiles = []config.Profile{p}
+	h.Config.PrimaryIndex, h.Config.BackupIndex = 0, 0
+	h.Config.Subscription = nil
+	if err := h.Config.Save(h.ConfigPath); err != nil {
+		return "", err
+	}
+	return "готово: " + p.Remark, nil
 }
 
 func (h *RouterHandler) subSetURL(args []string) (string, error) {

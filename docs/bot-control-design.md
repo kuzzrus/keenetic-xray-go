@@ -135,19 +135,25 @@ exists.
 
 `/menu` (also `/start`) opens a button UI: main menu -> router list ->
 per-router card. `setMyCommands` registers `/menu /routers /add_router
-/help` so Telegram shows them in its command list.
+/setup /help` so Telegram shows them in its command list.
 
 A card's buttons (`📊 Статус`, `🩺 Doctor`, `⬆️ primary`, `⬇️ backup`,
-`📋 Профили`, `🔄 Подписка`, `📄 Список`) enqueue the matching command,
-edit the same message to `⏳ команда в очереди…`, then a goroutine waits
-up to `ResultTimeout` (default 20s) and edits it again with the result
-(or a "not answered, will run on its next poll" note). `📦 Установка агента`
+`📋 Профили`, `⚙️ Настроить`, `🔄 Подписка`, `📄 Список`, `🌐 Proxy0
+вкл/выкл`, `♻️ Рестарт демона`) enqueue the matching command, edit the
+same message to `⏳ команда в очереди…`, then a goroutine waits up to
+`ResultTimeout` (default 20s) and edits it again with the result (or a
+"not answered, will run on its next poll" note). `📦 Установка агента`
 re-shows the `agent configure` line; `🗑 Удалить роутер` asks for
 confirmation before `RemoveRouter`. Callback data is a short `kind:arg`
 string routed by `handleCallback`.
 
 `➕ Добавить роутер` starts a two-step text dialog (`telegram_wizard.go`):
-id, then display name. State is per-chat; any `/command` other than
+id, then display name. `⚙️ Настроить` (or `/setup <router>`) starts a
+longer one: paste a `vless://` link or subscription URL, then -- for a
+subscription -- pick primary and backup by number from the fetched list.
+Each step drives the router through the existing `setup_link` /
+`sub_seturl` / `sub_refresh` / `profile_list` / `sub_setprimary` /
+`sub_setbackup` actions. State is per-chat; any `/command` other than
 `/cancel` aborts it and still runs.
 
 ### Text commands
@@ -158,6 +164,7 @@ ones are text-only:
 ```
 /add_router <id> [name]    register a router; the bot replies with its agent configure commands in a copyable <pre> block
 /remove_router <id>        unregister a router (the agent on the router is left alone)
+/setup <router>            step-by-step: paste a source, then pick primary/backup
 /routers                   list registered routers
 /status <router>           rich snapshot: failover state + live profile, uptime, last switch, listening ports, proxy0, subscription age
 /doctor <router>           pass/fail health checks (profiles, config, xray-core runnable, proxy0 upstream, free disk)

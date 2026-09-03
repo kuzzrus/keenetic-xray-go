@@ -46,7 +46,7 @@ func routerCardKB(id string) inlineKeyboard {
 	return inlineKeyboard{InlineKeyboard: [][]inlineButton{
 		{{Text: "📊 Статус", CallbackData: "act:status:" + id}, {Text: "🩺 Doctor", CallbackData: "act:doctor:" + id}},
 		{{Text: "⬆️ primary", CallbackData: "act:sw_pri:" + id}, {Text: "⬇️ backup", CallbackData: "act:sw_bak:" + id}},
-		{{Text: "📋 Профили", CallbackData: "act:profiles:" + id}},
+		{{Text: "📋 Профили", CallbackData: "act:profiles:" + id}, {Text: "⚙️ Настроить", CallbackData: "setup:" + id}},
 		{{Text: "🔄 Подписка", CallbackData: "act:sub_refresh:" + id}, {Text: "📄 Список", CallbackData: "act:sub_list:" + id}},
 		{{Text: "🌐 Proxy0 вкл", CallbackData: "act:p0_on:" + id}, {Text: "🌐 Proxy0 выкл", CallbackData: "act:p0_off:" + id}},
 		{{Text: "♻️ Рестарт демона", CallbackData: "act:restart:" + id}},
@@ -146,6 +146,8 @@ func (b *TelegramBot) handleCallback(ctx context.Context, cb tgCallbackQuery) {
 		b.editCB(ctx, cb, b.listRouters(), b.routersListKB())
 	case data == "add":
 		b.startAddRouterWizard(ctx, cb.Message.Chat.ID)
+	case strings.HasPrefix(data, "setup:"):
+		b.startSetupWizard(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "setup:"))
 	case strings.HasPrefix(data, "router:"):
 		id := strings.TrimPrefix(data, "router:")
 		b.editCB(ctx, cb, b.routerCardText(id), routerCardKB(id))

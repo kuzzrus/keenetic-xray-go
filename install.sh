@@ -9,10 +9,22 @@
 #
 # Usage (on the router):
 #   wget -qO- https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/install.sh | sh
+#
+# Options:
+#   --xray-core=vendored   force this project's size-optimised xray-core build
+#   --xray-core=entware    force `opkg install xray-core` instead
+#   (default: try vendored, fall back to Entware)
 set -eu
 
 REPO="kuzzrus/keenetic-xray-go"
 TMP_IPK="/opt/keenetic-xray-install.ipk"
+
+for arg in "$@"; do
+    case "$arg" in
+        --xray-core=*) export KEENETIC_XRAY_CORE="${arg#--xray-core=}" ;;
+        *) echo "keenetic-xray: unknown option: $arg" >&2; exit 2 ;;
+    esac
+done
 
 # fetch <url> [output-file] -- prints to stdout if no output file is
 # given. Prefers curl over wget: confirmed on real hardware that some

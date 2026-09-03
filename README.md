@@ -17,8 +17,12 @@ fits together, `docs/full-vs-mini.md` for the Mini/Full variant split, and
   ICMP), with an isolated pre-test before failing back to primary.
 - Accepts either a raw `vless://` link or a subscription URL, both from
   the CLI (`keenetic-xray setup`) and the remote bot.
-- Installs the Xray core from Entware's own `opkg` feed as a package
-  dependency (`Depends: xray-core` in the `.ipk` control file); ships no
+- Installs the Xray core itself: by default a size-optimised (UPX-packed,
+  ~7–10 MB vs ~30 MB unpacked) build published from this project's own
+  releases and pinned to an upstream tag (see `packaging/xray-core/`),
+  with `opkg install xray-core` from the Entware feed as the fallback.
+  `install.sh --xray-core=entware` forces the feed;
+  `keenetic-xray doctor` reports which core is active. Ships no
   geoip/geosite routing data — whole-LAN redirection through the local
   proxy port is handled by Keenetic's own Policy-Based Routing, not by
   this project.
@@ -62,8 +66,9 @@ opkg install /opt/keenetic-xray.ipk
 page once newer versions ship — `install.sh` above does this for you
 automatically.)
 
-Either way, `opkg` installs the `xray-core` dependency from the Entware feed
-automatically before running this package's postinst. Once installed:
+Either way, the package's postinst fetches the Xray core (vendored build
+by default, Entware feed as fallback — see the bullet above). Once
+installed:
 
 ```sh
 keenetic-xray setup     # paste a vless:// link or a subscription URL

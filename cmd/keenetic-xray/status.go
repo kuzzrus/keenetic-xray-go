@@ -2,10 +2,26 @@ package main
 
 import (
 	"fmt"
+	"os/exec"
+	"strings"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 	"github.com/kuzzrus/keenetic-xray-go/internal/diskspace"
 )
+
+// xrayCoreVersion runs `<xray> version` and returns its first line, e.g.
+// "Xray 26.3.27 (Xray, Penetrates Everything.) ...".
+func xrayCoreVersion() (string, error) {
+	out, err := exec.Command(xrayBinaryPath(), "version").Output()
+	if err != nil {
+		return "", err
+	}
+	first := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0]
+	if first == "" {
+		return "", fmt.Errorf("%s version printed nothing", xrayBinaryPath())
+	}
+	return first, nil
+}
 
 func cmdStatus(args []string) error {
 	cfg, err := config.Load(configPath())
@@ -28,6 +44,11 @@ func cmdStatus(args []string) error {
 		fmt.Printf("subscription: %s\n", cfg.Subscription.URL)
 	}
 	fmt.Printf("agent enabled: %v\n", cfg.Agent.Enabled)
+	if line, err := xrayCoreVersion(); err != nil {
+		fmt.Printf("xray-core: not installed (%v)\n", err)
+	} else {
+		fmt.Printf("xray-core: %s\n", line)
+	}
 	fmt.Println("note: this reports saved configuration, not live daemon state (no IPC layer yet)")
 	return nil
 }
@@ -55,6 +76,12 @@ func cmdDoctor(args []string) error {
 		check(false, fmt.Sprintf("config validates: %v", err))
 	} else {
 		check(true, "config validates")
+	}
+
+	if line, err := xrayCoreVersion(); err != nil {
+		check(false, fmt.Sprintf("xray-core runnable at %s (%v) -- run: keenetic-xray internal ensure-xray-core", xrayBinaryPath(), err))
+	} else {
+		check(true, "xray-core: "+line)
 	}
 
 	if free, err := diskspace.FreeBytes(optPath()); err != nil {

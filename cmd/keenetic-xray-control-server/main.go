@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/botcontrol"
@@ -79,6 +80,9 @@ func run(args []string) error {
 		ServerURL:    cfg.PublicURL,
 		ListenAddr:   cfg.ListenAddr,
 		Logger:       logger,
+		// The systemd .path unit installed by server-install.sh watches
+		// this file; touching it kicks off the root self-update.
+		SelfUpdatePath: filepath.Join(filepath.Dir(cfg.QueuePath), "update.request"),
 	}
 
 	// The agent pushes failover/daemon-start events to /agent/event; the

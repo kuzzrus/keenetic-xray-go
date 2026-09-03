@@ -44,7 +44,8 @@ jobs:
             packaging/build-ipk.sh \
             packaging/ipk/postinst \
             packaging/ipk/prerm \
-            packaging/init.d/S99keenetic-xray
+            packaging/init.d/S99keenetic-xray \
+            packaging/server/control-server-self-update.sh
 
   build:
     needs: test

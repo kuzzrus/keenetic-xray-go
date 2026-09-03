@@ -1,0 +1,12 @@
+[Unit]
+Description=keenetic-xray control-server self-update
+Documentation=https://github.com/kuzzrus/keenetic-xray-go/blob/main/docs/bot-control-design.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Runs as root (no User=): it swaps /usr/local/bin and restarts the
+# control-server service -- neither of which the hardened, unprivileged
+# control-server unit can do to itself.
+ExecStart=/usr/local/lib/keenetic-xray/control-server-self-update.sh

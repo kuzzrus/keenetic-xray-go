@@ -1,0 +1,15 @@
+[Unit]
+Description=Watch for a keenetic-xray control-server self-update request
+Documentation=https://github.com/kuzzrus/keenetic-xray-go/blob/main/docs/bot-control-design.md
+
+[Path]
+# The unprivileged control-server service can create this file (its unit's
+# ReadWritePaths already covers /var/lib/keenetic-xray-control-server); the
+# Telegram "Обновить сервер" button does exactly that. That fires the
+# root-owned .service below, which the hardened control-server unit cannot
+# do to itself.
+PathExists=/var/lib/keenetic-xray-control-server/update.request
+Unit=keenetic-xray-control-server-update.service
+
+[Install]
+WantedBy=multi-user.target

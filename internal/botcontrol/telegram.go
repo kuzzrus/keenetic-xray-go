@@ -42,6 +42,11 @@ type TelegramBot struct {
 	ResultTimeout time.Duration // 0 -> DefaultResultTimeout
 	Logger        *log.Logger   // nil -> log.Default()
 
+	// SelfUpdatePath, if set, is the trigger file the "Обновить сервер"
+	// button touches -- a systemd .path unit watches it and runs the
+	// root self-update. Empty -> the button reports it isn't configured.
+	SelfUpdatePath string
+
 	client     *http.Client
 	clientOnce sync.Once
 	wizardMu   sync.Mutex

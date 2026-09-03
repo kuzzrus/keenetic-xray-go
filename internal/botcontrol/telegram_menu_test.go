@@ -1,6 +1,8 @@
 package botcontrol
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,9 +17,44 @@ func TestTelegramBot_MenuCommandSendsKeyboard(t *testing.T) {
 	fake.waitForReply(t, 3*time.Second)
 
 	msg := fake.lastSent(t)
-	if !msg.hasButton("routers") || !msg.hasButton("add") || !msg.hasButton("help") {
+	if !msg.hasButton("routers") || !msg.hasButton("add") || !msg.hasButton("help") || !msg.hasButton("svup") {
 		t.Errorf("main menu buttons = %v", msg.Buttons)
 	}
+}
+
+func TestTelegramBot_ServerSelfUpdate(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	trigger := filepath.Join(t.TempDir(), "update.request")
+	bot := &TelegramBot{
+		Token: "t", AllowedChats: map[int64]bool{1: true},
+		Store: newBotStore(t), APIBase: srv.URL, SelfUpdatePath: trigger,
+	}
+	runBotInBackground(t, bot)
+
+	fake.push(1, "/menu")
+	fake.waitForReply(t, 3*time.Second)
+	msgID := fake.lastSent(t).MessageID
+
+	fake.pushCallback(1, msgID, "svup")
+	fake.waitForEditContaining(t, 3*time.Second, "перезапустится")
+	fake.pushCallback(1, msgID, "svupyes")
+	fake.waitForEditContaining(t, 3*time.Second, "обновление сервера запущено")
+
+	if _, err := os.Stat(trigger); err != nil {
+		t.Errorf("trigger file not written: %v", err)
+	}
+}
+
+func TestTelegramBot_ServerSelfUpdate_NotConfigured(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: newBotStore(t), APIBase: srv.URL}
+	runBotInBackground(t, bot)
+
+	fake.push(1, "/menu")
+	fake.waitForReply(t, 3*time.Second)
+	msgID := fake.lastSent(t).MessageID
+	fake.pushCallback(1, msgID, "svupyes")
+	fake.waitForEditContaining(t, 3*time.Second, "не настроено")
 }
 
 func TestTelegramBot_CallbackOpensRouterCardAndRunsAction(t *testing.T) {

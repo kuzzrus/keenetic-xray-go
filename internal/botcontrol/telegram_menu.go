@@ -3,6 +3,7 @@ package botcontrol
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -20,7 +21,7 @@ func mainMenuKB() inlineKeyboard {
 	return inlineKeyboard{InlineKeyboard: [][]inlineButton{
 		{{Text: "📡 Роутеры", CallbackData: "routers"}},
 		{{Text: "➕ Добавить роутер", CallbackData: "add"}},
-		{{Text: "❔ Справка", CallbackData: "help"}},
+		{{Text: "⬆️ Обновить сервер", CallbackData: "svup"}, {Text: "❔ Справка", CallbackData: "help"}},
 	}}
 }
 
@@ -69,6 +70,20 @@ func updateConfirmKB(id string) inlineKeyboard {
 		{{Text: "🔁 Да, обновить агент", CallbackData: "updyes:" + id}},
 		{{Text: "↩️ Отмена", CallbackData: "router:" + id}},
 	}}
+}
+
+// triggerServerUpdate touches the file the systemd .path unit watches.
+// The root oneshot it fires re-runs server-install.sh; the control-server
+// process is restarted out from under this one, so there's no result to
+// report back beyond "queued".
+func (b *TelegramBot) triggerServerUpdate() string {
+	if b.SelfUpdatePath == "" {
+		return "самообновление сервера не настроено (нужен server-install.sh начиная с v0.4.4)"
+	}
+	if err := os.WriteFile(b.SelfUpdatePath, []byte("update\n"), 0o644); err != nil {
+		return "не удалось запросить обновление: " + err.Error()
+	}
+	return "⬆️ обновление сервера запущено — переустановка и рестарт через несколько секунд.\nПосле него бот ответит на /menu уже новой версией."
 }
 
 func sourcesScreenText(id string) string {
@@ -169,6 +184,13 @@ func (b *TelegramBot) handleCallback(ctx context.Context, cb tgCallbackQuery) {
 		b.editCB(ctx, cb, mainMenuText(), mainMenuKB())
 	case data == "help":
 		b.editCB(ctx, cb, helpText, backKB("menu"))
+	case data == "svup":
+		b.editCB(ctx, cb, "Обновить серверную часть бота до последнего релиза?\nСервис перезапустится.", inlineKeyboard{InlineKeyboard: [][]inlineButton{
+			{{Text: "⬆️ Да, обновить", CallbackData: "svupyes"}},
+			{{Text: "↩️ Отмена", CallbackData: "menu"}},
+		}})
+	case data == "svupyes":
+		b.editCB(ctx, cb, b.triggerServerUpdate(), backKB("menu"))
 	case data == "routers":
 		b.editCB(ctx, cb, b.listRouters(), b.routersListKB())
 	case data == "add":

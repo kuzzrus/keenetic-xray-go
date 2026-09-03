@@ -166,16 +166,19 @@ func (b *TelegramBot) wizardSetSlotSource(ctx context.Context, chatID int64, st 
 		action = ActionSetPrimarySource
 	}
 	out, answered, errText := b.enqueueAndWait(ctx, st.routerID, action, args)
-	b.sendMessage(ctx, chatID, wizResult(answered, errText, "✅ "+strings.TrimSpace(out)))
+	b.sendMessage(ctx, chatID, b.stepResult(st.routerID, answered, errText, "✅ "+strings.TrimSpace(out)))
 }
 
-// wizResult picks the message for a finished enqueueAndWait step.
-func wizResult(answered bool, errText, ok string) string {
+// stepResult phrases the outcome of one enqueueAndWait wizard step. The
+// "no answer" case is split by whether the router looks online -- a
+// command queued for an offline router will run on reconnect, so
+// "попробуйте ещё раз" would be misleading.
+func (b *TelegramBot) stepResult(routerID string, answered bool, errText, ok string) string {
 	switch {
 	case !answered && errText != "":
 		return errText
 	case !answered:
-		return "роутер не ответил — попробуйте ещё раз"
+		return queuedNote(b.Store.LastPollAt(routerID))
 	case errText != "":
 		return "ошибка: " + errText
 	default:

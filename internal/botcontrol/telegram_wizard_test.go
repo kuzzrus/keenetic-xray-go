@@ -51,18 +51,29 @@ func TestParseProfileRows(t *testing.T) {
 	}
 }
 
-func TestWizResult(t *testing.T) {
-	if got := wizResult(true, "", "done"); got != "done" {
+func TestStepResult(t *testing.T) {
+	b := &TelegramBot{Store: newBotStore(t)}
+	if got := b.stepResult("r", true, "", "done"); got != "done" {
 		t.Errorf("answered/no-err = %q", got)
 	}
-	if got := wizResult(true, "boom", ""); !strings.Contains(got, "boom") {
+	if got := b.stepResult("r", true, "boom", ""); !strings.Contains(got, "boom") {
 		t.Errorf("answered/err = %q", got)
 	}
-	if got := wizResult(false, "", ""); !strings.Contains(got, "не ответил") {
-		t.Errorf("timeout = %q", got)
-	}
-	if got := wizResult(false, "queue full", ""); got != "queue full" {
+	if got := b.stepResult("r", false, "queue full", ""); got != "queue full" {
 		t.Errorf("queue error = %q", got)
+	}
+	// No answer + never polled -> the offline phrasing, not "try again".
+	if got := b.stepResult("r", false, "", ""); !strings.Contains(got, "офлайн") {
+		t.Errorf("offline no-answer = %q", got)
+	}
+}
+
+func TestQueuedNote(t *testing.T) {
+	if got := queuedNote(time.Time{}); !strings.Contains(got, "офлайн") {
+		t.Errorf("never polled: %q", got)
+	}
+	if got := queuedNote(time.Now()); strings.Contains(got, "офлайн") {
+		t.Errorf("fresh poll should not read as offline: %q", got)
 	}
 }
 

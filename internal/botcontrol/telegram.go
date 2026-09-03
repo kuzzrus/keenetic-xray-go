@@ -764,7 +764,7 @@ func (b *TelegramBot) runRouterCommand(ctx context.Context, args []string, actio
 	case errText != "" && !answered:
 		return fmt.Sprintf("%s: %s", routerID, errText)
 	case !answered:
-		return fmt.Sprintf("%s: команда в очереди, ещё не ответил — выполнится при следующем poll", routerID)
+		return fmt.Sprintf("%s: %s", routerID, queuedNote(b.Store.LastPollAt(routerID)))
 	case errText != "":
 		return fmt.Sprintf("%s: ошибка: %s", routerID, errText)
 	default:
@@ -772,14 +772,28 @@ func (b *TelegramBot) runRouterCommand(ctx context.Context, args []string, actio
 	}
 }
 
+// queuedNote phrases a "command queued, no answer yet" outcome by whether
+// the router looks online.
+func queuedNote(lastPoll time.Time) string {
+	if !routerOnline(lastPoll) {
+		return "🔴 роутер офлайн — команда в очереди, выполнится, когда он снова выйдет на связь"
+	}
+	return "команда в очереди, ещё не ответил — выполнится при следующем poll"
+}
+
 // enqueueAndWait queues one command and blocks up to resultTimeout for
 // the router to answer. answered is false on a queue error (errText set)
 // or a timeout (errText empty); on an answered command errText carries
-// Result.Err. The wizard uses this to chain steps.
+// Result.Err. If the router is plainly offline it skips the wait
+// entirely -- the command stays queued for when it reconnects. The
+// wizard uses this to chain steps.
 func (b *TelegramBot) enqueueAndWait(ctx context.Context, routerID, action string, args []string) (out string, answered bool, errText string) {
 	id, err := b.Store.Enqueue(routerID, action, args)
 	if err != nil {
 		return "", false, "не удалось поставить команду в очередь: " + err.Error()
+	}
+	if !routerOnline(b.Store.LastPollAt(routerID)) {
+		return "", false, "" // offline -- don't burn ResultTimeout waiting; command is queued
 	}
 	result, ok := b.Store.AwaitResult(ctx, routerID, id, b.resultTimeout())
 	if !ok {

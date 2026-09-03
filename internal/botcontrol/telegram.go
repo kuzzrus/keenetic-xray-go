@@ -387,7 +387,9 @@ const helpText = `/menu — меню с кнопками (проще всего)
 /routers — список роутеров
 /add_router <id> [имя] — зарегистрировать роутер, получить строку agent configure
 /remove_router <id> — убрать роутер из реестра
+/rename <id> <имя> — переименовать роутер
 /setup <router> — пошаговая настройка: источник → выбор primary/backup
+/status — обзор всех роутеров (онлайн/оффлайн, очередь)
 
 Дальше первым аргументом идёт id роутера:
 /status <router>
@@ -417,7 +419,12 @@ func (b *TelegramBot) dispatch(ctx context.Context, text string) string {
 		return b.listRouters()
 	case "/remove_router":
 		return b.dispatchRemoveRouter(args)
+	case "/rename":
+		return b.dispatchRename(args)
 	case "/status":
+		if len(args) == 0 {
+			return b.listRouters() // no router named -> overview of all
+		}
 		return b.runRouterCommand(ctx, args, ActionStatus, nil)
 	case "/doctor":
 		return b.runRouterCommand(ctx, args, ActionDoctor, nil)
@@ -483,14 +490,17 @@ func (b *TelegramBot) listRouters() string {
 	var sb strings.Builder
 	sb.WriteString("Роутеры:\n")
 	for _, r := range routers {
-		line := r.ID
+		line := routerDot(r.LastPollAt) + " " + r.ID
 		if r.Name != "" {
 			line += " (" + r.Name + ")"
 		}
-		if r.LastPollAt.IsZero() {
+		switch {
+		case r.LastPollAt.IsZero():
 			line += " — ещё не подключался"
-		} else {
-			line += " — последний poll " + r.LastPollAt.Format("2006-01-02 15:04:05")
+		case routerOnline(r.LastPollAt):
+			line += " — на связи, poll " + shortDur(time.Since(r.LastPollAt)) + " назад"
+		default:
+			line += " — молчит с " + r.LastPollAt.Format("2006-01-02 15:04")
 		}
 		if r.Pending > 0 {
 			line += fmt.Sprintf(", в очереди: %d", r.Pending)
@@ -540,6 +550,20 @@ func (b *TelegramBot) dispatchRemoveRouter(args []string) string {
 		return fmt.Sprintf("не удалено: %v", err)
 	}
 	return fmt.Sprintf("роутер %q убран из реестра. Агент на самом роутере не трогается.", args[0])
+}
+
+func (b *TelegramBot) dispatchRename(args []string) string {
+	if len(args) < 1 || args[0] == "" {
+		return "формат: /rename <id> <новое имя>"
+	}
+	name := strings.TrimSpace(strings.Join(args[1:], " "))
+	if name == "" {
+		name = args[0]
+	}
+	if err := b.Store.RenameRouter(args[0], name); err != nil {
+		return fmt.Sprintf("не переименовано: %v", err)
+	}
+	return "✅ теперь: " + name
 }
 
 // agentConfigureLines is the two-command block to run on a router to bind

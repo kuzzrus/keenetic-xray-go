@@ -5,6 +5,18 @@ import (
 	"time"
 )
 
+func TestRouterDot(t *testing.T) {
+	if got := routerDot(time.Time{}); got != "⚪" {
+		t.Errorf("never-polled dot = %q, want ⚪", got)
+	}
+	if got := routerDot(time.Now()); got != "🟢" {
+		t.Errorf("fresh dot = %q, want 🟢", got)
+	}
+	if got := routerDot(time.Now().Add(-2 * DefaultOfflineThreshold)); got != "🔴" {
+		t.Errorf("stale dot = %q, want 🔴", got)
+	}
+}
+
 func TestOfflineWatcher_NotifiesOnTransitions(t *testing.T) {
 	store, err := LoadStore("")
 	if err != nil {

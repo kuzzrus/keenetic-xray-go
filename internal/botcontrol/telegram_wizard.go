@@ -28,6 +28,7 @@ const (
 	wizSetupSource
 	wizSetupPrimary
 	wizSetupBackup
+	wizRenameName
 )
 
 func (b *TelegramBot) startAddRouterWizard(ctx context.Context, chatID int64) {
@@ -56,6 +57,17 @@ func (b *TelegramBot) startSetupWizard(ctx context.Context, chatID int64, router
 	b.wizards[chatID] = &wizState{step: wizSetupSource, routerID: routerID}
 	b.wizardMu.Unlock()
 	b.sendMessage(ctx, chatID, "Настройка "+routerID+".\n\nВставьте vless:// ссылку или URL подписки http(s)://\nОтмена: /cancel")
+}
+
+func (b *TelegramBot) startRenameWizard(ctx context.Context, chatID int64, routerID string) {
+	if !b.Store.HasRouter(routerID) {
+		b.sendMessage(ctx, chatID, fmt.Sprintf("нет такого роутера %q. Список: /routers", routerID))
+		return
+	}
+	b.wizardMu.Lock()
+	b.wizards[chatID] = &wizState{step: wizRenameName, routerID: routerID}
+	b.wizardMu.Unlock()
+	b.sendMessage(ctx, chatID, "Новое имя для "+routerID+" (пустая строка — совпадёт с id).\nОтмена: /cancel")
 }
 
 func (b *TelegramBot) wizardClear(chatID int64) {
@@ -124,6 +136,20 @@ func (b *TelegramBot) handleWizardText(ctx context.Context, chatID int64, text s
 
 	case wizSetupBackup:
 		b.wizardSetupPickRole(ctx, chatID, st, text, false)
+		return true
+
+	case wizRenameName:
+		name := strings.TrimSpace(text)
+		if name == "" {
+			name = st.routerID
+		}
+		err := b.Store.RenameRouter(st.routerID, name)
+		b.wizardClear(chatID)
+		if err != nil {
+			b.sendMessage(ctx, chatID, fmt.Sprintf("не переименовано: %v", err))
+			return true
+		}
+		b.sendMessage(ctx, chatID, "✅ теперь: "+name)
 		return true
 	}
 

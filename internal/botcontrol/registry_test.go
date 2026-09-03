@@ -95,6 +95,22 @@ func TestStore_RemoveRouter(t *testing.T) {
 	}
 }
 
+func TestStore_RenameRouter(t *testing.T) {
+	s, _ := LoadStore("")
+	if _, err := s.AddRouter("home", "Old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RenameRouter("home", "Дом"); err != nil {
+		t.Fatalf("RenameRouter: %v", err)
+	}
+	if got := s.NameFor("home"); got != "Дом" {
+		t.Errorf("NameFor(home) = %q, want Дом", got)
+	}
+	if err := s.RenameRouter("nope", "x"); err == nil {
+		t.Error("RenameRouter on an unknown id: want error")
+	}
+}
+
 func TestStore_SeedRouter_IsIdempotent(t *testing.T) {
 	s, _ := LoadStore("")
 	if err := s.SeedRouter("home", "seed-token", "seeded"); err != nil {

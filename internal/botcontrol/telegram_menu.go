@@ -33,7 +33,7 @@ func (b *TelegramBot) routersListKB() inlineKeyboard {
 		if r.Name != "" {
 			label = r.Name
 		}
-		rows = append(rows, []inlineButton{{Text: "📡 " + label, CallbackData: "router:" + r.ID}})
+		rows = append(rows, []inlineButton{{Text: routerDot(r.LastPollAt) + " " + label, CallbackData: "router:" + r.ID}})
 	}
 	rows = append(rows, []inlineButton{
 		{Text: "➕ Добавить", CallbackData: "add"},
@@ -50,9 +50,9 @@ func routerCardKB(id string) inlineKeyboard {
 		{{Text: "🔄 Подписка", CallbackData: "act:sub_refresh:" + id}, {Text: "📄 Список", CallbackData: "act:sub_list:" + id}},
 		{{Text: "🌐 Proxy0 вкл", CallbackData: "act:p0_on:" + id}, {Text: "🌐 Proxy0 выкл", CallbackData: "act:p0_off:" + id}},
 		{{Text: "♻️ Рестарт демона", CallbackData: "act:restart:" + id}},
-		{{Text: "📦 Установка агента", CallbackData: "install:" + id}},
+		{{Text: "✏️ Переименовать", CallbackData: "rename:" + id}, {Text: "📦 Установка агента", CallbackData: "install:" + id}},
 		{{Text: "🗑 Удалить роутер", CallbackData: "del:" + id}},
-		{{Text: "⬅️ Роутеры", CallbackData: "routers"}, {Text: "🏠 Меню", CallbackData: "menu"}},
+		{{Text: "🔄 Обновить", CallbackData: "router:" + id}, {Text: "⬅️ Роутеры", CallbackData: "routers"}, {Text: "🏠 Меню", CallbackData: "menu"}},
 	}}
 }
 
@@ -148,6 +148,8 @@ func (b *TelegramBot) handleCallback(ctx context.Context, cb tgCallbackQuery) {
 		b.startAddRouterWizard(ctx, cb.Message.Chat.ID)
 	case strings.HasPrefix(data, "setup:"):
 		b.startSetupWizard(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "setup:"))
+	case strings.HasPrefix(data, "rename:"):
+		b.startRenameWizard(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "rename:"))
 	case strings.HasPrefix(data, "router:"):
 		id := strings.TrimPrefix(data, "router:")
 		b.editCB(ctx, cb, b.routerCardText(id), routerCardKB(id))

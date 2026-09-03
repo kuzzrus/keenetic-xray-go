@@ -153,8 +153,15 @@ longer one: paste a `vless://` link or subscription URL, then -- for a
 subscription -- pick primary and backup by number from the fetched list.
 Each step drives the router through the existing `setup_link` /
 `sub_seturl` / `sub_refresh` / `profile_list` / `sub_setprimary` /
-`sub_setbackup` actions. State is per-chat; any `/command` other than
-`/cancel` aborts it and still runs.
+`sub_setbackup` actions. `✏️ Переименовать` (or `/rename <id> <name>`) is
+a one-step dialog over `Store.RenameRouter`. State is per-chat; any
+`/command` other than `/cancel` aborts it and still runs.
+
+The router list and every list button carry a status dot -- 🟢 polled
+within `DefaultOfflineThreshold`, 🔴 silent longer, ⚪ never connected
+(`routerDot`, shared with `OfflineWatcher`). `/status` with no router
+named returns that same overview; `🔄 Обновить` on a card just
+re-renders it.
 
 ### Text commands
 
@@ -165,7 +172,9 @@ ones are text-only:
 /add_router <id> [name]    register a router; the bot replies with its agent configure commands in a copyable <pre> block
 /remove_router <id>        unregister a router (the agent on the router is left alone)
 /setup <router>            step-by-step: paste a source, then pick primary/backup
-/routers                   list registered routers
+/rename <id> <name>        change a router's display name
+/routers                   list registered routers with a status dot
+/status                    overview of all routers (dot, last poll, queue depth)
 /status <router>           rich snapshot: failover state + live profile, uptime, last switch, listening ports, proxy0, subscription age
 /doctor <router>           pass/fail health checks (profiles, config, xray-core runnable, proxy0 upstream, free disk)
 /switch <router> primary|backup

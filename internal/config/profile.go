@@ -128,9 +128,9 @@ const (
 
 // Proxy0Config controls whether the daemon points Keenetic's Proxy
 // interface at the local Xray inbound (via `keenetic-xray proxy0`), so
-// LAN traffic can be policy-routed through the proxy. Disabled by
-// default; when enabled the inbound binds 0.0.0.0 instead of loopback so
-// Proxy0 can reach it.
+// LAN traffic can be policy-routed through the proxy. On by default (see
+// config.Default); when enabled the inbound binds 0.0.0.0 instead of
+// loopback so Proxy0 can reach it.
 type Proxy0Config struct {
 	Enabled   bool   `json:"enabled"`
 	Interface string `json:"interface,omitempty"` // "" -> "Proxy0"
@@ -151,7 +151,10 @@ type Config struct {
 }
 
 // Default returns a fresh Config with no profiles configured yet, ready to
-// be filled in by `keenetic-xray setup` or postinst-setup.
+// be filled in by `keenetic-xray setup` or postinst-setup. Proxy0 is on
+// by default (the daemon only actually configures it when ndmc is present
+// and profiles exist); `install.sh --no-proxy0` / `keenetic-xray proxy0
+// off` turn it back off.
 func Default() *Config {
 	return &Config{
 		Variant:      VariantFull,
@@ -159,6 +162,7 @@ func Default() *Config {
 		BackupIndex:  -1,
 		Failover:     DefaultFailoverConfig(),
 		Agent:        AgentConfig{Enabled: false},
+		Proxy0:       Proxy0Config{Enabled: true},
 	}
 }
 

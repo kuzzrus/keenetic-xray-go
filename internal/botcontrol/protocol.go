@@ -28,6 +28,7 @@ const (
 	ActionProxy0Off     = "proxy0_off"
 	ActionDaemonRestart = "daemon_restart"
 	ActionEnsureCore    = "ensure_core"
+	ActionSelfUpdate    = "self_update" // re-run install.sh on the router (whole keenetic-xray package)
 )
 
 // Command is a single unit of work queued for a router by the control

@@ -216,6 +216,7 @@ func TestRouterHandler_Status_RichFields(t *testing.T) {
 	cfg.Profiles = []config.Profile{testProfile("primary", "a"), testProfile("backup", "b")}
 	cfg.PrimaryIndex = 0
 	cfg.BackupIndex = 1
+	cfg.Proxy0.Enabled = false // this test is about status rendering, not the proxy0 default
 	h := &RouterHandler{Daemon: d, Config: cfg, OptPath: t.TempDir()}
 
 	out, err := h.Handle(context.Background(), Command{Action: ActionStatus})
@@ -296,6 +297,20 @@ func TestRouterHandler_DaemonRestart(t *testing.T) {
 	}
 	if !strings.Contains(out, "перезапуск") {
 		t.Errorf("daemon_restart output = %q", out)
+	}
+}
+
+func TestRouterHandler_SelfUpdate(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh on PATH to exercise the update spawn")
+	}
+	h := &RouterHandler{Config: config.Default(), InstallURL: "file:///dev/null"}
+	out, err := h.Handle(context.Background(), Command{Action: ActionSelfUpdate})
+	if err != nil {
+		t.Fatalf("self_update: %v", err)
+	}
+	if !strings.Contains(out, "обновление агента запущено") {
+		t.Errorf("self_update output = %q", out)
 	}
 }
 

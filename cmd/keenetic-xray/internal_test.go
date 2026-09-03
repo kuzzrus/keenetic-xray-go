@@ -52,6 +52,28 @@ func TestCmdInternal_PostinstSetupThenPrermCleanup(t *testing.T) {
 		t.Errorf("upgrade should not touch existing config: %#v", got.Profiles)
 	}
 
+	// Proxy0 is on by default in a fresh config...
+	fresh := filepath.Join(t.TempDir(), "fresh.json")
+	t.Setenv("KEENETIC_XRAY_CONFIG", fresh)
+	if err := run([]string{"internal", "postinst-setup"}); err != nil {
+		t.Fatalf("postinst-setup (fresh): %v", err)
+	}
+	if c, _ := config.Load(fresh); !c.Proxy0.Enabled {
+		t.Error("fresh config: Proxy0.Enabled should default to true")
+	}
+	// ...unless install.sh passed --no-proxy0.
+	noP := filepath.Join(t.TempDir(), "noproxy.json")
+	t.Setenv("KEENETIC_XRAY_CONFIG", noP)
+	t.Setenv("KEENETIC_XRAY_NO_PROXY0", "1")
+	if err := run([]string{"internal", "postinst-setup"}); err != nil {
+		t.Fatalf("postinst-setup (--no-proxy0): %v", err)
+	}
+	if c, _ := config.Load(noP); c.Proxy0.Enabled {
+		t.Error("KEENETIC_XRAY_NO_PROXY0 should turn Proxy0 off")
+	}
+	t.Setenv("KEENETIC_XRAY_NO_PROXY0", "")
+	t.Setenv("KEENETIC_XRAY_CONFIG", configFile)
+
 	// prerm-cleanup without --purge leaves everything alone.
 	if err := run([]string{"internal", "prerm-cleanup"}); err != nil {
 		t.Fatalf("prerm-cleanup: %v", err)

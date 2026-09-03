@@ -478,7 +478,8 @@ const helpText = `/menu — меню с кнопками (проще всего)
 /sub_setbackup <router> <index>
 /proxy0 <router> [show|on|off]
 /restart <router> — перезапустить демон
-/ensure_core <router> — доустановить ядро xray`
+/ensure_core <router> — доустановить ядро xray
+/update <router> — обновить агент (переустановить .ipk)`
 
 func (b *TelegramBot) dispatch(ctx context.Context, text string) string {
 	fields := strings.Fields(text)
@@ -523,6 +524,8 @@ func (b *TelegramBot) dispatch(ctx context.Context, text string) string {
 		return b.runRouterCommand(ctx, args, ActionDaemonRestart, nil)
 	case "/ensure_core":
 		return b.runRouterCommand(ctx, args, ActionEnsureCore, nil)
+	case "/update":
+		return b.runRouterCommand(ctx, args, ActionSelfUpdate, nil)
 	default:
 		return "неизвестная команда. Откройте /menu или /help"
 	}

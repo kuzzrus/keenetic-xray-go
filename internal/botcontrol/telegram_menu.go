@@ -49,8 +49,7 @@ func routerCardKB(id string) inlineKeyboard {
 		{{Text: "⬆️ primary", CallbackData: "act:sw_pri:" + id}, {Text: "⬇️ backup", CallbackData: "act:sw_bak:" + id}},
 		{{Text: "📋 Профили", CallbackData: "pf:" + id}, {Text: "🔗 Ссылка", CallbackData: "src:" + id}},
 		{{Text: "🔄 Обновить подписку", CallbackData: "act:sub_refresh:" + id}},
-		{{Text: "🌐 Proxy0 вкл", CallbackData: "act:p0_on:" + id}, {Text: "🌐 Proxy0 выкл", CallbackData: "act:p0_off:" + id}},
-		{{Text: "♻️ Рестарт демона", CallbackData: "act:restart:" + id}},
+		{{Text: "♻️ Рестарт демона", CallbackData: "act:restart:" + id}, {Text: "🔁 Обновить агент", CallbackData: "upd:" + id}},
 		{{Text: "✏️ Переименовать", CallbackData: "rename:" + id}, {Text: "📦 Установка агента", CallbackData: "install:" + id}},
 		{{Text: "🗑 Удалить роутер", CallbackData: "del:" + id}},
 		{{Text: "🔄 Обновить", CallbackData: "router:" + id}, {Text: "⬅️ Роутеры", CallbackData: "routers"}, {Text: "🏠 Меню", CallbackData: "menu"}},
@@ -60,6 +59,13 @@ func routerCardKB(id string) inlineKeyboard {
 func deleteConfirmKB(id string) inlineKeyboard {
 	return inlineKeyboard{InlineKeyboard: [][]inlineButton{
 		{{Text: "🗑 Да, удалить", CallbackData: "delyes:" + id}},
+		{{Text: "↩️ Отмена", CallbackData: "router:" + id}},
+	}}
+}
+
+func updateConfirmKB(id string) inlineKeyboard {
+	return inlineKeyboard{InlineKeyboard: [][]inlineButton{
+		{{Text: "🔁 Да, обновить агент", CallbackData: "updyes:" + id}},
 		{{Text: "↩️ Отмена", CallbackData: "router:" + id}},
 	}}
 }
@@ -79,12 +85,10 @@ func callbackAction(name string) string {
 		return ActionSwitchBackup
 	case "sub_refresh":
 		return ActionSubRefresh
-	case "p0_on":
-		return ActionProxy0On
-	case "p0_off":
-		return ActionProxy0Off
 	case "restart":
 		return ActionDaemonRestart
+	case "self_update":
+		return ActionSelfUpdate
 	}
 	return ""
 }
@@ -174,6 +178,11 @@ func (b *TelegramBot) handleCallback(ctx context.Context, cb tgCallbackQuery) {
 			return
 		}
 		b.editCB(ctx, cb, "роутер "+id+" удалён.\n\n"+b.listRouters(), b.routersListKB())
+	case strings.HasPrefix(data, "upd:"):
+		id := strings.TrimPrefix(data, "upd:")
+		b.editCB(ctx, cb, "Обновить агент на "+id+"?\nПереустановит .ipk и перезапустит демон.", updateConfirmKB(id))
+	case strings.HasPrefix(data, "updyes:"):
+		b.handleActionCallback(ctx, cb, "act:self_update:"+strings.TrimPrefix(data, "updyes:"))
 	case strings.HasPrefix(data, "act:"):
 		b.handleActionCallback(ctx, cb, data)
 	default:

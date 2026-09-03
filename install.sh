@@ -19,10 +19,10 @@
 # Options:
 #   --sub=URL / --vless=LINK / a bare vless:// or http(s):// arg
 #       run `keenetic-xray setup` non-interactively with this source
-#   --no-proxy0            skip the automatic Keenetic Proxy0 wiring
+#   --no-proxy0            turn OFF the Keenetic Proxy0 wiring (on by default)
 #   --xray-core=vendored   force this project's size-optimised xray-core build
 #   --xray-core=entware    force `opkg install xray-core` instead
-#   (default: try vendored, fall back to Entware; wire Proxy0 on a Keenetic)
+#   (default: try vendored, fall back to Entware; Proxy0 on for a Keenetic)
 set -eu
 
 REPO="kuzzrus/keenetic-xray-go"

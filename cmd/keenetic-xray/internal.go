@@ -74,7 +74,14 @@ func cmdPostinstSetup() error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("keenetic-xray installed (variant: %s)\n", cfg.Variant)
+	// Proxy0 is on by default; install.sh --no-proxy0 sets this env.
+	if os.Getenv("KEENETIC_XRAY_NO_PROXY0") != "" && cfg.Proxy0.Enabled {
+		cfg.Proxy0.Enabled = false
+		if err := cfg.Save(configPath()); err != nil {
+			return err
+		}
+	}
+	fmt.Printf("keenetic-xray installed (variant: %s, proxy0: %v)\n", cfg.Variant, cfg.Proxy0.Enabled)
 	if len(cfg.Profiles) == 0 {
 		fmt.Println("run `keenetic-xray setup` to configure your VLESS profiles")
 	}

@@ -28,7 +28,6 @@ const (
 	ActionProxy0Off     = "proxy0_off"
 	ActionDaemonRestart = "daemon_restart"
 	ActionEnsureCore    = "ensure_core"
-	ActionSetupLink     = "setup_link" // args[0] = a raw vless:// URI -> becomes the sole profile
 )
 
 // Command is a single unit of work queued for a router by the control

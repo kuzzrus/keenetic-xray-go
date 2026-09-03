@@ -42,6 +42,13 @@ const (
 	// StateCooldown: transient, entered right after any switch; no new
 	// switch is evaluated until it elapses.
 	StateCooldown
+	// StateConfirmingRecovery: production was just switched back to primary
+	// after the isolated pretest passed. The live proxy is probed over the
+	// next few ticks -- NOT immediately in the switching tick, which would
+	// race the freshly-restarted xray process and cause a false rollback.
+	// Rolls back to backup only after FailuresRequired consecutive live
+	// failures here.
+	StateConfirmingRecovery
 )
 
 func (s State) String() string {
@@ -54,6 +61,8 @@ func (s State) String() string {
 		return "TESTING_RECOVERY"
 	case StateCooldown:
 		return "COOLDOWN"
+	case StateConfirmingRecovery:
+		return "CONFIRMING_RECOVERY"
 	default:
 		return "UNKNOWN"
 	}
@@ -107,6 +116,7 @@ type Machine struct {
 
 	consecutiveFailures int       // ActivePrimary: consecutive live-probe failures
 	isolatedSuccesses   int       // TestingRecovery: consecutive isolated-probe successes
+	confirmFailures     int       // ConfirmingRecovery: consecutive live-probe failures since the recovery switch
 	cooldownRemaining   int       // Cooldown: ticks left
 	cooldownNext        State     // Cooldown: state to enter once it elapses
 	backoffUntil        time.Time // ActiveBackup: don't retry recovery testing before this
@@ -135,6 +145,8 @@ func (m *Machine) Tick(ctx context.Context) {
 		m.tickActiveBackup(ctx)
 	case StateTestingRecovery:
 		m.tickTestingRecovery(ctx)
+	case StateConfirmingRecovery:
+		m.tickConfirmingRecovery(ctx)
 	case StateCooldown:
 		m.tickCooldown()
 	}
@@ -183,15 +195,28 @@ func (m *Machine) tickTestingRecovery(ctx context.Context) {
 	}
 	_ = m.actions.StopIsolatedPretest(ctx)
 
+	// Don't probe the live proxy in this same tick: xray was just
+	// restarted onto the primary config and isn't necessarily accepting
+	// connections yet. Confirm over the next few ticks instead.
+	m.confirmFailures = 0
+	m.transitionTo(StateConfirmingRecovery)
+}
+
+func (m *Machine) tickConfirmingRecovery(ctx context.Context) {
 	if err := m.actions.ProbeLive(ctx); err != nil {
-		// Roll back immediately -- a known-good backup beats a flapping
-		// primary -- then back off before hammering it with retries.
+		m.confirmFailures++
+		if m.confirmFailures < m.cfg.FailuresRequired {
+			return // still settling -- give it another tick
+		}
+		// Primary really isn't holding. A known-good backup beats a
+		// flapping primary; roll back and back off before retrying.
+		m.confirmFailures = 0
 		_ = m.actions.SwitchLiveTo(ctx, RoleBackup)
 		m.backoffUntil = m.clock.Now().Add(m.rollbackBackoff())
 		m.transitionTo(StateActiveBackup)
 		return
 	}
-
+	m.confirmFailures = 0
 	m.enterCooldown(StateActivePrimary)
 }
 
@@ -233,6 +258,7 @@ func (m *Machine) rollbackBackoff() time.Duration {
 func (m *Machine) forcePrimary() {
 	m.consecutiveFailures = 0
 	m.isolatedSuccesses = 0
+	m.confirmFailures = 0
 	m.backoffUntil = time.Time{}
 	m.transitionTo(StateActivePrimary)
 }
@@ -245,6 +271,7 @@ func (m *Machine) forcePrimary() {
 func (m *Machine) forceBackup() {
 	m.consecutiveFailures = 0
 	m.isolatedSuccesses = 0
+	m.confirmFailures = 0
 	m.backoffUntil = m.clock.Now().Add(m.rollbackBackoff())
 	m.transitionTo(StateActiveBackup)
 }

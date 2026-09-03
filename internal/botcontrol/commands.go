@@ -86,9 +86,9 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 	case ActionSubRefresh:
 		return h.subRefresh(ctx)
 	case ActionSubSetPrimary:
-		return h.subSetRole(cmd.Args, true)
+		return h.subSetRole(ctx, cmd.Args, true)
 	case ActionSubSetBackup:
-		return h.subSetRole(cmd.Args, false)
+		return h.subSetRole(ctx, cmd.Args, false)
 	case ActionProxy0Show:
 		return h.proxy0Show(ctx), nil
 	case ActionProxy0On:
@@ -99,8 +99,6 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 		return h.daemonRestart()
 	case ActionEnsureCore:
 		return h.ensureCore(ctx)
-	case ActionSetupLink:
-		return h.setupLink(cmd.Args)
 	default:
 		return "", fmt.Errorf("unknown action %q", cmd.Action)
 	}
@@ -129,6 +127,9 @@ func (h *RouterHandler) status(ctx context.Context) string {
 	}
 	if bk := h.Config.Backup(); bk != nil {
 		fmt.Fprintf(&b, "backup: %s (%s:%d)\n", bk.Remark, bk.Address, bk.Port)
+	}
+	if len(h.Config.Profiles) > 1 && h.Config.PrimaryIndex == h.Config.BackupIndex {
+		b.WriteString("⚠️ primary и backup — один профиль, failover не сработает\n")
 	}
 
 	sp := h.Config.Failover.SOCKSPort
@@ -275,17 +276,19 @@ func shortDur(d time.Duration) string {
 // describeTransition glosses a state change in one Russian phrase.
 func describeTransition(t failover.Transition) string {
 	switch {
-	case t.To == failover.StateActiveBackup && t.From == failover.StateTestingRecovery:
-		return "откат на backup (возврат не подтвердился)"
+	case t.To == failover.StateActiveBackup && t.From == failover.StateConfirmingRecovery:
+		return "откат на backup — primary не удержался"
 	case t.To == failover.StateActiveBackup:
 		return "переключение на backup"
+	case t.To == failover.StateConfirmingRecovery:
+		return "переключился на primary, проверяю"
 	case t.To == failover.StateActivePrimary:
 		return "возврат на primary"
 	case t.To == failover.StateTestingRecovery:
 		return "проверка восстановления primary"
 	case t.To == failover.StateCooldown && t.From == failover.StateActivePrimary:
 		return "primary недоступен — уход на backup"
-	case t.To == failover.StateCooldown && t.From == failover.StateTestingRecovery:
+	case t.To == failover.StateCooldown && t.From == failover.StateConfirmingRecovery:
 		return "primary восстановился"
 	case t.To == failover.StateCooldown:
 		return "пауза после переключения"
@@ -301,9 +304,12 @@ func (h *RouterHandler) switchTo(ctx context.Context, role failover.Role) (strin
 	return fmt.Sprintf("switched to %s", role), nil
 }
 
-// rebindXray re-runs the current live switch so xray picks up a changed
-// Proxy0.Enabled (loopback vs 0.0.0.0 bind). Best-effort: a daemon not
-// yet running will bind correctly on its own next start.
+// rebindXray re-applies the current live role so xray regenerates its
+// production config and restarts -- picking up a changed profile,
+// subscription or Proxy0 bind without a full daemon restart, and without
+// touching the Proxy0 interface. Best-effort: if the daemon isn't in its
+// Run loop yet (idling with no primary/backup), this no-ops and the
+// change lands on the daemon's next real start.
 func (h *RouterHandler) rebindXray(ctx context.Context) {
 	if h.Daemon == nil {
 		return
@@ -430,26 +436,6 @@ func (h *RouterHandler) profileList() string {
 	return b.String()
 }
 
-// setupLink makes a pasted raw vless:// URI the router's sole profile
-// (primary == backup), clearing any subscription. The multi-profile
-// case goes through sub_seturl + sub_refresh instead.
-func (h *RouterHandler) setupLink(args []string) (string, error) {
-	if len(args) != 1 {
-		return "", fmt.Errorf("usage: setup_link <vless-uri>")
-	}
-	p, err := config.ParseVLESSURI(args[0])
-	if err != nil {
-		return "", fmt.Errorf("разбор vless: %w", err)
-	}
-	h.Config.Profiles = []config.Profile{p}
-	h.Config.PrimaryIndex, h.Config.BackupIndex = 0, 0
-	h.Config.Subscription = nil
-	if err := h.Config.Save(h.ConfigPath); err != nil {
-		return "", err
-	}
-	return "готово: " + p.Remark, nil
-}
-
 func (h *RouterHandler) subSetURL(args []string) (string, error) {
 	if len(args) != 1 {
 		return "", fmt.Errorf("usage: sub_seturl <url>")
@@ -483,6 +469,7 @@ func (h *RouterHandler) subRefresh(ctx context.Context) (string, error) {
 	if err := h.Config.Save(h.ConfigPath); err != nil {
 		return "", err
 	}
+	h.rebindXray(ctx) // profiles may have changed -- restart xray on them now
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "refreshed: %d profiles\n", len(result.Profiles))
@@ -492,7 +479,7 @@ func (h *RouterHandler) subRefresh(ctx context.Context) (string, error) {
 	return b.String(), nil
 }
 
-func (h *RouterHandler) subSetRole(args []string, primary bool) (string, error) {
+func (h *RouterHandler) subSetRole(ctx context.Context, args []string, primary bool) (string, error) {
 	word := "backup"
 	if primary {
 		word = "primary"
@@ -523,5 +510,7 @@ func (h *RouterHandler) subSetRole(args []string, primary bool) (string, error) 
 	if err := h.Config.Save(h.ConfigPath); err != nil {
 		return "", err
 	}
+	h.rebindXray(ctx) // the live slot may now point at a different profile
+
 	return fmt.Sprintf("%s set to profile %d (%s)", word, idx, h.Config.Profiles[idx].Remark), nil
 }

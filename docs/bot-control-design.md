@@ -138,13 +138,18 @@ per-router card. `setMyCommands` registers `/menu /routers /add_router
 /help` so Telegram shows them in its command list.
 
 Most card buttons (`📊 Статус`, `🩺 Doctor`, `⬆️ primary`, `⬇️ backup`,
-`🔄 Обновить подписку`, `🌐 Proxy0 вкл/выкл`, `♻️ Рестарт демона`) enqueue
-the matching command, edit the message to `⏳ команда в очереди…`, then a
-goroutine waits up to `ResultTimeout` (default 20s) and edits it again
-with the result (or a "not answered" note). `📦 Установка агента`
-re-shows the `agent configure` line; `🗑 Удалить роутер` asks for
-confirmation before `RemoveRouter`. Callback data is a short `kind:arg`
-string routed by `handleCallback`.
+`🔄 Обновить подписку`, `♻️ Рестарт демона`) enqueue the matching command,
+edit the message to `⏳ команда в очереди…`, then a goroutine waits up to
+`ResultTimeout` (default 20s) and edits it again with the result (or a
+"not answered" note). `📦 Установка агента` re-shows the `agent configure`
+line; `🔁 Обновить агент` (`upd:` -> confirm -> `self_update`, re-runs
+`install.sh` on the router) and `🗑 Удалить роутер` ask for confirmation
+first. Callback data is a short `kind:arg` string routed by
+`handleCallback`.
+
+Proxy0 has no card button -- it's on by default (`config.Default`,
+`install.sh --no-proxy0` opts out) and the daemon asserts it at startup;
+`/proxy0 <router> [show|on|off]` is still there as a text command.
 
 `📋 Профили` opens an interactive screen: one row per profile with
 `⬆️ N основным` / `⬇️ N резервным` buttons (`pfp:` / `pfb:` callbacks ->
@@ -191,9 +196,10 @@ ones are text-only:
 /proxy0 <router> [show|on|off]   point Keenetic's Proxy0 at the local inbound
 /restart <router>               restart the failover daemon (detached; the replacement emits daemon_start)
 /ensure_core <router>           (re)install the xray-core binary -- vendored build, opkg fallback
+/update <router>                re-run install.sh (whole keenetic-xray package)
 ```
 
-`proxy0 on`/`off` and `restart` are also router-card buttons.
+`restart` and `update` are also router-card buttons (`update` behind a confirm).
 
 `sub_refresh`, `sub_setprimary`, `sub_setbackup` and `proxy0 on`/`off`
 call `RouterHandler.rebindXray` after saving: it re-forces the current

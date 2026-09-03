@@ -40,7 +40,13 @@ type RouterHandler struct {
 	// InitScript is the daemon's init.d script, exec'd by the
 	// daemon_restart action. Empty -> that action returns an error.
 	InitScript string
+
+	// InstallURL is the install.sh the self_update action re-runs.
+	// Empty -> defaultInstallURL.
+	InstallURL string
 }
+
+const defaultInstallURL = "https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/install.sh"
 
 // Handle implements Handler. It scrubs known secrets out of both the
 // output and any error before they leave the router for the control
@@ -99,6 +105,8 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 		return h.daemonRestart()
 	case ActionEnsureCore:
 		return h.ensureCore(ctx)
+	case ActionSelfUpdate:
+		return h.selfUpdate()
 	default:
 		return "", fmt.Errorf("unknown action %q", cmd.Action)
 	}
@@ -400,6 +408,23 @@ func (h *RouterHandler) daemonRestart() (string, error) {
 	}
 	go func() { _ = c.Wait() }() // reap the shell if we outlive the sleep
 	return "перезапуск демона через 2с…", nil
+}
+
+// selfUpdate re-runs install.sh (whole keenetic-xray package: new .ipk,
+// opkg install, postinst, daemon restart). Detached with a short delay
+// so this process can post the result before opkg replaces the binary
+// under it.
+func (h *RouterHandler) selfUpdate() (string, error) {
+	url := h.InstallURL
+	if url == "" {
+		url = defaultInstallURL
+	}
+	c := exec.Command("sh", "-c", "sleep 2; curl -fsSL "+url+" | sh")
+	if err := c.Start(); err != nil {
+		return "", fmt.Errorf("запуск обновления: %w", err)
+	}
+	go func() { _ = c.Wait() }()
+	return "обновление агента запущено — переустановка .ipk и рестарт демона через ~2с", nil
 }
 
 // ensureCore retries the xray-core install (vendored build, opkg

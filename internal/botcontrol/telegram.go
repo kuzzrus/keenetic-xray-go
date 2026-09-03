@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -38,21 +40,31 @@ type TelegramBot struct {
 	ResultTimeout time.Duration // 0 -> DefaultResultTimeout
 	Logger        *log.Logger   // nil -> log.Default()
 
-	client *http.Client
+	client   *http.Client
+	wizardMu sync.Mutex
+	wizards  map[int64]*wizState // per-chat multi-step dialog state (e.g. /add_router)
 }
 
 type tgUpdate struct {
-	UpdateID int64      `json:"update_id"`
-	Message  *tgMessage `json:"message"`
+	UpdateID      int64            `json:"update_id"`
+	Message       *tgMessage       `json:"message"`
+	CallbackQuery *tgCallbackQuery `json:"callback_query"`
 }
 
 type tgMessage struct {
-	Chat tgChat `json:"chat"`
-	Text string `json:"text"`
+	MessageID int    `json:"message_id"`
+	Chat      tgChat `json:"chat"`
+	Text      string `json:"text"`
 }
 
 type tgChat struct {
 	ID int64 `json:"id"`
+}
+
+type tgCallbackQuery struct {
+	ID      string     `json:"id"`
+	Message *tgMessage `json:"message"`
+	Data    string     `json:"data"`
 }
 
 type tgGetUpdatesResponse struct {
@@ -60,11 +72,26 @@ type tgGetUpdatesResponse struct {
 	Result []tgUpdate `json:"result"`
 }
 
+// inlineKeyboard is Telegram's inline_keyboard reply markup: rows of
+// buttons, each carrying opaque callback_data the bot routes on.
+type inlineKeyboard struct {
+	InlineKeyboard [][]inlineButton `json:"inline_keyboard"`
+}
+
+type inlineButton struct {
+	Text         string `json:"text"`
+	CallbackData string `json:"callback_data"`
+}
+
 // Run long-polls Telegram for updates and handles each until ctx is
 // cancelled, at which point it returns ctx.Err().
 func (b *TelegramBot) Run(ctx context.Context) error {
 	if b.client == nil {
 		b.client = &http.Client{Timeout: 65 * time.Second} // > the 50s long-poll timeout used below
+	}
+	b.wizards = make(map[int64]*wizState)
+	if err := b.setMyCommands(ctx); err != nil && ctx.Err() == nil {
+		b.logger().Printf("telegram: setMyCommands: %s", b.scrubToken(err))
 	}
 
 	var offset int64
@@ -93,10 +120,12 @@ func (b *TelegramBot) Run(ctx context.Context) error {
 			if u.UpdateID >= offset {
 				offset = u.UpdateID + 1
 			}
-			if u.Message == nil {
-				continue
+			switch {
+			case u.CallbackQuery != nil:
+				b.handleCallback(ctx, *u.CallbackQuery)
+			case u.Message != nil:
+				b.handleMessage(ctx, *u.Message)
 			}
-			b.handleMessage(ctx, *u.Message)
 		}
 	}
 }
@@ -160,35 +189,125 @@ func (b *TelegramBot) getUpdates(ctx context.Context, offset int64) ([]tgUpdate,
 	return out.Result, nil
 }
 
-func (b *TelegramBot) sendMessage(ctx context.Context, chatID int64, text string) {
-	body, err := json.Marshal(map[string]any{"chat_id": chatID, "text": text})
+// apiPost calls one Bot API method with a JSON payload and returns the
+// raw response body. A non-2xx status is an error; the caller decides
+// whether that is worth logging.
+func (b *TelegramBot) apiPost(ctx context.Context, method string, payload any) ([]byte, error) {
+	body, err := json.Marshal(payload)
 	if err != nil {
-		return
+		return nil, err
 	}
-	url := fmt.Sprintf("%s/bot%s/sendMessage", b.apiBase(), b.Token)
+	url := fmt.Sprintf("%s/bot%s/%s", b.apiBase(), b.Token, method)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := b.client.Do(req)
 	if err != nil {
-		b.logger().Printf("telegram: sendMessage: %s", b.scrubToken(err))
-		return
+		return nil, err
 	}
 	defer resp.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return data, fmt.Errorf("%s: unexpected status %s", method, resp.Status)
+	}
+	return data, nil
+}
+
+// sendMessage sends plain text with no keyboard, best-effort.
+func (b *TelegramBot) sendMessage(ctx context.Context, chatID int64, text string) {
+	b.sendMessageKB(ctx, chatID, text, inlineKeyboard{})
+}
+
+// sendMessageKB sends text with an optional inline keyboard and returns
+// the new message's ID (0 if the send failed).
+func (b *TelegramBot) sendMessageKB(ctx context.Context, chatID int64, text string, kb inlineKeyboard) int {
+	payload := map[string]any{"chat_id": chatID, "text": text}
+	if len(kb.InlineKeyboard) > 0 {
+		payload["reply_markup"] = kb
+	}
+	data, err := b.apiPost(ctx, "sendMessage", payload)
+	if err != nil {
+		b.logger().Printf("telegram: sendMessage: %s", b.scrubToken(err))
+		return 0
+	}
+	var out struct {
+		Result struct {
+			MessageID int `json:"message_id"`
+		} `json:"result"`
+	}
+	_ = json.Unmarshal(data, &out)
+	return out.Result.MessageID
+}
+
+// editMessageText replaces an existing message's text and keyboard in
+// place. Returns false if the edit failed (e.g. the message is too old);
+// "message is not modified" counts as success.
+func (b *TelegramBot) editMessageText(ctx context.Context, chatID int64, messageID int, text string, kb inlineKeyboard) bool {
+	if messageID == 0 {
+		return false
+	}
+	payload := map[string]any{"chat_id": chatID, "message_id": messageID, "text": text}
+	if len(kb.InlineKeyboard) > 0 {
+		payload["reply_markup"] = kb
+	}
+	data, err := b.apiPost(ctx, "editMessageText", payload)
+	if err != nil {
+		if bytes.Contains(data, []byte("message is not modified")) {
+			return true
+		}
+		b.logger().Printf("telegram: editMessageText: %s", b.scrubToken(err))
+		return false
+	}
+	return true
+}
+
+// answerCallback acknowledges a callback query so Telegram stops showing
+// the button's loading spinner. Best-effort.
+func (b *TelegramBot) answerCallback(ctx context.Context, callbackID, text string) {
+	if callbackID == "" {
+		return
+	}
+	payload := map[string]any{"callback_query_id": callbackID}
+	if text != "" {
+		payload["text"] = text
+	}
+	if _, err := b.apiPost(ctx, "answerCallbackQuery", payload); err != nil {
+		b.logger().Printf("telegram: answerCallbackQuery: %s", b.scrubToken(err))
+	}
+}
+
+// setMyCommands registers the slash commands Telegram shows in its menu.
+func (b *TelegramBot) setMyCommands(ctx context.Context) error {
+	payload := map[string]any{"commands": []map[string]string{
+		{"command": "menu", "description": "меню управления"},
+		{"command": "routers", "description": "список роутеров"},
+		{"command": "add_router", "description": "добавить роутер"},
+		{"command": "help", "description": "справка"},
+	}}
+	_, err := b.apiPost(ctx, "setMyCommands", payload)
+	return err
 }
 
 func (b *TelegramBot) handleMessage(ctx context.Context, msg tgMessage) {
 	if !b.AllowedChats[msg.Chat.ID] {
 		return // silently ignore -- do not reveal that this bot exists to unlisted chats
 	}
-	if reply := b.dispatch(ctx, msg.Text); reply != "" {
+	text := strings.TrimSpace(msg.Text)
+	if b.handleWizardText(ctx, msg.Chat.ID, text) {
+		return
+	}
+	if text == "/start" || text == "/menu" {
+		b.sendMainMenu(ctx, msg.Chat.ID)
+		return
+	}
+	if reply := b.dispatch(ctx, text); reply != "" {
 		b.sendMessage(ctx, msg.Chat.ID, reply)
 	}
 }
 
-const helpText = `Команды:
+const helpText = `/menu — меню с кнопками (проще всего)
 /routers — список роутеров
 /add_router <id> [имя] — зарегистрировать роутер, получить строку agent configure
 /remove_router <id> — убрать роутер из реестра
@@ -211,7 +330,7 @@ func (b *TelegramBot) dispatch(ctx context.Context, text string) string {
 	cmd, args := fields[0], fields[1:]
 
 	switch cmd {
-	case "/start", "/help":
+	case "/help":
 		return helpText
 	case "/routers":
 		return b.listRouters()
@@ -292,15 +411,21 @@ func (b *TelegramBot) dispatchRemoveRouter(args []string) string {
 	return fmt.Sprintf("роутер %q убран из реестра. Агент на самом роутере не трогается.", args[0])
 }
 
-// agentConfigureHint returns the two commands to run on the router to
-// bind it to this control server.
-func (b *TelegramBot) agentConfigureHint(id, token string) string {
+// agentConfigureLines is the two-command block to run on a router to bind
+// it to this control server.
+func (b *TelegramBot) agentConfigureLines(id, token string) string {
 	url := b.ServerURL
 	if url == "" {
 		url = "https://<адрес-сервера>:8443"
 	}
-	return fmt.Sprintf("роутер %q добавлен.\n\nНа роутере выполните:\n  keenetic-xray agent configure %s %s %s %s\n  keenetic-xray agent enable",
-		id, url, id, b.Fingerprint, token)
+	return fmt.Sprintf("keenetic-xray agent configure %s %s %s %s\nkeenetic-xray agent enable",
+		url, id, b.Fingerprint, token)
+}
+
+// agentConfigureHint is what the bot replies with just after a router is
+// registered.
+func (b *TelegramBot) agentConfigureHint(id, token string) string {
+	return fmt.Sprintf("роутер %q добавлен.\n\nНа роутере выполните:\n%s", id, b.agentConfigureLines(id, token))
 }
 
 func (b *TelegramBot) dispatchSwitch(ctx context.Context, args []string) string {

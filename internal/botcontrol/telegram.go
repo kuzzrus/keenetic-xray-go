@@ -350,6 +350,7 @@ func (b *TelegramBot) setMyCommands(ctx context.Context) error {
 		{"command": "menu", "description": "меню управления"},
 		{"command": "routers", "description": "список роутеров"},
 		{"command": "add_router", "description": "добавить роутер"},
+		{"command": "setup", "description": "пошаговая настройка роутера"},
 		{"command": "help", "description": "справка"},
 	}}
 	_, err := b.apiPost(ctx, "setMyCommands", payload)
@@ -372,6 +373,9 @@ func (b *TelegramBot) handleMessage(ctx context.Context, msg tgMessage) {
 		case "/add_router":
 			b.cmdAddRouter(ctx, msg.Chat.ID, fields[1:])
 			return
+		case "/setup":
+			b.cmdSetupStart(ctx, msg.Chat.ID, fields[1:])
+			return
 		}
 	}
 	if reply := b.dispatch(ctx, text); reply != "" {
@@ -383,6 +387,7 @@ const helpText = `/menu — меню с кнопками (проще всего)
 /routers — список роутеров
 /add_router <id> [имя] — зарегистрировать роутер, получить строку agent configure
 /remove_router <id> — убрать роутер из реестра
+/setup <router> — пошаговая настройка: источник → выбор primary/backup
 
 Дальше первым аргументом идёт id роутера:
 /status <router>
@@ -627,17 +632,49 @@ func (b *TelegramBot) runRouterCommand(ctx context.Context, args []string, actio
 		return fmt.Sprintf("нет такого роутера %q. Список: /routers", routerID)
 	}
 
-	id, err := b.Store.Enqueue(routerID, action, cmdArgs)
-	if err != nil {
-		return fmt.Sprintf("не удалось поставить команду в очередь: %v", err)
+	out, answered, errText := b.enqueueAndWait(ctx, routerID, action, cmdArgs)
+	switch {
+	case errText != "" && !answered:
+		return fmt.Sprintf("%s: %s", routerID, errText)
+	case !answered:
+		return fmt.Sprintf("%s: команда в очереди, ещё не ответил — выполнится при следующем poll", routerID)
+	case errText != "":
+		return fmt.Sprintf("%s: ошибка: %s", routerID, errText)
+	default:
+		return fmt.Sprintf("%s: %s", routerID, out)
 	}
+}
 
+// enqueueAndWait queues one command and blocks up to resultTimeout for
+// the router to answer. answered is false on a queue error (errText set)
+// or a timeout (errText empty); on an answered command errText carries
+// Result.Err. The wizard uses this to chain steps.
+func (b *TelegramBot) enqueueAndWait(ctx context.Context, routerID, action string, args []string) (out string, answered bool, errText string) {
+	id, err := b.Store.Enqueue(routerID, action, args)
+	if err != nil {
+		return "", false, "не удалось поставить команду в очередь: " + err.Error()
+	}
 	result, ok := b.Store.AwaitResult(ctx, routerID, id, b.resultTimeout())
 	if !ok {
-		return fmt.Sprintf("команда в очереди (id %s), но %s ещё не ответил — выполнится при следующем poll", id, routerID)
+		return "", false, ""
 	}
-	if result.Err != "" {
-		return fmt.Sprintf("%s: ошибка: %s", routerID, result.Err)
+	return result.Output, true, result.Err
+}
+
+// parseProfileList turns profileList() output ("0: remark -- addr:port
+// [primary]\n1: ...") into the remark per profile index.
+func parseProfileList(s string) []string {
+	var out []string
+	for _, line := range strings.Split(strings.TrimSpace(s), "\n") {
+		i := strings.Index(line, ": ")
+		if i < 0 {
+			continue
+		}
+		rest := line[i+2:]
+		if j := strings.Index(rest, " -- "); j >= 0 {
+			rest = rest[:j]
+		}
+		out = append(out, strings.TrimSpace(rest))
 	}
-	return fmt.Sprintf("%s: %s", routerID, result.Output)
+	return out
 }

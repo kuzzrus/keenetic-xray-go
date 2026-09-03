@@ -113,17 +113,14 @@ allowlist, and the public URL routers dial) and generates the
 certificate. To reconfigure later, run `keenetic-xray-control-server
 setup` again and `systemctl restart keenetic-xray-control-server`.
 
-Routers are then registered from the Telegram chat itself — no restart,
-no config edit:
-
-```
-/add_router home-router Дом
-```
-
-The bot generates a bearer token, stores it, and replies with the exact
+Routers are then managed from the Telegram chat itself — no restart, no
+config edit. `/menu` opens a button UI (main menu → router list →
+per-router card with status / primary·backup switch / subscription /
+agent-install / delete). `➕ Добавить роутер` (or `/add_router
+home-router Дом`) registers one: the bot generates a bearer token,
+stores it, and replies with the exact
 `keenetic-xray agent configure <url> <id> <fingerprint> <token>` line to
-run on that router. `/remove_router <id>` unregisters one; `/routers`
-lists them.
+run on that router.
 
 <details>
 <summary>Manual setup (no installer)</summary>

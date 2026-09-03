@@ -13,47 +13,87 @@ import (
 )
 
 // fakeTelegram is a minimal stand-in for the real Telegram Bot API:
-// getUpdates returns one queued update at a time (then blanks until the
-// test pushes another), sendMessage records what was sent so the test can
-// assert on the bot's replies.
+// getUpdates returns queued updates once (then blanks until the test
+// pushes more); sendMessage / editMessageText record what the bot did so
+// tests can assert on replies and in-place menu edits.
 type fakeTelegram struct {
-	mu      sync.Mutex
-	updates []tgUpdate
-	sent    []sentMessage
+	mu       sync.Mutex
+	updates  []tgUpdate
+	sent     []sentMessage
+	edits    []sentMessage
+	nextMsg  int
+	updateID int64
 }
 
 type sentMessage struct {
-	ChatID int64
-	Text   string
+	ChatID    int64
+	MessageID int
+	Text      string
+	Buttons   []string // flattened callback_data of the inline keyboard, if any
+}
+
+func flattenKB(markup *inlineKeyboard) []string {
+	if markup == nil {
+		return nil
+	}
+	var out []string
+	for _, row := range markup.InlineKeyboard {
+		for _, btn := range row {
+			out = append(out, btn.CallbackData)
+		}
+	}
+	return out
+}
+
+func (m sentMessage) hasButton(data string) bool {
+	for _, b := range m.Buttons {
+		if b == data {
+			return true
+		}
+	}
+	return false
 }
 
 func newFakeTelegram(t *testing.T) (*httptest.Server, *fakeTelegram) {
 	t.Helper()
 	f := &fakeTelegram{}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/bot", http.NotFound) // unused, keeps path prefix explicit below
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/getUpdates"):
 			f.mu.Lock()
 			pending := f.updates
 			f.updates = nil
 			f.mu.Unlock()
-			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(tgGetUpdatesResponse{OK: true, Result: pending})
 		case strings.HasSuffix(r.URL.Path, "/sendMessage"):
 			var body struct {
-				ChatID int64  `json:"chat_id"`
-				Text   string `json:"text"`
+				ChatID      int64           `json:"chat_id"`
+				Text        string          `json:"text"`
+				ReplyMarkup *inlineKeyboard `json:"reply_markup"`
 			}
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			f.mu.Lock()
-			f.sent = append(f.sent, sentMessage{ChatID: body.ChatID, Text: body.Text})
+			f.nextMsg++
+			id := f.nextMsg
+			f.sent = append(f.sent, sentMessage{ChatID: body.ChatID, MessageID: id, Text: body.Text, Buttons: flattenKB(body.ReplyMarkup)})
 			f.mu.Unlock()
-			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{"message_id": id}})
+		case strings.HasSuffix(r.URL.Path, "/editMessageText"):
+			var body struct {
+				ChatID      int64           `json:"chat_id"`
+				MessageID   int             `json:"message_id"`
+				Text        string          `json:"text"`
+				ReplyMarkup *inlineKeyboard `json:"reply_markup"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			f.mu.Lock()
+			f.edits = append(f.edits, sentMessage{ChatID: body.ChatID, MessageID: body.MessageID, Text: body.Text, Buttons: flattenKB(body.ReplyMarkup)})
+			f.mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{"message_id": body.MessageID}})
+		default: // answerCallbackQuery, setMyCommands, ...
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
-		default:
-			http.NotFound(w, r)
 		}
 	})
 	srv := httptest.NewServer(mux)
@@ -64,8 +104,42 @@ func newFakeTelegram(t *testing.T) (*httptest.Server, *fakeTelegram) {
 func (f *fakeTelegram) push(chatID int64, text string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	nextID := int64(len(f.sent) + len(f.updates) + 1) // any strictly-increasing value works
-	f.updates = append(f.updates, tgUpdate{UpdateID: nextID, Message: &tgMessage{Chat: tgChat{ID: chatID}, Text: text}})
+	f.updateID++
+	f.updates = append(f.updates, tgUpdate{UpdateID: f.updateID, Message: &tgMessage{Chat: tgChat{ID: chatID}, Text: text}})
+}
+
+func (f *fakeTelegram) pushCallback(chatID int64, messageID int, data string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.updateID++
+	f.updates = append(f.updates, tgUpdate{
+		UpdateID: f.updateID,
+		CallbackQuery: &tgCallbackQuery{
+			ID:      fmt.Sprintf("cb-%d", f.updateID),
+			Message: &tgMessage{MessageID: messageID, Chat: tgChat{ID: chatID}},
+			Data:    data,
+		},
+	})
+}
+
+func (f *fakeTelegram) lastSent(t *testing.T) sentMessage {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.sent) == 0 {
+		t.Fatal("no message was sent")
+	}
+	return f.sent[len(f.sent)-1]
+}
+
+func (f *fakeTelegram) lastEdit(t *testing.T) sentMessage {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.edits) == 0 {
+		t.Fatal("no message was edited")
+	}
+	return f.edits[len(f.edits)-1]
 }
 
 func (f *fakeTelegram) sentTexts() []string {
@@ -78,23 +152,45 @@ func (f *fakeTelegram) sentTexts() []string {
 	return out
 }
 
-func (f *fakeTelegram) waitForReply(t *testing.T, timeout time.Duration) string {
+// waitFor polls fn every 10ms until it returns a non-empty string or the
+// timeout elapses.
+func (f *fakeTelegram) waitFor(t *testing.T, timeout time.Duration, what string, fn func() string) string {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		f.mu.Lock()
-		n := len(f.sent)
-		f.mu.Unlock()
-		if n > 0 {
-			f.mu.Lock()
-			text := f.sent[n-1].Text
-			f.mu.Unlock()
-			return text
+		if s := fn(); s != "" {
+			return s
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("timed out waiting for a bot reply")
+	t.Fatalf("timed out waiting for %s", what)
 	return ""
+}
+
+func (f *fakeTelegram) waitForReply(t *testing.T, timeout time.Duration) string {
+	t.Helper()
+	return f.waitFor(t, timeout, "a bot reply", func() string {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if len(f.sent) == 0 {
+			return ""
+		}
+		return f.sent[len(f.sent)-1].Text
+	})
+}
+
+func (f *fakeTelegram) waitForEditContaining(t *testing.T, timeout time.Duration, want string) string {
+	t.Helper()
+	return f.waitFor(t, timeout, "an edit containing "+want, func() string {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		for i := len(f.edits) - 1; i >= 0; i-- {
+			if strings.Contains(f.edits[i].Text, want) {
+				return f.edits[i].Text
+			}
+		}
+		return ""
+	})
 }
 
 func newBotStore(t *testing.T) *Store {

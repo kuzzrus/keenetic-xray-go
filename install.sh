@@ -8,7 +8,9 @@
 # handing it to opkg.
 #
 # Usage (on the router):
-#   wget -qO- https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/install.sh | sh
+# (curl, not wget: some routers' busybox wget can't fetch https:// at all.
+#  opkg update && opkg install curl if it's missing.)
 #
 # Options:
 #   --xray-core=vendored   force this project's size-optimised xray-core build

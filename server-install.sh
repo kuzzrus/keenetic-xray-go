@@ -13,7 +13,7 @@
 # on a router.
 #
 # Usage (on the VPS, as root):
-#   wget -qO- https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/server-install.sh | sudo sh
+#   curl -fsSL https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/server-install.sh | sudo sh
 set -eu
 
 REPO="kuzzrus/keenetic-xray-go"

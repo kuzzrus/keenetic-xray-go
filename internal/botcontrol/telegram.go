@@ -46,6 +46,23 @@ type TelegramBot struct {
 	clientOnce sync.Once
 	wizardMu   sync.Mutex
 	wizards    map[int64]*wizState // per-chat multi-step dialog state (e.g. /add_router)
+
+	flapMu sync.Mutex
+	flap   map[string]*flapWindow // per-router failover-notification rate state
+}
+
+// Flap-mute thresholds: if a router produces flapThreshold "failover"
+// events within flapWindowDur, further ones are held for flapMuteDur.
+// "recovered"/"daemon_start" events always get through and clear the mute.
+const (
+	flapWindowDur = 15 * time.Minute
+	flapThreshold = 4
+	flapMuteDur   = 30 * time.Minute
+)
+
+type flapWindow struct {
+	events     []time.Time
+	mutedUntil time.Time
 }
 
 type tgUpdate struct {
@@ -168,9 +185,72 @@ func (b *TelegramBot) notify(routerID, body string) {
 
 // NotifyEvent DMs every allowed chat about an unsolicited router event
 // (a failover switch, the daemon starting). Called from the control
-// server's /agent/event handler.
+// server's /agent/event handler. "failover" events are rate-limited per
+// router so a flapping primary can't bury the chat; "recovered" and
+// "daemon_start" always get through and reset that limiter.
 func (b *TelegramBot) NotifyEvent(routerID string, ev Event) {
+	if ev.Kind == "recovered" || ev.Kind == "daemon_start" {
+		b.clearFlap(routerID)
+		b.notify(routerID, ev.Text)
+		return
+	}
+	if ev.Kind == "failover" {
+		drop, notice := b.flapCheck(routerID)
+		switch {
+		case drop:
+			return
+		case notice != "":
+			b.notify(routerID, notice)
+		default:
+			b.notify(routerID, ev.Text)
+		}
+		return
+	}
 	b.notify(routerID, ev.Text)
+}
+
+// flapCheck records a failover event for routerID and decides what to do
+// with it: drop it (already muted), replace it with a one-time mute
+// notice (threshold just crossed), or let it through (notice == "").
+func (b *TelegramBot) flapCheck(routerID string) (drop bool, notice string) {
+	now := time.Now()
+	b.flapMu.Lock()
+	defer b.flapMu.Unlock()
+	if b.flap == nil {
+		b.flap = map[string]*flapWindow{}
+	}
+	w := b.flap[routerID]
+	if w == nil {
+		w = &flapWindow{}
+		b.flap[routerID] = w
+	}
+	if now.Before(w.mutedUntil) {
+		return true, ""
+	}
+
+	cutoff := now.Add(-flapWindowDur)
+	kept := w.events[:0]
+	for _, t := range w.events {
+		if t.After(cutoff) {
+			kept = append(kept, t)
+		}
+	}
+	w.events = append(kept, now)
+
+	if len(w.events) >= flapThreshold {
+		w.mutedUntil = now.Add(flapMuteDur)
+		w.events = nil
+		return false, "⚠️ нестабильно — частые переключения primary↔backup. Уведомления о failover приглушены на " + shortDur(flapMuteDur) + "."
+	}
+	return false, ""
+}
+
+func (b *TelegramBot) clearFlap(routerID string) {
+	b.flapMu.Lock()
+	if b.flap != nil {
+		delete(b.flap, routerID)
+	}
+	b.flapMu.Unlock()
 }
 
 // NotifyOffline DMs every allowed chat when a router stops polling, and

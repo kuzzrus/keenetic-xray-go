@@ -276,17 +276,19 @@ func shortDur(d time.Duration) string {
 // describeTransition glosses a state change in one Russian phrase.
 func describeTransition(t failover.Transition) string {
 	switch {
-	case t.To == failover.StateActiveBackup && t.From == failover.StateTestingRecovery:
-		return "откат на backup (возврат не подтвердился)"
+	case t.To == failover.StateActiveBackup && t.From == failover.StateConfirmingRecovery:
+		return "откат на backup — primary не удержался"
 	case t.To == failover.StateActiveBackup:
 		return "переключение на backup"
+	case t.To == failover.StateConfirmingRecovery:
+		return "переключился на primary, проверяю"
 	case t.To == failover.StateActivePrimary:
 		return "возврат на primary"
 	case t.To == failover.StateTestingRecovery:
 		return "проверка восстановления primary"
 	case t.To == failover.StateCooldown && t.From == failover.StateActivePrimary:
 		return "primary недоступен — уход на backup"
-	case t.To == failover.StateCooldown && t.From == failover.StateTestingRecovery:
+	case t.To == failover.StateCooldown && t.From == failover.StateConfirmingRecovery:
 		return "primary восстановился"
 	case t.To == failover.StateCooldown:
 		return "пауза после переключения"

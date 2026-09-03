@@ -107,15 +107,15 @@ func TestMachine_NormalFailoverAndRecovery(t *testing.T) {
 	assertState(t, m, StateTestingRecovery)
 
 	// Isolated recovery test succeeds 3 times -> switch back to primary,
-	// confirmation succeeds -> cooldown -> ActivePrimary.
+	// then confirm over the next tick -> cooldown -> ActivePrimary.
 	actions.isolatedErr = nil
-	actions.liveErr = nil // the post-switch confirmation check
+	actions.liveErr = nil
 	m.Tick(ctx)
 	assertState(t, m, StateTestingRecovery)
 	m.Tick(ctx)
 	assertState(t, m, StateTestingRecovery)
-	m.Tick(ctx)
-	assertState(t, m, StateCooldown)
+	m.Tick(ctx) // 3rd isolated success -> switch to primary, start confirming
+	assertState(t, m, StateConfirmingRecovery)
 
 	if len(actions.switchCalls) != 2 || actions.switchCalls[1] != RolePrimary {
 		t.Fatalf("switchCalls = %v, want [RoleBackup, RolePrimary]", actions.switchCalls)
@@ -124,6 +124,8 @@ func TestMachine_NormalFailoverAndRecovery(t *testing.T) {
 		t.Fatalf("stopPretestN = %d, want 1", actions.stopPretestN)
 	}
 
+	m.Tick(ctx) // confirmation probe succeeds -> cooldown
+	assertState(t, m, StateCooldown)
 	m.Tick(ctx)
 	assertState(t, m, StateCooldown)
 	m.Tick(ctx)
@@ -187,10 +189,19 @@ func TestMachine_RollbackOnFailedRecoveryConfirmation(t *testing.T) {
 	ctx := context.Background()
 
 	actions.isolatedErr = nil
-	actions.liveErr = errProbe // the post-switch confirmation will fail
+	actions.liveErr = errProbe // the post-switch confirmation will keep failing
 	m.Tick(ctx)
 	m.Tick(ctx)
-	m.Tick(ctx) // 3rd success -> attempts switch, confirmation fails -> rollback
+	m.Tick(ctx) // 3rd isolated success -> switch to primary, start confirming
+	assertState(t, m, StateConfirmingRecovery)
+
+	// Confirmation must fail FailuresRequired times in a row before rollback
+	// -- a freshly restarted xray gets a few ticks to come up.
+	m.Tick(ctx)
+	assertState(t, m, StateConfirmingRecovery)
+	m.Tick(ctx)
+	assertState(t, m, StateConfirmingRecovery)
+	m.Tick(ctx) // 3rd confirm failure -> rollback
 
 	assertState(t, m, StateActiveBackup)
 	if len(actions.switchCalls) != 2 {
@@ -212,6 +223,36 @@ func TestMachine_RollbackOnFailedRecoveryConfirmation(t *testing.T) {
 	assertState(t, m, StateTestingRecovery)
 }
 
+// TestMachine_ConfirmingRecovery_ToleratesStartupProbeFailures is the
+// regression test for the recovery flap: a single live-probe failure
+// right after the recovery switch (xray still starting) must NOT roll
+// back. Only FailuresRequired in a row does.
+func TestMachine_ConfirmingRecovery_ToleratesStartupProbeFailures(t *testing.T) {
+	actions := &fakeActions{}
+	m := NewMachine(testConfig(), actions, newFakeClock(), StateTestingRecovery)
+	ctx := context.Background()
+
+	actions.isolatedErr = nil
+	m.Tick(ctx)
+	m.Tick(ctx)
+	m.Tick(ctx) // switch to primary -> CONFIRMING_RECOVERY
+	assertState(t, m, StateConfirmingRecovery)
+
+	// Two failed confirm probes (xray warming up), then it comes good.
+	actions.liveErr = errProbe
+	m.Tick(ctx)
+	assertState(t, m, StateConfirmingRecovery)
+	m.Tick(ctx)
+	assertState(t, m, StateConfirmingRecovery)
+	actions.liveErr = nil
+	m.Tick(ctx) // confirm succeeds -> cooldown, no rollback
+	assertState(t, m, StateCooldown)
+
+	if len(actions.switchCalls) != 1 || actions.switchCalls[0] != RolePrimary {
+		t.Fatalf("switchCalls = %v, want a single switch to primary (no rollback)", actions.switchCalls)
+	}
+}
+
 func TestMachine_ZeroCooldownSkipsImmediately(t *testing.T) {
 	actions := &fakeActions{}
 	cfg := testConfig()
@@ -229,11 +270,12 @@ func TestMachine_ZeroCooldownSkipsImmediately(t *testing.T) {
 
 func TestState_String(t *testing.T) {
 	cases := map[State]string{
-		StateActivePrimary:   "ACTIVE_PRIMARY",
-		StateActiveBackup:    "ACTIVE_BACKUP",
-		StateTestingRecovery: "TESTING_RECOVERY",
-		StateCooldown:        "COOLDOWN",
-		State(99):            "UNKNOWN",
+		StateActivePrimary:      "ACTIVE_PRIMARY",
+		StateActiveBackup:       "ACTIVE_BACKUP",
+		StateTestingRecovery:    "TESTING_RECOVERY",
+		StateCooldown:           "COOLDOWN",
+		StateConfirmingRecovery: "CONFIRMING_RECOVERY",
+		State(99):               "UNKNOWN",
 	}
 	for state, want := range cases {
 		if got := state.String(); got != want {

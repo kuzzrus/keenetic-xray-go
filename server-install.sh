@@ -71,8 +71,14 @@ echo "server-install: installing the systemd unit"
 fetch "$UNIT_URL" "$UNIT_PATH"
 systemctl daemon-reload
 
-echo "server-install: running the setup wizard"
-if [ -e /dev/tty ]; then
+# Re-running the installer is the update path: the new binary is already
+# in place above. Only run the wizard on a first install (no config yet);
+# otherwise keep the existing config untouched -- reconfigure later with
+# `keenetic-xray-control-server setup`.
+if [ -s "${CONFIG_DIR}/config.json" ]; then
+    echo "server-install: config already present -- keeping it (run 'keenetic-xray-control-server setup' to change it)"
+elif [ -e /dev/tty ]; then
+    echo "server-install: running the setup wizard"
     KEENETIC_XRAY_CS_CONFIG="${CONFIG_DIR}/config.json" "$BIN_PATH" setup </dev/tty
 else
     echo "server-install: no controlling terminal -- finish manually:" >&2
@@ -81,14 +87,18 @@ else
     exit 0
 fi
 
-# setup ran as root; hand ownership to the service user.
 chown -R "${SVC_USER}:${SVC_USER}" "$CONFIG_DIR" "$STATE_DIR"
 
-echo "server-install: enabling the service"
-systemctl enable --now keenetic-xray-control-server
+# `enable` (persist) + `restart` (start if stopped, replace the running
+# process if not) -- `enable --now` alone would leave an already-running
+# old binary in place on an update.
+echo "server-install: (re)starting the service"
+systemctl enable keenetic-xray-control-server >/dev/null 2>&1 || true
+systemctl restart keenetic-xray-control-server
 
 if systemctl is-active --quiet keenetic-xray-control-server; then
-    echo "server-install: keenetic-xray-control-server is running"
+    VERSION="$("$BIN_PATH" version 2>/dev/null || echo '?')"
+    echo "server-install: keenetic-xray-control-server $VERSION is running"
 else
     echo "server-install: the service did not come up; recent logs:" >&2
     journalctl -u keenetic-xray-control-server -n 20 --no-pager >&2 || true

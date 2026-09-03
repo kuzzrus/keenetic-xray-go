@@ -170,7 +170,7 @@ config.json`.
 ### Installer (systemd hosts)
 
 ```sh
-wget -qO- https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/server-install.sh | sudo sh
+curl -fsSL https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/server-install.sh | sudo sh
 ```
 
 `server-install.sh` downloads the latest release binary for the host's

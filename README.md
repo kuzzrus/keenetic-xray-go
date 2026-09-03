@@ -40,8 +40,12 @@ via `opkg` itself and installs the matching `.ipk` from the latest
 release:
 
 ```sh
-wget -qO- https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/install.sh | sh
 ```
+
+`curl`, not `wget`: some Keenetic routers ship a busybox `wget` that
+can't fetch `https://` at all (`not an http or ftp url`). If `curl` is
+missing, `opkg update && opkg install curl` first.
 
 ### Manual install
 
@@ -116,7 +120,7 @@ design.
 Install it on a systemd host (as root):
 
 ```sh
-wget -qO- https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/server-install.sh | sudo sh
+curl -fsSL https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/server-install.sh | sudo sh
 ```
 
 This downloads the latest release binary for the host's architecture,

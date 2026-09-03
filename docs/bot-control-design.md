@@ -168,7 +168,12 @@ ones are text-only:
 /sub_list <router>
 /sub_setprimary <router> <index>
 /sub_setbackup <router> <index>
+/proxy0 <router> [show|on|off]   point Keenetic's Proxy0 at the local inbound (on/off also rebind xray)
+/restart <router>               restart the failover daemon (detached; the replacement emits daemon_start)
+/ensure_core <router>           (re)install the xray-core binary -- vendored build, opkg fallback
 ```
+
+`proxy0 on`/`off` and `restart` are also router-card buttons.
 
 A text command enqueues and then blocks up to `ResultTimeout` for the
 router to answer before replying (an online router, default poll interval

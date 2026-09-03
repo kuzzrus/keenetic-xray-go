@@ -125,6 +125,7 @@ func cmdDaemon(args []string) error {
 		handler := &botcontrol.RouterHandler{
 			Daemon: d, Config: cfg, ConfigPath: configPath(),
 			XrayBinary: xrayBinaryPath(), OptPath: optPath(),
+			InitScript: initScript,
 		}
 		go func() {
 			if err := botcontrol.Run(ctx, opts, handler); err != nil && ctx.Err() == nil {

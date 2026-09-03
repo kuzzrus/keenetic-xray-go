@@ -48,6 +48,8 @@ func routerCardKB(id string) inlineKeyboard {
 		{{Text: "⬆️ primary", CallbackData: "act:sw_pri:" + id}, {Text: "⬇️ backup", CallbackData: "act:sw_bak:" + id}},
 		{{Text: "📋 Профили", CallbackData: "act:profiles:" + id}},
 		{{Text: "🔄 Подписка", CallbackData: "act:sub_refresh:" + id}, {Text: "📄 Список", CallbackData: "act:sub_list:" + id}},
+		{{Text: "🌐 Proxy0 вкл", CallbackData: "act:p0_on:" + id}, {Text: "🌐 Proxy0 выкл", CallbackData: "act:p0_off:" + id}},
+		{{Text: "♻️ Рестарт демона", CallbackData: "act:restart:" + id}},
 		{{Text: "📦 Установка агента", CallbackData: "install:" + id}},
 		{{Text: "🗑 Удалить роутер", CallbackData: "del:" + id}},
 		{{Text: "⬅️ Роутеры", CallbackData: "routers"}, {Text: "🏠 Меню", CallbackData: "menu"}},
@@ -80,6 +82,12 @@ func callbackAction(name string) string {
 		return ActionSubRefresh
 	case "sub_list":
 		return ActionSubList
+	case "p0_on":
+		return ActionProxy0On
+	case "p0_off":
+		return ActionProxy0Off
+	case "restart":
+		return ActionDaemonRestart
 	}
 	return ""
 }

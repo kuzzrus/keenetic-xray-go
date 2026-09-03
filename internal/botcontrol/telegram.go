@@ -393,7 +393,10 @@ const helpText = `/menu — меню с кнопками (проще всего)
 /sub_refresh <router>
 /sub_list <router>
 /sub_setprimary <router> <index>
-/sub_setbackup <router> <index>`
+/sub_setbackup <router> <index>
+/proxy0 <router> [show|on|off]
+/restart <router> — перезапустить демон
+/ensure_core <router> — доустановить ядро xray`
 
 func (b *TelegramBot) dispatch(ctx context.Context, text string) string {
 	fields := strings.Fields(text)
@@ -427,9 +430,35 @@ func (b *TelegramBot) dispatch(ctx context.Context, text string) string {
 		return b.dispatchSubSetRole(ctx, args, ActionSubSetPrimary)
 	case "/sub_setbackup":
 		return b.dispatchSubSetRole(ctx, args, ActionSubSetBackup)
+	case "/proxy0":
+		return b.dispatchProxy0(ctx, args)
+	case "/restart":
+		return b.runRouterCommand(ctx, args, ActionDaemonRestart, nil)
+	case "/ensure_core":
+		return b.runRouterCommand(ctx, args, ActionEnsureCore, nil)
 	default:
 		return "неизвестная команда. Откройте /menu или /help"
 	}
+}
+
+// dispatchProxy0 routes /proxy0 <router> [show|on|off]; default is show.
+func (b *TelegramBot) dispatchProxy0(ctx context.Context, args []string) string {
+	if len(args) < 1 {
+		return "формат: /proxy0 <роутер> [show|on|off]"
+	}
+	action := ActionProxy0Show
+	if len(args) >= 2 {
+		switch args[1] {
+		case "show":
+		case "on":
+			action = ActionProxy0On
+		case "off":
+			action = ActionProxy0Off
+		default:
+			return "формат: /proxy0 <роутер> [show|on|off]"
+		}
+	}
+	return b.runRouterCommand(ctx, args[:1], action, nil)
 }
 
 // normalizeCommand strips the "@botname" suffix Telegram appends to

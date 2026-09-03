@@ -30,6 +30,7 @@ type sentMessage struct {
 	MessageID int
 	Text      string
 	Buttons   []string // flattened callback_data of the inline keyboard, if any
+	ParseMode string
 }
 
 func flattenKB(markup *inlineKeyboard) []string {
@@ -71,13 +72,14 @@ func newFakeTelegram(t *testing.T) (*httptest.Server, *fakeTelegram) {
 			var body struct {
 				ChatID      int64           `json:"chat_id"`
 				Text        string          `json:"text"`
+				ParseMode   string          `json:"parse_mode"`
 				ReplyMarkup *inlineKeyboard `json:"reply_markup"`
 			}
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			f.mu.Lock()
 			f.nextMsg++
 			id := f.nextMsg
-			f.sent = append(f.sent, sentMessage{ChatID: body.ChatID, MessageID: id, Text: body.Text, Buttons: flattenKB(body.ReplyMarkup)})
+			f.sent = append(f.sent, sentMessage{ChatID: body.ChatID, MessageID: id, Text: body.Text, Buttons: flattenKB(body.ReplyMarkup), ParseMode: body.ParseMode})
 			f.mu.Unlock()
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{"message_id": id}})
 		case strings.HasSuffix(r.URL.Path, "/editMessageText"):
@@ -286,6 +288,12 @@ func TestTelegramBot_RoutersCommandWithBotSuffix(t *testing.T) {
 	}
 }
 
+func TestHTMLPre(t *testing.T) {
+	if got := htmlPre("cmd <адрес> & x"); got != "<pre>cmd &lt;адрес&gt; &amp; x</pre>" {
+		t.Errorf("htmlPre = %q", got)
+	}
+}
+
 func TestBot_ServerURL(t *testing.T) {
 	// public_url wins outright.
 	b := &TelegramBot{ServerURL: "https://vps.example.com:8443", ListenAddr: ":9999"}
@@ -343,6 +351,14 @@ func TestTelegramBot_AddRouterReturnsConfigureLine(t *testing.T) {
 	want := "keenetic-xray agent configure https://vps.example.com:8443 home deadbeef " + tok
 	if !strings.Contains(reply, want) {
 		t.Errorf("reply = %q\nwant it to contain %q", reply, want)
+	}
+	// The command must be a separately-copyable <pre> block (HTML mode).
+	msg := fake.lastSent(t)
+	if msg.ParseMode != "HTML" {
+		t.Errorf("parse_mode = %q, want HTML", msg.ParseMode)
+	}
+	if !strings.Contains(msg.Text, "<pre>") || !strings.Contains(msg.Text, "</pre>") {
+		t.Errorf("reply not wrapped in <pre>: %q", msg.Text)
 	}
 }
 

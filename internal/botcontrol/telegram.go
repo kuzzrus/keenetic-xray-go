@@ -222,12 +222,25 @@ func (b *TelegramBot) sendMessage(ctx context.Context, chatID int64, text string
 	b.sendMessageKB(ctx, chatID, text, inlineKeyboard{})
 }
 
-// sendMessageKB sends text with an optional inline keyboard and returns
-// the new message's ID (0 if the send failed).
+// sendMessageKB sends plain text with an optional inline keyboard and
+// returns the new message's ID (0 if the send failed).
 func (b *TelegramBot) sendMessageKB(ctx context.Context, chatID int64, text string, kb inlineKeyboard) int {
+	return b.send(ctx, chatID, text, kb, "")
+}
+
+// sendMessageHTML sends text parsed as Telegram HTML -- used for <pre>
+// blocks so the client shows a per-block copy button.
+func (b *TelegramBot) sendMessageHTML(ctx context.Context, chatID int64, text string, kb inlineKeyboard) int {
+	return b.send(ctx, chatID, text, kb, "HTML")
+}
+
+func (b *TelegramBot) send(ctx context.Context, chatID int64, text string, kb inlineKeyboard, parseMode string) int {
 	payload := map[string]any{"chat_id": chatID, "text": text}
 	if len(kb.InlineKeyboard) > 0 {
 		payload["reply_markup"] = kb
+	}
+	if parseMode != "" {
+		payload["parse_mode"] = parseMode
 	}
 	data, err := b.apiPost(ctx, "sendMessage", payload)
 	if err != nil {
@@ -241,6 +254,13 @@ func (b *TelegramBot) sendMessageKB(ctx context.Context, chatID int64, text stri
 	}
 	_ = json.Unmarshal(data, &out)
 	return out.Result.MessageID
+}
+
+// htmlPre wraps s in a Telegram <pre> block (monospace, own copy button),
+// escaping the three characters that matter for HTML parse mode.
+func htmlPre(s string) string {
+	esc := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(s)
+	return "<pre>" + esc + "</pre>"
 }
 
 // editMessageText replaces an existing message's text and keyboard in
@@ -305,6 +325,9 @@ func (b *TelegramBot) handleMessage(ctx context.Context, msg tgMessage) {
 		case "/start", "/menu":
 			b.sendMainMenu(ctx, msg.Chat.ID)
 			return
+		case "/add_router":
+			b.cmdAddRouter(ctx, msg.Chat.ID, fields[1:])
+			return
 		}
 	}
 	if reply := b.dispatch(ctx, text); reply != "" {
@@ -339,8 +362,6 @@ func (b *TelegramBot) dispatch(ctx context.Context, text string) string {
 		return helpText
 	case "/routers":
 		return b.listRouters()
-	case "/add_router":
-		return b.dispatchAddRouter(args)
 	case "/remove_router":
 		return b.dispatchRemoveRouter(args)
 	case "/status":
@@ -399,20 +420,35 @@ func (b *TelegramBot) listRouters() string {
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-func (b *TelegramBot) dispatchAddRouter(args []string) string {
+// cmdAddRouter registers a router and sends back a short line plus the
+// two agent-configure commands in their own copyable <pre> block. It
+// sends directly (rather than returning a string) so the command block
+// can carry HTML parse mode.
+func (b *TelegramBot) cmdAddRouter(ctx context.Context, chatID int64, args []string) {
 	if len(args) < 1 || args[0] == "" {
-		return "формат: /add_router <id> [имя]"
+		b.sendMessage(ctx, chatID, "формат: /add_router <id> [имя]")
+		return
 	}
 	id := args[0]
 	if !ValidRouterID(id) {
-		return "id роутера: латиница, цифры, _ или -, до 64 символов"
+		b.sendMessage(ctx, chatID, "id роутера: латиница, цифры, _ или -, до 64 символов")
+		return
 	}
-	name := strings.Join(args[1:], " ")
-	token, err := b.Store.AddRouter(id, name)
+	token, err := b.Store.AddRouter(id, strings.Join(args[1:], " "))
 	if err != nil {
-		return fmt.Sprintf("не добавлено: %v", err)
+		b.sendMessage(ctx, chatID, fmt.Sprintf("не добавлено: %v", err))
+		return
 	}
-	return b.agentConfigureHint(id, token)
+	b.sendConfigureHint(ctx, chatID, id, token)
+}
+
+// sendConfigureHint posts the "run this on the router" block: one line of
+// context, then the commands alone in a <pre> block so Telegram shows a
+// copy button on the block itself.
+func (b *TelegramBot) sendConfigureHint(ctx context.Context, chatID int64, id, token string) {
+	b.sendMessageHTML(ctx, chatID,
+		fmt.Sprintf("Роутер %s — выполните на нём:\n%s", id, htmlPre(b.agentConfigureLines(id, token))),
+		routerCardKB(id))
 }
 
 func (b *TelegramBot) dispatchRemoveRouter(args []string) string {
@@ -471,12 +507,6 @@ func detectOutboundIP() string {
 		return addr.IP.String()
 	}
 	return ""
-}
-
-// agentConfigureHint is what the bot replies with just after a router is
-// registered.
-func (b *TelegramBot) agentConfigureHint(id, token string) string {
-	return fmt.Sprintf("роутер %q добавлен.\n\nНа роутере выполните:\n%s", id, b.agentConfigureLines(id, token))
 }
 
 func (b *TelegramBot) dispatchSwitch(ctx context.Context, args []string) string {

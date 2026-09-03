@@ -82,7 +82,7 @@ func (b *TelegramBot) handleWizardText(ctx context.Context, chatID int64, text s
 			b.sendMessage(ctx, chatID, fmt.Sprintf("не добавлено: %v", err))
 			return true
 		}
-		b.sendMessageKB(ctx, chatID, b.agentConfigureHint(st.routerID, token), routerCardKB(st.routerID))
+		b.sendConfigureHint(ctx, chatID, st.routerID, token)
 		return true
 	}
 

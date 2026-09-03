@@ -135,7 +135,7 @@ Everything the menu does is also a text command, and a few argument-taking
 ones are text-only:
 
 ```
-/add_router <id> [name]    register a router; the bot replies with its agent configure line
+/add_router <id> [name]    register a router; the bot replies with its agent configure commands in a copyable <pre> block
 /remove_router <id>        unregister a router (the agent on the router is left alone)
 /routers                   list registered routers
 /status <router>

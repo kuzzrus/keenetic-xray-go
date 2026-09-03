@@ -262,6 +262,42 @@ func TestTelegramBot_Help(t *testing.T) {
 	}
 }
 
+func TestTelegramBot_MenuCommandWithBotSuffix(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: newBotStore(t), APIBase: srv.URL}
+	runBotInBackground(t, bot)
+
+	// Telegram appends @botname to commands in group chats.
+	fake.push(1, "/menu@keenetic_bot")
+	fake.waitForReply(t, 3*time.Second)
+	if !fake.lastSent(t).hasButton("routers") {
+		t.Errorf("/menu@bot did not open the menu: %v", fake.lastSent(t))
+	}
+}
+
+func TestTelegramBot_RoutersCommandWithBotSuffix(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: newBotStore(t), APIBase: srv.URL}
+	runBotInBackground(t, bot)
+
+	fake.push(1, "/routers@keenetic_bot")
+	if reply := fake.waitForReply(t, 3*time.Second); !strings.Contains(reply, "/add_router") {
+		t.Errorf("/routers@bot = %q", reply)
+	}
+}
+
+func TestTelegramBot_UnknownCommandIsRussian(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: newBotStore(t), APIBase: srv.URL}
+	runBotInBackground(t, bot)
+
+	fake.push(1, "/nope")
+	reply := fake.waitForReply(t, 3*time.Second)
+	if !strings.Contains(reply, "неизвестная команда") || !strings.Contains(reply, "/menu") {
+		t.Errorf("unknown-command reply = %q", reply)
+	}
+}
+
 func TestTelegramBot_AddRouterReturnsConfigureLine(t *testing.T) {
 	srv, fake := newFakeTelegram(t)
 	store := newBotStore(t)
@@ -361,7 +397,7 @@ func TestTelegramBot_UnknownRouterRejected(t *testing.T) {
 
 	fake.push(1, "/status router-99")
 	reply := fake.waitForReply(t, 3*time.Second)
-	if !strings.Contains(reply, "unknown router") {
+	if !strings.Contains(reply, "нет такого роутера") {
 		t.Errorf("reply = %q, want an unknown-router message", reply)
 	}
 }
@@ -418,7 +454,7 @@ func TestTelegramBot_TimesOutWhenRouterNeverAnswers(t *testing.T) {
 
 	fake.push(1, "/status router-1")
 	reply := fake.waitForReply(t, 3*time.Second)
-	if !strings.Contains(reply, "hasn't answered yet") {
+	if !strings.Contains(reply, "ещё не ответил") {
 		t.Errorf("reply = %q, want a not-answered-yet message", reply)
 	}
 }
@@ -469,7 +505,7 @@ func TestTelegramBot_SwitchInvalidRoleRejectedWithoutEnqueue(t *testing.T) {
 
 	fake.push(1, "/switch router-1 sideways")
 	reply := fake.waitForReply(t, 3*time.Second)
-	if !strings.Contains(reply, "usage") {
+	if !strings.Contains(reply, "формат") {
 		t.Errorf("reply = %q, want a usage message", reply)
 	}
 	if n := store.PendingCount("router-1"); n != 0 {

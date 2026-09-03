@@ -298,9 +298,12 @@ func (b *TelegramBot) handleMessage(ctx context.Context, msg tgMessage) {
 	if b.handleWizardText(ctx, msg.Chat.ID, text) {
 		return
 	}
-	if text == "/start" || text == "/menu" {
-		b.sendMainMenu(ctx, msg.Chat.ID)
-		return
+	if fields := strings.Fields(text); len(fields) > 0 {
+		switch normalizeCommand(fields[0]) {
+		case "/start", "/menu":
+			b.sendMainMenu(ctx, msg.Chat.ID)
+			return
+		}
 	}
 	if reply := b.dispatch(ctx, text); reply != "" {
 		b.sendMessage(ctx, msg.Chat.ID, reply)
@@ -327,7 +330,7 @@ func (b *TelegramBot) dispatch(ctx context.Context, text string) string {
 	if len(fields) == 0 {
 		return ""
 	}
-	cmd, args := fields[0], fields[1:]
+	cmd, args := normalizeCommand(fields[0]), fields[1:]
 
 	switch cmd {
 	case "/help":
@@ -355,8 +358,17 @@ func (b *TelegramBot) dispatch(ctx context.Context, text string) string {
 	case "/sub_setbackup":
 		return b.dispatchSubSetRole(ctx, args, ActionSubSetBackup)
 	default:
-		return "unknown command; send /help"
+		return "неизвестная команда. Откройте /menu или /help"
 	}
+}
+
+// normalizeCommand strips the "@botname" suffix Telegram appends to
+// commands sent in group chats (e.g. "/menu@my_bot" -> "/menu").
+func normalizeCommand(cmd string) string {
+	if i := strings.IndexByte(cmd, '@'); i > 0 {
+		return cmd[:i]
+	}
+	return cmd
 }
 
 func (b *TelegramBot) listRouters() string {
@@ -430,7 +442,7 @@ func (b *TelegramBot) agentConfigureHint(id, token string) string {
 
 func (b *TelegramBot) dispatchSwitch(ctx context.Context, args []string) string {
 	if len(args) != 2 {
-		return "usage: /switch <router> primary|backup"
+		return "формат: /switch <роутер> primary|backup"
 	}
 	switch args[1] {
 	case "primary":
@@ -438,23 +450,23 @@ func (b *TelegramBot) dispatchSwitch(ctx context.Context, args []string) string 
 	case "backup":
 		return b.runRouterCommand(ctx, args[:1], ActionSwitchBackup, nil)
 	default:
-		return "usage: /switch <router> primary|backup"
+		return "формат: /switch <роутер> primary|backup"
 	}
 }
 
 func (b *TelegramBot) dispatchSubSetURL(ctx context.Context, args []string) string {
 	if len(args) < 2 {
-		return "usage: /sub_seturl <router> <url>"
+		return "формат: /sub_seturl <роутер> <url>"
 	}
 	return b.runRouterCommand(ctx, args[:1], ActionSubSetURL, []string{args[1]})
 }
 
 func (b *TelegramBot) dispatchSubSetRole(ctx context.Context, args []string, action string) string {
 	if len(args) != 2 {
-		return "usage: /sub_setprimary|/sub_setbackup <router> <index>"
+		return "формат: /sub_setprimary|/sub_setbackup <роутер> <индекс>"
 	}
 	if _, err := strconv.Atoi(args[1]); err != nil {
-		return fmt.Sprintf("invalid index %q", args[1])
+		return fmt.Sprintf("неверный индекс %q", args[1])
 	}
 	return b.runRouterCommand(ctx, args[:1], action, []string{args[1]})
 }
@@ -463,24 +475,24 @@ func (b *TelegramBot) dispatchSubSetRole(ctx context.Context, args []string, act
 // waits up to resultTimeout for that router to answer.
 func (b *TelegramBot) runRouterCommand(ctx context.Context, args []string, action string, cmdArgs []string) string {
 	if len(args) < 1 || args[0] == "" {
-		return "usage: missing router ID"
+		return "формат: не указан id роутера"
 	}
 	routerID := args[0]
 	if !b.Store.HasRouter(routerID) {
-		return fmt.Sprintf("unknown router %q; send /routers to list registered routers", routerID)
+		return fmt.Sprintf("нет такого роутера %q. Список: /routers", routerID)
 	}
 
 	id, err := b.Store.Enqueue(routerID, action, cmdArgs)
 	if err != nil {
-		return fmt.Sprintf("failed to queue command: %v", err)
+		return fmt.Sprintf("не удалось поставить команду в очередь: %v", err)
 	}
 
 	result, ok := b.Store.AwaitResult(ctx, routerID, id, b.resultTimeout())
 	if !ok {
-		return fmt.Sprintf("command queued (id %s) but %s hasn't answered yet -- it will run on its next poll", id, routerID)
+		return fmt.Sprintf("команда в очереди (id %s), но %s ещё не ответил — выполнится при следующем poll", id, routerID)
 	}
 	if result.Err != "" {
-		return fmt.Sprintf("%s: error: %s", routerID, result.Err)
+		return fmt.Sprintf("%s: ошибка: %s", routerID, result.Err)
 	}
 	return fmt.Sprintf("%s: %s", routerID, result.Output)
 }

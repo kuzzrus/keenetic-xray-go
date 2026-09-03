@@ -1,0 +1,131 @@
+name: Xray-core build
+
+# Manually-triggered vendored build of the Xray core for the two router
+# architectures, so the installer can fetch a known-good, size-optimised
+# xray binary from this repo's releases instead of relying on the Entware
+# feed having a current xray-core for the arch. Produces, per arch:
+#   xray-<tag>-linux-<goarch>          UPX-packed, runs directly
+#   xray-<tag>-linux-<goarch>.xz       plain xz of the unpacked binary (fallback if UPX won't exec on a given router)
+#   *.sha256                           checksums for both
+#   xray-<tag>-linux-<goarch>.provenance.txt
+# All uploaded to a release tagged  xray-core/<tag>  (separate from the
+# keenetic-xray release line). MPL-2.0 -- redistribution is fine, the
+# provenance file records exactly what was built.
+
+on:
+  workflow_dispatch:
+    inputs:
+      xray_version:
+        description: "XTLS/Xray-core tag to build (e.g. v26.3.27)"
+        required: true
+        default: v26.3.27
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create or reuse the xray-core/<tag> release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: xray-core/${{ inputs.xray_version }}
+          VER: ${{ inputs.xray_version }}
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && exit 0
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --title "Xray-core $VER (vendored)" \
+            --notes "Vendored Xray-core $VER built for keenetic-xray's router targets. Upstream: https://github.com/XTLS/Xray-core/releases/tag/$VER — MPL-2.0. See each asset's .provenance.txt."
+
+  build:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goarch: arm64
+            gomips: ""
+            upx: "--lzma"
+          - goarch: mipsle
+            gomips: softfloat
+            upx: "" # NRV, not LZMA: UPX's LZMA path doesn't cover mips ELF
+    steps:
+      - name: Checkout Xray-core ${{ inputs.xray_version }}
+        uses: actions/checkout@v4
+        with:
+          repository: XTLS/Xray-core
+          ref: ${{ inputs.xray_version }}
+          path: xray-core
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: xray-core/go.mod
+
+      - name: Build
+        working-directory: xray-core
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          GOMIPS: ${{ matrix.gomips }}
+          GOFLAGS: -trimpath
+        run: go build -ldflags "-s -w -buildid=" -o "$RUNNER_TEMP/xray" ./main
+
+      - name: Package
+        env:
+          VER: ${{ inputs.xray_version }}
+          GOARCH: ${{ matrix.goarch }}
+          GOMIPS: ${{ matrix.gomips }}
+          UPX_FLAGS: ${{ matrix.upx }}
+        run: |
+          set -eu
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq upx-ucl xz-utils
+          cd "$RUNNER_TEMP"
+
+          base="xray-${VER}-linux-${GOARCH}"
+          sha_unpacked="$(sha256sum xray | awk '{print $1}')"
+          size_unpacked="$(wc -c < xray)"
+
+          # xz fallback: plain compress of the unpacked binary
+          xz -9 -e -k -c xray > "${base}.xz"
+
+          # UPX: primary, runs in place
+          cp xray "$base"
+          # shellcheck disable=SC2086
+          upx -9 $UPX_FLAGS "$base"
+          upx -t "$base"
+          sha_packed="$(sha256sum "$base" | awk '{print $1}')"
+
+          sha256sum "$base" "${base}.xz" > "${base}.sha256"
+
+          go_ver="$(cd "$GITHUB_WORKSPACE/xray-core" && awk '/^go /{print $2; exit}' go.mod)"
+          commit="$(cd "$GITHUB_WORKSPACE/xray-core" && git rev-parse HEAD)"
+          {
+            echo "Xray-core ${VER}"
+            echo "upstream:        https://github.com/XTLS/Xray-core/releases/tag/${VER}"
+            echo "commit:          ${commit}"
+            echo "build:           GOOS=linux GOARCH=${GOARCH} GOMIPS=${GOMIPS:-} CGO_ENABLED=0 GOFLAGS=-trimpath"
+            echo "ldflags:         -s -w -buildid="
+            echo "go:              go.mod declares ${go_ver}; built with $(go version | awk '{print $3}')"
+            echo "pack:            $(upx --version | head -n1) -9 ${UPX_FLAGS}"
+            echo "size unpacked:   ${size_unpacked}"
+            echo "size packed:     $(wc -c < "$base")"
+            echo "sha256 unpacked: ${sha_unpacked}"
+            echo "sha256 packed:   ${sha_packed}"
+            echo "license:         MPL-2.0 — https://github.com/XTLS/Xray-core/blob/${VER}/LICENSE"
+          } > "${base}.provenance.txt"
+
+          ls -l "$base" "${base}.xz" "${base}.sha256" "${base}.provenance.txt"
+
+      - name: Upload to xray-core/${{ inputs.xray_version }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: xray-core/${{ inputs.xray_version }}
+          BASE: xray-${{ inputs.xray_version }}-linux-${{ matrix.goarch }}
+        run: |
+          cd "$RUNNER_TEMP"
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            "$BASE" "${BASE}.xz" "${BASE}.sha256" "${BASE}.provenance.txt"

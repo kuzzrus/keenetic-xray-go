@@ -49,6 +49,17 @@ type PollResponse struct {
 	Command *Command `json:"command,omitempty"`
 }
 
+// Event is an unsolicited notification the agent pushes to the control
+// server (POST /agent/event) when something on the router is worth
+// telling the operator about -- a failover switch, the daemon starting.
+// Text is already rendered and human-readable; the server/bot only
+// prefixes the router ID and forwards it to the chat.
+type Event struct {
+	Kind string    `json:"kind"` // "failover", "daemon_start", ...
+	Text string    `json:"text"`
+	Time time.Time `json:"time"`
+}
+
 // RouterIDHeader identifies which router a /agent/poll or /agent/result
 // request is for. A header, not a JSON body field: the server's auth
 // middleware needs it before (and regardless of) parsing any body, and

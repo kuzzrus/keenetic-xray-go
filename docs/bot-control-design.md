@@ -53,8 +53,21 @@ PollResponse { command? }   // at most one command per poll
   posts a `Result` before polling again -- no batching.
 - `POST /agent/result` -- router posts the `Result` of the command it
   just ran, as the raw JSON body (no wrapper type).
+- `POST /agent/event` -- router pushes an unsolicited `Event`
+  (`{kind, text, time}`) when something happens the operator should hear
+  about without asking: a failover switch, the daemon starting. `text`
+  is already rendered (in Russian, by `renderFailoverEvent`); the server
+  hands it to `ServerConfig.OnEvent`, which the control-server wires to
+  the bot's `NotifyEvent` -- one Telegram message per allowed chat,
+  prefixed with the router's name. Best-effort both ways: the daemon's
+  event channel is buffered and lossy, and a failed POST is dropped.
 - `GET /fingerprint` -- unauthenticated, serves the server's certificate
   fingerprint in plaintext for first-trust bootstrapping (see below).
+
+Events originate in `failover.Daemon`: the state machine's `onTransition`
+hook feeds both the `status` history ring and `Daemon.Events()`;
+`botcontrol.FailoverEvents` renders each to an `Event` and the agent's
+`Run` loop forwards it.
 
 **Router identity is a header, not a body field**
 (`RouterIDHeader = "X-Router-Id"`, in `protocol.go`): the server's auth

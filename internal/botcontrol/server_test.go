@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -177,6 +178,59 @@ func TestServer_Result_InvalidBodyRejected(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestServer_AgentEvent_CallsOnEvent(t *testing.T) {
+	store, err := LoadStore("")
+	if err != nil {
+		t.Fatalf("LoadStore: %v", err)
+	}
+	gotID := make(chan string, 1)
+	gotEv := make(chan Event, 1)
+	srv := NewServer(ServerConfig{
+		Store: store, Auth: StaticRouterAuth{"router-1": "token-1"}, Fingerprint: "x",
+		OnEvent: func(id string, ev Event) { gotID <- id; gotEv <- ev },
+	})
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	body, _ := json.Marshal(Event{Kind: "failover", Text: "⚡ переключение на backup", Time: time.Now()})
+	resp := doAuthed(t, ts, "/agent/event", "router-1", "token-1", body)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	select {
+	case id := <-gotID:
+		if id != "router-1" {
+			t.Errorf("OnEvent routerID = %q, want router-1", id)
+		}
+		ev := <-gotEv
+		if ev.Kind != "failover" || !strings.Contains(ev.Text, "backup") {
+			t.Errorf("OnEvent ev = %+v", ev)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnEvent was not called")
+	}
+}
+
+func TestServer_AgentEvent_InvalidBodyRejected(t *testing.T) {
+	ts, _ := testServer(t) // OnEvent nil: bad body must still 400, not panic
+	resp := doAuthed(t, ts, "/agent/event", "router-1", "token-1", []byte("not json"))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestServer_AgentEvent_Unauthenticated(t *testing.T) {
+	ts, _ := testServer(t)
+	resp := doAuthed(t, ts, "/agent/event", "router-1", "wrong-token", []byte("{}"))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", resp.StatusCode)
 	}
 }
 

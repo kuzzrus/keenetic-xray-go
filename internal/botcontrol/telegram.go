@@ -42,9 +42,10 @@ type TelegramBot struct {
 	ResultTimeout time.Duration // 0 -> DefaultResultTimeout
 	Logger        *log.Logger   // nil -> log.Default()
 
-	client   *http.Client
-	wizardMu sync.Mutex
-	wizards  map[int64]*wizState // per-chat multi-step dialog state (e.g. /add_router)
+	client     *http.Client
+	clientOnce sync.Once
+	wizardMu   sync.Mutex
+	wizards    map[int64]*wizState // per-chat multi-step dialog state (e.g. /add_router)
 }
 
 type tgUpdate struct {
@@ -88,9 +89,7 @@ type inlineButton struct {
 // Run long-polls Telegram for updates and handles each until ctx is
 // cancelled, at which point it returns ctx.Err().
 func (b *TelegramBot) Run(ctx context.Context) error {
-	if b.client == nil {
-		b.client = &http.Client{Timeout: 65 * time.Second} // > the 50s long-poll timeout used below
-	}
+	b.initClient()
 	b.wizards = make(map[int64]*wizState)
 	if err := b.setMyCommands(ctx); err != nil && ctx.Err() == nil {
 		b.logger().Printf("telegram: setMyCommands: %s", b.scrubToken(err))
@@ -137,6 +136,35 @@ func (b *TelegramBot) logger() *log.Logger {
 		return b.Logger
 	}
 	return log.Default()
+}
+
+// initClient sets b.client once. Both Run and NotifyEvent (which can be
+// called from a server request goroutine before Run has started) go
+// through here so the two never race on the field.
+func (b *TelegramBot) initClient() {
+	b.clientOnce.Do(func() {
+		if b.client == nil {
+			b.client = &http.Client{Timeout: 65 * time.Second} // > the 50s long-poll timeout
+		}
+	})
+}
+
+// NotifyEvent DMs every allowed chat about an unsolicited router event
+// (a failover switch, the daemon starting). Called from the control
+// server's /agent/event handler; best-effort, each send is logged on
+// failure but never retried.
+func (b *TelegramBot) NotifyEvent(routerID string, ev Event) {
+	b.initClient()
+	label := routerID
+	if name := b.Store.NameFor(routerID); name != "" {
+		label = name + " (" + routerID + ")"
+	}
+	text := "🔔 " + label + "\n" + ev.Text
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	for chatID := range b.AllowedChats {
+		b.sendMessage(ctx, chatID, text)
+	}
 }
 
 // scrubToken renders err for logging with the bot token redacted.

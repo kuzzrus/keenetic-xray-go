@@ -41,10 +41,17 @@ compressed `.ipk` per architecture instead, installed with `opkg install
 <file-or-url>` -- no hosted package feed required, since `opkg` can
 install directly from a local file or a URL.
 
-The payoff: the control file declares `Depends: xray-core`, so `opkg`'s
-own dependency resolution installs the Xray core from Entware's feed
-*before* running this package's postinst -- "core first, then script" is
-enforced by `opkg` itself, not a hand-rolled sequencing check.
+The Xray core is not an `opkg` dependency. The control file used to
+declare `Depends: xray-core` and let `opkg` pull it from Entware's feed,
+but that feed doesn't always carry a current `xray-core` for both arches,
+and its ~30 MB unpacked footprint is a problem on a small internal-flash
+`/opt`. Instead the postinst runs `keenetic-xray internal
+ensure-xray-core`, which installs a size-optimised (UPX-packed) build
+from this repo's own `xray-core/<tag>` releases -- verified against its
+published sha256 and smoke-tested with `xray version` before it's put in
+place -- and falls back to `opkg install xray-core` if that can't be
+fetched or won't run. The pinned upstream tag and the build workflow live
+in `packaging/xray-core/` and `.github/workflows/xray-core.yml`.
 
 `packaging/build-ipk.sh` builds the `.ipk` by hand: a single
 gzip-compressed tar containing `./debian-binary`, `./data.tar.gz`, and

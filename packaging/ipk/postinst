@@ -1,6 +1,12 @@
 #!/bin/sh
 set -e
 
+# Best-effort: fetch the vendored (or Entware) xray-core. Not fatal -- a
+# router offline at install time still gets a working package; `keenetic-xray
+# doctor` reports the missing core and the command below retries it.
+/opt/sbin/keenetic-xray internal ensure-xray-core \
+    || echo "keenetic-xray: xray-core not installed yet -- run: keenetic-xray internal ensure-xray-core"
+
 /opt/sbin/keenetic-xray internal postinst-setup
 /opt/etc/init.d/S99keenetic-xray start
 

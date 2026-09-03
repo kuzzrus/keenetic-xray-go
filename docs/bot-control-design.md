@@ -164,16 +164,22 @@ Proxy0 has no card button -- it's on by default (`config.Default`,
 `sub_setprimary` / `sub_setbackup`), the body text showing current role
 markers. It re-renders after each tap.
 
-`➕ Добавить роутер` starts a two-step text dialog (`telegram_wizard.go`):
-id, then display name. `🔗 Ссылка` (`src:`) is a one-step dialog: paste a
-subscription URL -> `sub_seturl` + `sub_refresh`. `✏️ Переименовать` (or
-`/rename <id> <name>`) is one step over `Store.RenameRouter`. State is
-per-chat; any `/command` other than `/cancel` aborts it and still runs.
+`🔗 Источники` (`srcm:`) opens a two-button screen -- `⬆️ Основная`
+(`srcp:`) / `⬇️ Резервная` (`srcb:`) -- each starting a one-step dialog:
+paste a `vless://` link or an `http(s)://` subscription URL, optionally
+followed by a selector (an index or a name substring for a multi-profile
+subscription). Applied via `set_primary_source` / `set_backup_source`,
+which resolve the source to one profile, merge it into `Config.Profiles`,
+repoint the slot index and rebind xray. The two slots can be fed from
+independent sources; `Config.PrimarySource` / `BackupSource` remember
+where each came from (URL kept in the 0600 config, redacted from every
+reply alongside `Subscription.URL`). Picking among *already loaded*
+profiles stays in `📋 Профили`.
 
-There is deliberately no "paste one vless:// link" flow -- a single link
-would fill both the primary and backup slot with the same server (no
-failover). Point the bot at a subscription, or use `keenetic-xray setup`
-on the router.
+`➕ Добавить роутер` starts a two-step text dialog (`telegram_wizard.go`):
+id, then display name. `✏️ Переименовать` (or `/rename <id> <name>`) is
+one step over `Store.RenameRouter`. State is per-chat; any `/command`
+other than `/cancel` aborts it and still runs.
 
 The router list and every list button carry a status dot -- 🟢 polled
 within `DefaultOfflineThreshold`, 🔴 silent longer, ⚪ never connected
@@ -201,6 +207,8 @@ ones are text-only:
 /sub_list <router>
 /sub_setprimary <router> <index>
 /sub_setbackup <router> <index>
+/set_primary_source <router> <vless://…|url> [selector]   feed the primary slot from its own source
+/set_backup_source  <router> <vless://…|url> [selector]
 /proxy0 <router> [show|on|off]   point Keenetic's Proxy0 at the local inbound
 /restart <router>               restart the failover daemon (detached; the replacement emits daemon_start)
 /ensure_core <router>           (re)install the xray-core binary -- vendored build, opkg fallback

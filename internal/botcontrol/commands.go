@@ -67,11 +67,22 @@ func (h *RouterHandler) Handle(ctx context.Context, cmd Command) (string, error)
 // *url.Error. The router is the only place the raw value is known, so
 // this happens here at the boundary, not in the bot.
 func (h *RouterHandler) scrubSecrets(s string) string {
-	if s == "" || h.Config == nil || h.Config.Subscription == nil {
+	if s == "" || h.Config == nil {
 		return s
 	}
-	if u := h.Config.Subscription.URL; u != "" {
-		s = strings.ReplaceAll(s, u, "<подписка-URL>")
+	redact := func(u string) {
+		if u != "" {
+			s = strings.ReplaceAll(s, u, "<источник-URL>")
+		}
+	}
+	if h.Config.Subscription != nil {
+		redact(h.Config.Subscription.URL)
+	}
+	if h.Config.PrimarySource != nil {
+		redact(h.Config.PrimarySource.URL)
+	}
+	if h.Config.BackupSource != nil {
+		redact(h.Config.BackupSource.URL)
 	}
 	return s
 }
@@ -96,6 +107,10 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 		return h.subSetRole(ctx, cmd.Args, true)
 	case ActionSubSetBackup:
 		return h.subSetRole(ctx, cmd.Args, false)
+	case ActionSetPrimarySource:
+		return h.setSlotSource(ctx, true, cmd.Args)
+	case ActionSetBackupSource:
+		return h.setSlotSource(ctx, false, cmd.Args)
 	case ActionProxy0Show:
 		return h.proxy0Show(ctx), nil
 	case ActionProxy0On:
@@ -469,6 +484,106 @@ func (h *RouterHandler) profileList() string {
 		fmt.Fprintf(&b, "%d: %s -- %s:%d%s\n", i, p.Remark, p.Address, p.Port, marker)
 	}
 	return b.String()
+}
+
+// setSlotSource points one failover slot at its own source -- a raw
+// vless:// link or an http(s):// subscription (with an optional selector
+// for a multi-profile one). The resolved profile is merged into the pool
+// and the slot index repointed; the source is remembered per slot.
+func (h *RouterHandler) setSlotSource(ctx context.Context, primary bool, args []string) (string, error) {
+	if len(args) < 1 || strings.TrimSpace(args[0]) == "" {
+		return "", fmt.Errorf("нужна vless:// ссылка или http(s):// URL")
+	}
+	src := strings.TrimSpace(args[0])
+	selector := ""
+	if len(args) > 1 {
+		selector = strings.TrimSpace(args[1])
+	}
+
+	prof, err := h.resolveSource(ctx, src, selector)
+	if err != nil {
+		return "", err
+	}
+	idx := h.upsertProfile(prof)
+
+	slot := &config.SlotSource{URL: src, Selector: selector}
+	word := "backup"
+	if primary {
+		h.Config.PrimaryIndex = idx
+		h.Config.PrimarySource = slot
+		word = "primary"
+	} else {
+		h.Config.BackupIndex = idx
+		h.Config.BackupSource = slot
+	}
+	if err := h.Config.Save(h.ConfigPath); err != nil {
+		return "", err
+	}
+	h.rebindXray(ctx)
+	return fmt.Sprintf("%s ← %s", word, prof.Remark), nil
+}
+
+// resolveSource turns a link or subscription URL (+ selector) into one
+// profile.
+func (h *RouterHandler) resolveSource(ctx context.Context, src, selector string) (config.Profile, error) {
+	switch {
+	case strings.HasPrefix(src, "vless://"):
+		return config.ParseVLESSURI(src)
+	case strings.HasPrefix(src, "http://"), strings.HasPrefix(src, "https://"):
+		res, err := subscription.Refresh(ctx, src, "", "")
+		if err != nil {
+			return config.Profile{}, err
+		}
+		return pickProfile(res.Profiles, selector)
+	default:
+		return config.Profile{}, fmt.Errorf("нужна vless:// ссылка или http(s):// URL")
+	}
+}
+
+// pickProfile selects one profile from a subscription's list by selector:
+// "" / "first" -> [0]; an integer -> that index; otherwise a unique
+// case-insensitive Remark substring.
+func pickProfile(ps []config.Profile, selector string) (config.Profile, error) {
+	if len(ps) == 0 {
+		return config.Profile{}, fmt.Errorf("в подписке нет профилей")
+	}
+	if selector == "" || strings.EqualFold(selector, "first") {
+		return ps[0], nil
+	}
+	if n, err := strconv.Atoi(selector); err == nil {
+		if n < 0 || n >= len(ps) {
+			return config.Profile{}, fmt.Errorf("индекс %d вне диапазона (%d профилей)", n, len(ps))
+		}
+		return ps[n], nil
+	}
+	match, matches := config.Profile{}, 0
+	for _, p := range ps {
+		if strings.Contains(strings.ToLower(p.Remark), strings.ToLower(selector)) {
+			match, matches = p, matches+1
+		}
+	}
+	switch matches {
+	case 1:
+		return match, nil
+	case 0:
+		return config.Profile{}, fmt.Errorf("нет профиля с %q в названии", selector)
+	default:
+		return config.Profile{}, fmt.Errorf("под %q подходит %d профилей — уточни селектор", selector, matches)
+	}
+}
+
+// upsertProfile returns the index of p in Config.Profiles, appending it
+// (or refreshing a match on UUID+address+port) first.
+func (h *RouterHandler) upsertProfile(p config.Profile) int {
+	for i := range h.Config.Profiles {
+		e := h.Config.Profiles[i]
+		if e.UUID == p.UUID && e.Address == p.Address && e.Port == p.Port {
+			h.Config.Profiles[i] = p
+			return i
+		}
+	}
+	h.Config.Profiles = append(h.Config.Profiles, p)
+	return len(h.Config.Profiles) - 1
 }
 
 func (h *RouterHandler) subSetURL(args []string) (string, error) {

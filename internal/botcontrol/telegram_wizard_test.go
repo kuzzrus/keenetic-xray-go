@@ -104,24 +104,19 @@ func fakeAgent(t *testing.T, store *Store, routerID string, reply func(action st
 	}()
 }
 
-func TestTelegramBot_SourceWizard_UnknownRouter(t *testing.T) {
+func TestTelegramBot_SourcesMenu_UnknownRouter(t *testing.T) {
 	srv, fake := newFakeTelegram(t)
-	store := newBotStore(t)
-	mustRegister(t, store, "r1")
-	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL}
+	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: newBotStore(t), APIBase: srv.URL}
 	runBotInBackground(t, bot)
 
-	// Open the router card, then tap 🔗 Ссылка for a router that isn't there.
 	fake.push(1, "/menu")
 	fake.waitForReply(t, 3*time.Second)
 	msgID := fake.lastSent(t).MessageID
-	fake.pushCallback(1, msgID, "src:nope")
-	if reply := waitSent(t, fake, 3*time.Second, "нет такого роутера"); reply == "" {
-		t.Error("expected an unknown-router reply")
-	}
+	fake.pushCallback(1, msgID, "srcm:nope")
+	fake.waitForEditContaining(t, 3*time.Second, "нет такого роутера")
 }
 
-func TestTelegramBot_SourceWizard_SetsAndRefreshes(t *testing.T) {
+func TestTelegramBot_SlotSourceWizard_PrimaryFromLink(t *testing.T) {
 	srv, fake := newFakeTelegram(t)
 	store := newBotStore(t)
 	mustRegister(t, store, "r1")
@@ -131,8 +126,8 @@ func TestTelegramBot_SourceWizard_SetsAndRefreshes(t *testing.T) {
 	rec := &recorder{}
 	fakeAgent(t, store, "r1", func(action string) string {
 		rec.add(action)
-		if action == ActionSubRefresh {
-			return "refreshed: 3 profiles"
+		if action == ActionSetPrimarySource {
+			return "primary ← RU-1"
 		}
 		return "ok"
 	})
@@ -140,20 +135,24 @@ func TestTelegramBot_SourceWizard_SetsAndRefreshes(t *testing.T) {
 	fake.push(1, "/menu")
 	fake.waitForReply(t, 3*time.Second)
 	msgID := fake.lastSent(t).MessageID
-	fake.pushCallback(1, msgID, "src:r1")
-	waitSent(t, fake, 3*time.Second, "URL подписки")
+
+	// 🔗 Источники -> ⬆️ Основная -> paste a link.
+	fake.pushCallback(1, msgID, "srcm:r1")
+	fake.waitForEditContaining(t, 3*time.Second, "Источники r1")
+	fake.pushCallback(1, msgID, "srcp:r1")
+	waitSent(t, fake, 3*time.Second, "Источник для основной")
 
 	// A non-URL is rejected without ending the dialog.
-	fake.push(1, "not a url")
-	waitSent(t, fake, 3*time.Second, "нужен URL")
+	fake.push(1, "garbage")
+	waitSent(t, fake, 3*time.Second, "нужна vless")
 
-	fake.push(1, "https://provider.example/sub/token")
-	got := waitSent(t, fake, 4*time.Second, "refreshed: 3 profiles")
-	if !strings.Contains(got, "Профили") {
-		t.Errorf("final message should point at 📋 Профили: %q", got)
+	fake.push(1, "vless://11111111-2222-3333-4444-555555555555@a.example:443?type=tcp&security=none#RU-1")
+	got := waitSent(t, fake, 4*time.Second, "primary ← RU-1")
+	if got == "" {
+		t.Fatal("no confirmation")
 	}
-	if !rec.has(ActionSubSetURL) || !rec.has(ActionSubRefresh) {
-		t.Errorf("router did not receive seturl+refresh, saw %v", rec.list())
+	if !rec.has(ActionSetPrimarySource) {
+		t.Errorf("router did not receive set_primary_source, saw %v", rec.list())
 	}
 }
 

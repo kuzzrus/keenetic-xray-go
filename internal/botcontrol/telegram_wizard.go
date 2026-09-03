@@ -7,12 +7,13 @@ import (
 )
 
 // wizState is a per-chat multi-step text dialog: /add_router (id, then
-// display name), /rename (one step), and the "🔗 Ссылка" flow (paste a
-// subscription URL). It exists so a menu button can prompt for input the
-// same way a text command's arguments would.
+// display name), /rename (one step), and the 🔗 Источники flow (paste a
+// link or subscription URL for one slot). It exists so a menu button can
+// prompt for input the same way a text command's arguments would.
 type wizState struct {
 	step     wizStep
 	routerID string
+	primary  bool // wizSlotSource: which slot the pasted source feeds
 }
 
 type wizStep int
@@ -21,7 +22,7 @@ const (
 	wizRouterID wizStep = iota
 	wizRouterName
 	wizRenameName
-	wizSourceURL
+	wizSlotSource
 )
 
 func (b *TelegramBot) startAddRouterWizard(ctx context.Context, chatID int64) {
@@ -42,18 +43,26 @@ func (b *TelegramBot) startRenameWizard(ctx context.Context, chatID int64, route
 	b.sendMessage(ctx, chatID, "Новое имя для "+routerID+" (пустая строка — совпадёт с id).\nОтмена: /cancel")
 }
 
-// startSourceWizard prompts for a new subscription URL. Applying it is
-// sub_seturl + sub_refresh on the router, which now also rebinds xray --
-// so a changed link takes effect without a manual daemon restart.
-func (b *TelegramBot) startSourceWizard(ctx context.Context, chatID int64, routerID string) {
+// startSlotSourceWizard prompts for one slot's source -- a vless:// link
+// or an http(s):// subscription URL, optionally followed by a selector
+// (index or a name substring) for a multi-profile subscription. Applied
+// via set_primary_source / set_backup_source, which merge the resolved
+// profile, repoint the slot and rebind xray.
+func (b *TelegramBot) startSlotSourceWizard(ctx context.Context, chatID int64, routerID string, primary bool) {
 	if !b.Store.HasRouter(routerID) {
 		b.sendMessage(ctx, chatID, fmt.Sprintf("нет такого роутера %q. Список: /routers", routerID))
 		return
 	}
+	slot := "резервной"
+	if primary {
+		slot = "основной"
+	}
 	b.wizardMu.Lock()
-	b.wizards[chatID] = &wizState{step: wizSourceURL, routerID: routerID}
+	b.wizards[chatID] = &wizState{step: wizSlotSource, routerID: routerID, primary: primary}
 	b.wizardMu.Unlock()
-	b.sendMessage(ctx, chatID, "Новый URL подписки (http(s)://) для "+routerID+".\nОтмена: /cancel")
+	b.sendMessage(ctx, chatID,
+		"Источник для "+slot+" ("+routerID+"):\nвставь vless:// ссылку или http(s):// URL подписки.\n"+
+			"Для подписки можно добавить селектор через пробел — номер профиля или часть названия.\nОтмена: /cancel")
 }
 
 func (b *TelegramBot) wizardClear(chatID int64) {
@@ -126,8 +135,8 @@ func (b *TelegramBot) handleWizardText(ctx context.Context, chatID int64, text s
 		b.sendMessage(ctx, chatID, "✅ теперь: "+name)
 		return true
 
-	case wizSourceURL:
-		b.wizardSetSource(ctx, chatID, st.routerID, strings.TrimSpace(text))
+	case wizSlotSource:
+		b.wizardSetSlotSource(ctx, chatID, st, strings.TrimSpace(text))
 		return true
 	}
 
@@ -135,19 +144,29 @@ func (b *TelegramBot) handleWizardText(ctx context.Context, chatID int64, text s
 	return true
 }
 
-func (b *TelegramBot) wizardSetSource(ctx context.Context, chatID int64, routerID, url string) {
-	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
-		b.sendMessage(ctx, chatID, "нужен URL http(s)://. Ещё раз или /cancel") // wizard stays armed
+func (b *TelegramBot) wizardSetSlotSource(ctx context.Context, chatID int64, st *wizState, line string) {
+	fields := strings.Fields(line)
+	if len(fields) == 0 {
+		b.sendMessage(ctx, chatID, "нужна vless:// ссылка или http(s):// URL. Ещё раз или /cancel")
 		return
 	}
+	src := fields[0]
+	if !strings.HasPrefix(src, "vless://") && !strings.HasPrefix(src, "http://") && !strings.HasPrefix(src, "https://") {
+		b.sendMessage(ctx, chatID, "нужна vless:// ссылка или http(s):// URL. Ещё раз или /cancel") // stays armed
+		return
+	}
+	args := []string{src}
+	if len(fields) > 1 {
+		args = append(args, strings.Join(fields[1:], " "))
+	}
+
 	b.wizardClear(chatID)
-	if _, answered, errText := b.enqueueAndWait(ctx, routerID, ActionSubSetURL, []string{url}); !answered || errText != "" {
-		b.sendMessage(ctx, chatID, wizResult(answered, errText, ""))
-		return
+	action := ActionSetBackupSource
+	if st.primary {
+		action = ActionSetPrimarySource
 	}
-	out, answered, errText := b.enqueueAndWait(ctx, routerID, ActionSubRefresh, nil)
-	b.sendMessage(ctx, chatID, wizResult(answered, errText,
-		"✅ "+strings.TrimSpace(out)+"\nОсновной/резервный — кнопка 📋 Профили."))
+	out, answered, errText := b.enqueueAndWait(ctx, st.routerID, action, args)
+	b.sendMessage(ctx, chatID, wizResult(answered, errText, "✅ "+strings.TrimSpace(out)))
 }
 
 // wizResult picks the message for a finished enqueueAndWait step.

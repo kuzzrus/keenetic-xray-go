@@ -23,12 +23,18 @@ const (
 	ActionSubList       = "sub_list"
 	ActionSubSetPrimary = "sub_setprimary"
 	ActionSubSetBackup  = "sub_setbackup"
-	ActionProxy0Show    = "proxy0_show"
-	ActionProxy0On      = "proxy0_on"
-	ActionProxy0Off     = "proxy0_off"
-	ActionDaemonRestart = "daemon_restart"
-	ActionEnsureCore    = "ensure_core"
-	ActionSelfUpdate    = "self_update" // re-run install.sh on the router (whole keenetic-xray package)
+	// ActionSetPrimarySource / ...Backup...: args[0] = a vless:// link or
+	// an http(s):// subscription URL; args[1] = optional selector (index,
+	// Remark substring, or "" for the first). Feeds one slot from its own
+	// source.
+	ActionSetPrimarySource = "set_primary_source"
+	ActionSetBackupSource  = "set_backup_source"
+	ActionProxy0Show       = "proxy0_show"
+	ActionProxy0On         = "proxy0_on"
+	ActionProxy0Off        = "proxy0_off"
+	ActionDaemonRestart    = "daemon_restart"
+	ActionEnsureCore       = "ensure_core"
+	ActionSelfUpdate       = "self_update" // re-run install.sh on the router (whole keenetic-xray package)
 )
 
 // Command is a single unit of work queued for a router by the control

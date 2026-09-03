@@ -234,6 +234,44 @@ func TestServer_AgentEvent_Unauthenticated(t *testing.T) {
 	}
 }
 
+func TestServer_AgentHeartbeat_StoresStatus(t *testing.T) {
+	store, err := LoadStore("")
+	if err != nil {
+		t.Fatalf("LoadStore: %v", err)
+	}
+	if err := store.SeedRouter("router-1", "token-1", "Router One"); err != nil {
+		t.Fatalf("SeedRouter: %v", err)
+	}
+	ts := httptest.NewServer(NewServer(ServerConfig{Store: store, Auth: store, Fingerprint: "x"}))
+	defer ts.Close()
+
+	body, _ := json.Marshal(Heartbeat{Status: "failover: ACTIVE_PRIMARY\nagent: v0.4.3", Time: time.Now()})
+	resp := doAuthed(t, ts, "/agent/heartbeat", "router-1", "token-1", body)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	var got RouterInfo
+	for _, r := range store.Routers() {
+		if r.ID == "router-1" {
+			got = r
+		}
+	}
+	if !strings.Contains(got.LastStatus, "ACTIVE_PRIMARY") || got.LastStatusAt.IsZero() {
+		t.Errorf("stored status = %+v", got)
+	}
+}
+
+func TestServer_AgentHeartbeat_InvalidBodyRejected(t *testing.T) {
+	ts, _ := testServer(t)
+	resp := doAuthed(t, ts, "/agent/heartbeat", "router-1", "token-1", []byte("not json"))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
 func TestServer_GetOnPollRejected(t *testing.T) {
 	ts, _ := testServer(t)
 	req, err := http.NewRequest(http.MethodGet, ts.URL+"/agent/poll", nil)

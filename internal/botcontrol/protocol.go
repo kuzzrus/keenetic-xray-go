@@ -55,6 +55,16 @@ type PollResponse struct {
 	Command *Command `json:"command,omitempty"`
 }
 
+// Heartbeat is a periodic status snapshot the agent pushes to the control
+// server (POST /agent/heartbeat) so the router card shows live data --
+// active profile, failover state, agent/core version, uptime -- without
+// the server having to queue a status command and wait for the answer.
+// Status is the already-rendered `keenetic-xray status` text.
+type Heartbeat struct {
+	Status string    `json:"status"`
+	Time   time.Time `json:"time"`
+}
+
 // Event is an unsolicited notification the agent pushes to the control
 // server (POST /agent/event) when something on the router is worth
 // telling the operator about -- a failover switch, the daemon starting.

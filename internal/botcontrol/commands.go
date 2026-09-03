@@ -15,6 +15,7 @@ import (
 	"github.com/kuzzrus/keenetic-xray-go/internal/failover"
 	"github.com/kuzzrus/keenetic-xray-go/internal/keenetic"
 	"github.com/kuzzrus/keenetic-xray-go/internal/subscription"
+	"github.com/kuzzrus/keenetic-xray-go/internal/version"
 	"github.com/kuzzrus/keenetic-xray-go/internal/xraycore"
 )
 
@@ -114,7 +115,16 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 
 func (h *RouterHandler) status(ctx context.Context) string {
 	var b strings.Builder
+	fmt.Fprintf(&b, "agent: %s\n", version.String())
 	fmt.Fprintf(&b, "variant: %s\n", h.Config.Variant)
+	if h.XrayBinary != "" {
+		if v, err := xraycore.Version(h.XrayBinary); err == nil {
+			if i := strings.Index(v, " ("); i > 0 {
+				v = v[:i] // "Xray 26.3.27 (Xray, ...)" -> "Xray 26.3.27"
+			}
+			fmt.Fprintf(&b, "xray-core: %s\n", v)
+		}
+	}
 
 	if snap, ran := h.Daemon.Snapshot(ctx); !ran {
 		b.WriteString("failover: демон не отвечает\n")

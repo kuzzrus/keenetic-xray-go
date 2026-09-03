@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -152,6 +153,45 @@ func TestRun_PollsExecutesAndPostsResult(t *testing.T) {
 	}
 	if gotRouterID != "router-1" {
 		t.Errorf("result: %s header = %q, want %q", RouterIDHeader, gotRouterID, "router-1")
+	}
+}
+
+func TestRun_SendsHeartbeatWhenStatusFuncSet(t *testing.T) {
+	var mu sync.Mutex
+	var gotStatus string
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/agent/poll", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(PollResponse{})
+	})
+	mux.HandleFunc("/agent/heartbeat", func(w http.ResponseWriter, r *http.Request) {
+		var hb Heartbeat
+		_ = json.NewDecoder(r.Body).Decode(&hb)
+		mu.Lock()
+		gotStatus = hb.Status
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	})
+	srv := httptest.NewTLSServer(mux)
+	defer srv.Close()
+
+	opts := AgentOptions{
+		ControlServerURL:  srv.URL,
+		RouterID:          "router-1",
+		Token:             "t",
+		FingerprintSHA256: fingerprintOf(t, srv),
+		PollInterval:      time.Second,
+		StatusFunc:        func(context.Context) string { return "agent: v0.4.3\nfailover: ACTIVE_PRIMARY" },
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	_ = Run(ctx, opts, &fakeHandler{})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !strings.Contains(gotStatus, "ACTIVE_PRIMARY") {
+		t.Errorf("heartbeat status = %q, want it to carry the rendered snapshot", gotStatus)
 	}
 }
 

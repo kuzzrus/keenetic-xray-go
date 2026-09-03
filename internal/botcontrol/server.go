@@ -70,6 +70,7 @@ func NewServer(cfg ServerConfig) *Server {
 	s.mux.HandleFunc("/agent/poll", s.authenticated(s.handlePoll))
 	s.mux.HandleFunc("/agent/result", s.authenticated(s.handleResult))
 	s.mux.HandleFunc("/agent/event", s.authenticated(s.handleEvent))
+	s.mux.HandleFunc("/agent/heartbeat", s.authenticated(s.handleHeartbeat))
 	return s
 }
 
@@ -152,6 +153,21 @@ func (s *Server) handleEvent(w http.ResponseWriter, r *http.Request, routerID st
 	}
 	if s.cfg.OnEvent != nil {
 		s.cfg.OnEvent(routerID, ev)
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request, routerID string) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxResultBytes)
+	var hb Heartbeat
+	if err := json.NewDecoder(r.Body).Decode(&hb); err != nil {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	if err := s.cfg.Store.SetStatus(routerID, hb.Status); err != nil {
+		s.cfg.Logger.Printf("set status for %s: %v", routerID, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
 	}
 	w.WriteHeader(http.StatusOK)
 }

@@ -127,6 +127,10 @@ func cmdDaemon(args []string) error {
 			XrayBinary: xrayBinaryPath(), OptPath: optPath(),
 			InitScript: initScript,
 		}
+		opts.StatusFunc = func(ctx context.Context) string {
+			out, _ := handler.Handle(ctx, botcontrol.Command{Action: botcontrol.ActionStatus})
+			return out
+		}
 		go func() {
 			if err := botcontrol.Run(ctx, opts, handler); err != nil && ctx.Err() == nil {
 				fmt.Fprintln(os.Stderr, "agent stopped:", err)

@@ -98,6 +98,26 @@ func TestRouterHandler_SubSetURLThenRefresh(t *testing.T) {
 	}
 }
 
+func TestRouterHandler_ScrubsSubscriptionURLFromErrors(t *testing.T) {
+	const secret = "http://127.0.0.1:1/sub/SUPERSECRETTOKEN"
+	cfg := config.Default()
+	cfg.Subscription = &config.Subscription{URL: secret}
+	h := &RouterHandler{Config: cfg, ConfigPath: filepath.Join(t.TempDir(), "c.json")}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := h.Handle(ctx, Command{Action: ActionSubRefresh})
+	if err == nil {
+		t.Fatal("expected refresh against a dead endpoint to fail")
+	}
+	if strings.Contains(err.Error(), "SUPERSECRETTOKEN") || strings.Contains(err.Error(), secret) {
+		t.Errorf("error leaked the subscription URL: %v", err)
+	}
+	if !strings.Contains(err.Error(), "<подписка-URL>") {
+		t.Errorf("error should carry the redaction placeholder, got: %v", err)
+	}
+}
+
 func TestRouterHandler_SubRefresh_NoURLErrors(t *testing.T) {
 	h := &RouterHandler{Config: config.Default()}
 	if _, err := h.Handle(context.Background(), Command{Action: ActionSubRefresh}); err == nil {

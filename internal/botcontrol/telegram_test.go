@@ -395,6 +395,36 @@ func TestTelegramBot_RemoveRouter(t *testing.T) {
 	}
 }
 
+func TestTelegramBot_Rename(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	mustRegister(t, store, "home")
+	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL}
+	runBotInBackground(t, bot)
+
+	fake.push(1, "/rename home Дом милый дом")
+	if reply := fake.waitForReply(t, 3*time.Second); !strings.Contains(reply, "Дом милый дом") {
+		t.Errorf("reply = %q", reply)
+	}
+	if store.NameFor("home") != "Дом милый дом" {
+		t.Errorf("NameFor(home) = %q", store.NameFor("home"))
+	}
+}
+
+func TestTelegramBot_StatusNoArg_Overview(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	mustRegister(t, store, "home")
+	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL}
+	runBotInBackground(t, bot)
+
+	fake.push(1, "/status")
+	reply := fake.waitForReply(t, 3*time.Second)
+	if !strings.Contains(reply, "home") || !strings.Contains(reply, "⚪") {
+		t.Errorf("/status overview = %q, want it to list 'home' with a status dot", reply)
+	}
+}
+
 func TestTelegramBot_ListRoutersEmpty(t *testing.T) {
 	srv, fake := newFakeTelegram(t)
 	store := newBotStore(t)

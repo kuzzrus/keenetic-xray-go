@@ -97,6 +97,25 @@ func (s *Store) SeedRouter(routerID, token, name string) error {
 	return s.saveLocked()
 }
 
+// RenameRouter changes a registered router's display name (an empty name
+// falls back to the id in listings). It fails if routerID is not
+// registered.
+func (s *Store) RenameRouter(routerID, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.state.Registry[routerID]
+	if !ok {
+		return fmt.Errorf("router %q is not registered", routerID)
+	}
+	prev := rec.Name
+	rec.Name = name
+	if err := s.saveLocked(); err != nil {
+		rec.Name = prev
+		return err
+	}
+	return nil
+}
+
 // RemoveRouter unregisters routerID and drops its queue and last result.
 // It fails if routerID is not registered.
 func (s *Store) RemoveRouter(routerID string) error {

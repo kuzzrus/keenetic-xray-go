@@ -14,6 +14,26 @@ const DefaultOfflineThreshold = 90 * time.Second
 // DefaultOfflineCheckInterval is how often OfflineWatcher re-checks.
 const DefaultOfflineCheckInterval = 30 * time.Second
 
+// routerOnline reports whether a router with this last poll time counts
+// as online right now (polled within DefaultOfflineThreshold). A zero
+// time -- never polled -- is not online.
+func routerOnline(lastPollAt time.Time) bool {
+	return !lastPollAt.IsZero() && time.Since(lastPollAt) < DefaultOfflineThreshold
+}
+
+// routerDot is the status glyph for a router list: green online, red
+// silent, white never-connected.
+func routerDot(lastPollAt time.Time) string {
+	switch {
+	case lastPollAt.IsZero():
+		return "⚪"
+	case routerOnline(lastPollAt):
+		return "🟢"
+	default:
+		return "🔴"
+	}
+}
+
 // OfflineWatcher watches a Store's registry and reports when a router
 // that had been polling stops (and when it resumes). It only concerns
 // itself with routers that have polled at least once -- a freshly

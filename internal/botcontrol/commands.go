@@ -2,6 +2,7 @@ package botcontrol
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -36,8 +37,34 @@ type RouterHandler struct {
 	OptPath    string
 }
 
-// Handle implements Handler.
+// Handle implements Handler. It scrubs known secrets out of both the
+// output and any error before they leave the router for the control
+// server (and from there, the chat).
 func (h *RouterHandler) Handle(ctx context.Context, cmd Command) (string, error) {
+	out, err := h.handle(ctx, cmd)
+	out = h.scrubSecrets(out)
+	if err != nil {
+		err = errors.New(h.scrubSecrets(err.Error()))
+	}
+	return out, err
+}
+
+// scrubSecrets removes values that must never reach the chat: right now
+// the subscription URL, since many providers carry an access token in
+// its path or query and a failed refresh surfaces the URL verbatim in a
+// *url.Error. The router is the only place the raw value is known, so
+// this happens here at the boundary, not in the bot.
+func (h *RouterHandler) scrubSecrets(s string) string {
+	if s == "" || h.Config == nil || h.Config.Subscription == nil {
+		return s
+	}
+	if u := h.Config.Subscription.URL; u != "" {
+		s = strings.ReplaceAll(s, u, "<подписка-URL>")
+	}
+	return s
+}
+
+func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error) {
 	switch cmd.Action {
 	case ActionStatus:
 		return h.status(ctx), nil

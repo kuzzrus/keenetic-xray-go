@@ -151,6 +151,17 @@ func (s *Store) LastResult(routerID string) *Result {
 	return rs.LastResult
 }
 
+// LastPollAt returns when routerID last polled, or the zero time if it
+// never has.
+func (s *Store) LastPollAt(routerID string) time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if rs, ok := s.state.Routers[routerID]; ok {
+		return rs.LastPollAt
+	}
+	return time.Time{}
+}
+
 // PendingCount returns how many commands are queued but not yet
 // delivered for routerID.
 func (s *Store) PendingCount(routerID string) int {

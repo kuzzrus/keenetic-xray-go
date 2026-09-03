@@ -511,6 +511,9 @@ func TestTelegramBot_TimesOutWhenRouterNeverAnswers(t *testing.T) {
 	srv, fake := newFakeTelegram(t)
 	store := newBotStore(t)
 	mustRegister(t, store, "router-1")
+	// The router is online (just polled) but won't answer this command;
+	// an offline router gets different phrasing (see TestStepResult).
+	_, _ = store.Dequeue("router-1")
 	bot := &TelegramBot{
 		Token:         "test-token",
 		AllowedChats:  map[int64]bool{1: true},
@@ -524,6 +527,27 @@ func TestTelegramBot_TimesOutWhenRouterNeverAnswers(t *testing.T) {
 	reply := fake.waitForReply(t, 3*time.Second)
 	if !strings.Contains(reply, "ещё не ответил") {
 		t.Errorf("reply = %q, want a not-answered-yet message", reply)
+	}
+}
+
+func TestTelegramBot_RouterOfflineMessage(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	mustRegister(t, store, "router-1") // registered, never polled -> offline
+	bot := &TelegramBot{
+		Token: "test-token", AllowedChats: map[int64]bool{1: true},
+		Store: store, APIBase: srv.URL, ResultTimeout: 3 * time.Second,
+	}
+	runBotInBackground(t, bot)
+
+	start := time.Now()
+	fake.push(1, "/status router-1")
+	reply := fake.waitForReply(t, 3*time.Second)
+	if !strings.Contains(reply, "офлайн") {
+		t.Errorf("reply = %q, want an offline note", reply)
+	}
+	if time.Since(start) > 2*time.Second {
+		t.Error("offline router should not burn the full ResultTimeout")
 	}
 }
 

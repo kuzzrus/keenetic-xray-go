@@ -104,6 +104,7 @@ func run(args []string) error {
 	errCh := make(chan error, 2)
 	go func() { errCh <- botcontrol.ListenAndServeTLS(ctx, cfg.ListenAddr, cert, server) }()
 	go func() { errCh <- bot.Run(ctx) }()
+	go (&botcontrol.OfflineWatcher{Store: store, Notify: bot.NotifyOffline}).Run(ctx)
 
 	logger.Printf("listening on %s (fingerprint %s, %d router(s) registered)", cfg.ListenAddr, fingerprint, len(store.Routers()))
 

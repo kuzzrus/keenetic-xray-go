@@ -149,22 +149,38 @@ func (b *TelegramBot) initClient() {
 	})
 }
 
-// NotifyEvent DMs every allowed chat about an unsolicited router event
-// (a failover switch, the daemon starting). Called from the control
-// server's /agent/event handler; best-effort, each send is logged on
-// failure but never retried.
-func (b *TelegramBot) NotifyEvent(routerID string, ev Event) {
+// notify DMs every allowed chat one line about routerID, prefixed with
+// the router's name. Best-effort: each send is logged on failure (inside
+// sendMessage) but never retried. Safe to call from a server request
+// goroutine -- initClient is sync.Once-guarded.
+func (b *TelegramBot) notify(routerID, body string) {
 	b.initClient()
 	label := routerID
 	if name := b.Store.NameFor(routerID); name != "" {
 		label = name + " (" + routerID + ")"
 	}
-	text := "🔔 " + label + "\n" + ev.Text
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	for chatID := range b.AllowedChats {
-		b.sendMessage(ctx, chatID, text)
+		b.sendMessage(ctx, chatID, "🔔 "+label+"\n"+body)
 	}
+}
+
+// NotifyEvent DMs every allowed chat about an unsolicited router event
+// (a failover switch, the daemon starting). Called from the control
+// server's /agent/event handler.
+func (b *TelegramBot) NotifyEvent(routerID string, ev Event) {
+	b.notify(routerID, ev.Text)
+}
+
+// NotifyOffline DMs every allowed chat when a router stops polling, and
+// again when it resumes. Called by OfflineWatcher.
+func (b *TelegramBot) NotifyOffline(routerID string, online bool) {
+	if online {
+		b.notify(routerID, "🟢 снова на связи")
+		return
+	}
+	b.notify(routerID, "🔴 не выходит на связь")
 }
 
 // scrubToken renders err for logging with the bot token redacted.

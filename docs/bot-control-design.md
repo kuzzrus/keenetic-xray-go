@@ -69,6 +69,14 @@ hook feeds both the `status` history ring and `Daemon.Events()`;
 `botcontrol.FailoverEvents` renders each to an `Event` and the agent's
 `Run` loop forwards it.
 
+Offline detection is server-side and needs no agent cooperation:
+`OfflineWatcher` (a goroutine in the control server) scans the registry
+every 30s and calls `bot.NotifyOffline` when a router that had been
+polling goes silent past `DefaultOfflineThreshold` (90s), and again when
+it resumes. Its first scan only seeds state, so a control-server restart
+doesn't spray messages; a router that has never polled is "not set up
+yet", not offline, and is skipped.
+
 **Router identity is a header, not a body field**
 (`RouterIDHeader = "X-Router-Id"`, in `protocol.go`): the server's auth
 middleware needs to know which router's token to check *before* parsing

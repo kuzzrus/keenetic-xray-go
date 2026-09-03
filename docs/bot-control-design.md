@@ -102,27 +102,42 @@ low-traffic, personal-scale control server, and correct by construction
 (no missed-wakeup window the way a subscribe-after-the-fact channel
 could have).
 
-## Telegram bot (`telegram.go`)
+## Telegram bot (`telegram.go`, `telegram_menu.go`, `telegram_wizard.go`)
 
 Long-polls `getUpdates` (not a webhook -- no inbound port needed on the
-VPS side either, beyond the agent-facing HTTPS port). Messages from chat
-IDs outside `allowed_chat_ids` are silently ignored -- no error reply,
-so an unlisted chat can't even confirm the bot exists.
+VPS side either, beyond the agent-facing HTTPS port). Messages *and
+callback queries* from chat IDs outside `allowed_chat_ids` are silently
+ignored -- no error reply, so an unlisted chat can't even confirm the bot
+exists.
 
-One control server can front several routers. Routers are registered from
-the chat at runtime -- the registry lives in the state file next to the
-command queues, so `/add_router` needs neither a restart nor a config
-edit:
+### Inline menu
+
+`/menu` (also `/start`) opens a button UI: main menu -> router list ->
+per-router card. `setMyCommands` registers `/menu /routers /add_router
+/help` so Telegram shows them in its command list.
+
+A card's buttons (`📊 Статус`, `⬆️ primary`, `⬇️ backup`, `📋 Профили`,
+`🔄 Подписка`, `📄 Список`) enqueue the matching command, edit the same
+message to `⏳ команда в очереди…`, then a goroutine waits up to
+`ResultTimeout` (default 20s) and edits it again with the result (or a
+"not answered, will run on its next poll" note). `📦 Установка агента`
+re-shows the `agent configure` line; `🗑 Удалить роутер` asks for
+confirmation before `RemoveRouter`. Callback data is a short `kind:arg`
+string routed by `handleCallback`.
+
+`➕ Добавить роутер` starts a two-step text dialog (`telegram_wizard.go`):
+id, then display name. State is per-chat; any `/command` other than
+`/cancel` aborts it and still runs.
+
+### Text commands
+
+Everything the menu does is also a text command, and a few argument-taking
+ones are text-only:
 
 ```
 /add_router <id> [name]    register a router; the bot replies with its agent configure line
 /remove_router <id>        unregister a router (the agent on the router is left alone)
 /routers                   list registered routers
-```
-
-The rest take a registered router ID as their first argument:
-
-```
 /status <router>
 /switch <router> primary|backup
 /profile_list <router>
@@ -133,12 +148,9 @@ The rest take a registered router ID as their first argument:
 /sub_setbackup <router> <index>
 ```
 
-The bot enqueues the command, then waits up to `ResultTimeout` (default
-20s) for that router to answer before replying -- an online router
-(default poll interval 5s) feels synchronous even though the transport
-underneath is poll-based. A router that doesn't answer in time gets a
-"queued, will run on its next poll" reply instead of the bot blocking
-indefinitely.
+A text command enqueues and then blocks up to `ResultTimeout` for the
+router to answer before replying (an online router, default poll interval
+5s, feels synchronous); the menu path never blocks the update loop.
 
 ## Configuring a router's agent
 

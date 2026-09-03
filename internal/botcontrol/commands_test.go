@@ -386,6 +386,42 @@ func TestRouterHandler_SetSlotSource(t *testing.T) {
 	}
 }
 
+func TestRouterHandler_SetSlotSource_MirrorsEmptyOtherSlot(t *testing.T) {
+	cfg := config.Default() // PrimaryIndex/BackupIndex both -1
+	h := &RouterHandler{Config: cfg, ConfigPath: filepath.Join(t.TempDir(), "config.json")}
+
+	out, err := h.Handle(context.Background(), Command{
+		Action: ActionSetPrimarySource,
+		Args:   []string{"vless://11111111-2222-3333-4444-555555555555@a.example:443?type=tcp&security=none#RU-1"},
+	})
+	if err != nil {
+		t.Fatalf("set_primary_source: %v", err)
+	}
+	if cfg.PrimaryIndex != 0 || cfg.BackupIndex != 0 {
+		t.Errorf("indices = %d/%d, want 0/0 (backup mirrored so the daemon can run)", cfg.PrimaryIndex, cfg.BackupIndex)
+	}
+	if !strings.Contains(out, "backup тоже") {
+		t.Errorf("out = %q, want a note that backup was mirrored", out)
+	}
+}
+
+func TestRouterHandler_RebindRestartsIdleDaemon(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh on PATH")
+	}
+	cfg := config.Default()
+	cfg.Profiles = []config.Profile{testProfile("p", "a"), testProfile("b", "b")}
+	cfg.PrimaryIndex, cfg.BackupIndex = 0, 1
+	// A daemon that was never Run(): Snapshot reports not-running, so
+	// rebindXray takes the idle-restart branch.
+	d := failover.NewDaemon(failover.Paths{}, cfg)
+	h := &RouterHandler{Daemon: d, Config: cfg, InitScript: "/bin/true"}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	h.rebindXray(ctx) // must return promptly (spawns detached restart), not hang
+}
+
 func TestRouterHandler_ScrubsSlotSourceURLs(t *testing.T) {
 	cfg := config.Default()
 	cfg.PrimarySource = &config.SlotSource{URL: "https://p.example/sub/PRIMTOKEN"}

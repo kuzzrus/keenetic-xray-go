@@ -337,18 +337,27 @@ func (h *RouterHandler) switchTo(ctx context.Context, role failover.Role) (strin
 	return fmt.Sprintf("switched to %s", role), nil
 }
 
-// rebindXray re-applies the current live role so xray regenerates its
-// production config and restarts -- picking up a changed profile,
-// subscription or Proxy0 bind without a full daemon restart, and without
-// touching the Proxy0 interface. Best-effort: if the daemon isn't in its
-// Run loop yet (idling with no primary/backup), this no-ops and the
-// change lands on the daemon's next real start.
+// rebindXray makes a config change take effect. If the daemon is in its
+// Run loop it re-applies the current live role (xray regenerates its
+// production config and restarts -- no full daemon restart, Proxy0 left
+// alone). If the daemon is idling (it starts idle until primary AND
+// backup are set) and the config now has both slots, it kicks a detached
+// init.d restart so the daemon actually starts serving -- otherwise a
+// setup done entirely from the bot would leave the daemon idle until a
+// manual restart.
 func (h *RouterHandler) rebindXray(ctx context.Context) {
 	if h.Daemon == nil {
 		return
 	}
 	if snap, ok := h.Daemon.Snapshot(ctx); ok {
 		_ = h.Daemon.ForceSwitch(ctx, snap.LiveRole)
+		return
+	}
+	if h.InitScript != "" && h.Config.Primary() != nil && h.Config.Backup() != nil {
+		c := exec.Command("sh", "-c", "sleep 2; "+h.InitScript+" restart")
+		if err := c.Start(); err == nil {
+			go func() { _ = c.Wait() }()
+		}
 	}
 }
 
@@ -507,20 +516,41 @@ func (h *RouterHandler) setSlotSource(ctx context.Context, primary bool, args []
 	idx := h.upsertProfile(prof)
 
 	slot := &config.SlotSource{URL: src, Selector: selector}
-	word := "backup"
+	word, mirrored := "backup", false
 	if primary {
 		h.Config.PrimaryIndex = idx
 		h.Config.PrimarySource = slot
 		word = "primary"
+		if !h.slotSet(h.Config.BackupIndex) {
+			h.Config.BackupIndex = idx // no backup yet -- mirror so the daemon can run
+			mirrored = true
+		}
 	} else {
 		h.Config.BackupIndex = idx
 		h.Config.BackupSource = slot
+		if !h.slotSet(h.Config.PrimaryIndex) {
+			h.Config.PrimaryIndex = idx
+			mirrored = true
+		}
 	}
 	if err := h.Config.Save(h.ConfigPath); err != nil {
 		return "", err
 	}
 	h.rebindXray(ctx)
-	return fmt.Sprintf("%s ← %s", word, prof.Remark), nil
+
+	msg := fmt.Sprintf("%s ← %s", word, prof.Remark)
+	if mirrored {
+		other := "backup"
+		if !primary {
+			other = "primary"
+		}
+		msg += fmt.Sprintf(" (%s тоже — задай ему отдельный источник для настоящего failover)", other)
+	}
+	return msg, nil
+}
+
+func (h *RouterHandler) slotSet(idx int) bool {
+	return idx >= 0 && idx < len(h.Config.Profiles)
 }
 
 // resolveSource turns a link or subscription URL (+ selector) into one

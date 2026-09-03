@@ -12,10 +12,17 @@
 # (curl, not wget: some routers' busybox wget can't fetch https:// at all.
 #  opkg update && opkg install curl if it's missing.)
 #
+# One-shot -- pass a link and the install configures itself, no follow-up:
+#   ... | sh -s -- --sub="https://provider.example/sub/token"
+#   ... | sh -s -- --vless="vless://..."
+#
 # Options:
+#   --sub=URL / --vless=LINK / a bare vless:// or http(s):// arg
+#       run `keenetic-xray setup` non-interactively with this source
+#   --no-proxy0            skip the automatic Keenetic Proxy0 wiring
 #   --xray-core=vendored   force this project's size-optimised xray-core build
 #   --xray-core=entware    force `opkg install xray-core` instead
-#   (default: try vendored, fall back to Entware)
+#   (default: try vendored, fall back to Entware; wire Proxy0 on a Keenetic)
 set -eu
 
 REPO="kuzzrus/keenetic-xray-go"
@@ -23,7 +30,11 @@ TMP_IPK="/opt/keenetic-xray-install.ipk"
 
 for arg in "$@"; do
     case "$arg" in
-        --xray-core=*) export KEENETIC_XRAY_CORE="${arg#--xray-core=}" ;;
+        --xray-core=*)       export KEENETIC_XRAY_CORE="${arg#--xray-core=}" ;;
+        --sub=* | --from=*)  export KEENETIC_XRAY_SETUP_FROM="${arg#*=}" ;;
+        --vless=*)           export KEENETIC_XRAY_SETUP_FROM="${arg#--vless=}" ;;
+        vless://* | http://* | https://*) export KEENETIC_XRAY_SETUP_FROM="$arg" ;;
+        --no-proxy0)         export KEENETIC_XRAY_NO_PROXY0=1 ;;
         *) echo "keenetic-xray: unknown option: $arg" >&2; exit 2 ;;
     esac
 done

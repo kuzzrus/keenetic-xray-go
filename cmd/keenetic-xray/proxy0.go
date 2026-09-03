@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -109,8 +111,8 @@ func proxy0Set(cfg *config.Config, args []string) error {
 	if err := cfg.Save(configPath()); err != nil {
 		return err
 	}
-	fmt.Printf("%s -> %s:%d\nRestart the daemon so Xray rebinds to the LAN address:\n  /opt/etc/init.d/S99keenetic-xray restart\n",
-		proxy0IfaceName(cfg.Proxy0.Interface), ip, port)
+	fmt.Printf("%s -> %s:%d\n", proxy0IfaceName(cfg.Proxy0.Interface), ip, port)
+	offerDaemonRestart(bufio.NewReader(os.Stdin))
 	return nil
 }
 

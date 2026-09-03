@@ -8,6 +8,18 @@ set -e
     || echo "keenetic-xray: xray-core not installed yet -- run: keenetic-xray internal ensure-xray-core"
 
 /opt/sbin/keenetic-xray internal postinst-setup
+
+# If install.sh was given a link (--sub=/--vless=), do the whole first-run
+# configuration here so nothing else is needed. Best-effort: a failure
+# (bad URL, offline) just leaves it for `keenetic-xray setup` by hand.
+if [ -n "${KEENETIC_XRAY_SETUP_FROM:-}" ]; then
+    _proxy0=--proxy0
+    [ -n "${KEENETIC_XRAY_NO_PROXY0:-}" ] && _proxy0=--no-proxy0
+    /opt/sbin/keenetic-xray setup --yes "$_proxy0" --from "$KEENETIC_XRAY_SETUP_FROM" \
+        || echo "keenetic-xray: auto-setup failed -- run 'keenetic-xray setup' by hand"
+fi
+
+# Start last, so it comes up with the full config -- no restart needed.
 /opt/etc/init.d/S99keenetic-xray start
 
 exit 0

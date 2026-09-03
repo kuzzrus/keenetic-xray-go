@@ -48,7 +48,7 @@ func routerCardKB(id string) inlineKeyboard {
 	return inlineKeyboard{InlineKeyboard: [][]inlineButton{
 		{{Text: "📊 Статус", CallbackData: "act:status:" + id}, {Text: "🩺 Doctor", CallbackData: "act:doctor:" + id}},
 		{{Text: "⬆️ primary", CallbackData: "act:sw_pri:" + id}, {Text: "⬇️ backup", CallbackData: "act:sw_bak:" + id}},
-		{{Text: "📋 Профили", CallbackData: "pf:" + id}, {Text: "🔗 Ссылка", CallbackData: "src:" + id}},
+		{{Text: "📋 Профили", CallbackData: "pf:" + id}, {Text: "🔗 Источники", CallbackData: "srcm:" + id}},
 		{{Text: "🔄 Обновить подписку", CallbackData: "act:sub_refresh:" + id}},
 		{{Text: "♻️ Рестарт демона", CallbackData: "act:restart:" + id}, {Text: "🔁 Обновить агент", CallbackData: "upd:" + id}},
 		{{Text: "✏️ Переименовать", CallbackData: "rename:" + id}, {Text: "📦 Установка агента", CallbackData: "install:" + id}},
@@ -68,6 +68,19 @@ func updateConfirmKB(id string) inlineKeyboard {
 	return inlineKeyboard{InlineKeyboard: [][]inlineButton{
 		{{Text: "🔁 Да, обновить агент", CallbackData: "updyes:" + id}},
 		{{Text: "↩️ Отмена", CallbackData: "router:" + id}},
+	}}
+}
+
+func sourcesScreenText(id string) string {
+	return "🔗 Источники " + id + "\n\n" +
+		"Задай, откуда брать профиль для каждого слота — можно из разных ссылок или подписок.\n" +
+		"Основной/резервный среди уже загруженных профилей меняются в 📋 Профили."
+}
+
+func sourcesScreenKB(id string) inlineKeyboard {
+	return inlineKeyboard{InlineKeyboard: [][]inlineButton{
+		{{Text: "⬆️ Основная", CallbackData: "srcp:" + id}, {Text: "⬇️ Резервная", CallbackData: "srcb:" + id}},
+		{{Text: "⬅️ Назад", CallbackData: "router:" + id}},
 	}}
 }
 
@@ -160,8 +173,17 @@ func (b *TelegramBot) handleCallback(ctx context.Context, cb tgCallbackQuery) {
 		b.editCB(ctx, cb, b.listRouters(), b.routersListKB())
 	case data == "add":
 		b.startAddRouterWizard(ctx, cb.Message.Chat.ID)
-	case strings.HasPrefix(data, "src:"):
-		b.startSourceWizard(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "src:"))
+	case strings.HasPrefix(data, "srcm:"):
+		id := strings.TrimPrefix(data, "srcm:")
+		if !b.Store.HasRouter(id) {
+			b.editCB(ctx, cb, "нет такого роутера: "+id, b.routersListKB())
+			return
+		}
+		b.editCB(ctx, cb, sourcesScreenText(id), sourcesScreenKB(id))
+	case strings.HasPrefix(data, "srcp:"):
+		b.startSlotSourceWizard(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "srcp:"), true)
+	case strings.HasPrefix(data, "srcb:"):
+		b.startSlotSourceWizard(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "srcb:"), false)
 	case strings.HasPrefix(data, "rename:"):
 		b.startRenameWizard(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "rename:"))
 	case strings.HasPrefix(data, "pf:"):
@@ -274,7 +296,7 @@ func (b *TelegramBot) profilesScreen(ctx context.Context, id string) (string, in
 
 	rows := parseProfileRows(out)
 	if len(rows) == 0 {
-		return "📋 Профили " + id + "\n\nпрофилей нет. Задай ссылку подписки — кнопка 🔗 Ссылка.", back
+		return "📋 Профили " + id + "\n\nпрофилей нет. Задай источник — кнопка 🔗 Источники.", back
 	}
 
 	var body strings.Builder

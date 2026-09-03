@@ -81,6 +81,16 @@ type Subscription struct {
 	BackupKey     string    `json:"backup_key,omitempty"`
 }
 
+// SlotSource records where a single failover slot's profile came from, so
+// primary and backup can be fed from independent links or subscriptions.
+// URL is a secret (kept in the 0600 config.json, never echoed); Selector
+// picks one entry from a multi-profile subscription (an index, a Remark
+// substring, or "" / "first" for the first).
+type SlotSource struct {
+	URL      string `json:"url"`
+	Selector string `json:"selector,omitempty"`
+}
+
 // FailoverConfig holds the tunable health-check/failover parameters.
 type FailoverConfig struct {
 	CheckIntervalSeconds      int    `json:"check_interval_seconds"`
@@ -140,14 +150,19 @@ type Proxy0Config struct {
 
 // Config is the full persisted /opt/etc/keenetic-xray/config.json shape.
 type Config struct {
-	Variant      string         `json:"variant"` // "mini" | "full"
-	Profiles     []Profile      `json:"profiles"`
-	PrimaryIndex int            `json:"primary_index"` // -1 if unset
-	BackupIndex  int            `json:"backup_index"`  // -1 if unset
-	Subscription *Subscription  `json:"subscription,omitempty"`
-	Failover     FailoverConfig `json:"failover"`
-	Agent        AgentConfig    `json:"agent"`
-	Proxy0       Proxy0Config   `json:"proxy0"`
+	Variant      string        `json:"variant"` // "mini" | "full"
+	Profiles     []Profile     `json:"profiles"`
+	PrimaryIndex int           `json:"primary_index"` // -1 if unset
+	BackupIndex  int           `json:"backup_index"`  // -1 if unset
+	Subscription *Subscription `json:"subscription,omitempty"`
+	// PrimarySource / BackupSource feed the two slots from independent
+	// links or subscriptions (set via the bot's 🔗 Источники). Optional;
+	// a single shared Subscription still works the old way.
+	PrimarySource *SlotSource    `json:"primary_source,omitempty"`
+	BackupSource  *SlotSource    `json:"backup_source,omitempty"`
+	Failover      FailoverConfig `json:"failover"`
+	Agent         AgentConfig    `json:"agent"`
+	Proxy0        Proxy0Config   `json:"proxy0"`
 }
 
 // Default returns a fresh Config with no profiles configured yet, ready to

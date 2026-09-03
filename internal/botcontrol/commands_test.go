@@ -114,7 +114,7 @@ func TestRouterHandler_ScrubsSubscriptionURLFromErrors(t *testing.T) {
 	if strings.Contains(err.Error(), "SUPERSECRETTOKEN") || strings.Contains(err.Error(), secret) {
 		t.Errorf("error leaked the subscription URL: %v", err)
 	}
-	if !strings.Contains(err.Error(), "<подписка-URL>") {
+	if !strings.Contains(err.Error(), "<источник-URL>") {
 		t.Errorf("error should carry the redaction placeholder, got: %v", err)
 	}
 }
@@ -297,6 +297,104 @@ func TestRouterHandler_DaemonRestart(t *testing.T) {
 	}
 	if !strings.Contains(out, "перезапуск") {
 		t.Errorf("daemon_restart output = %q", out)
+	}
+}
+
+func TestPickProfile(t *testing.T) {
+	ps := []config.Profile{
+		{Remark: "🇷🇺 RU-1"}, {Remark: "🇳🇱 NL-1"}, {Remark: "🇩🇪 DE-1"},
+	}
+	cases := []struct {
+		sel     string
+		want    string
+		wantErr bool
+	}{
+		{"", "🇷🇺 RU-1", false},
+		{"first", "🇷🇺 RU-1", false},
+		{"1", "🇳🇱 NL-1", false},
+		{"9", "", true},
+		{"nl", "🇳🇱 NL-1", false},
+		{"de-1", "🇩🇪 DE-1", false},
+		{"xx", "", true},
+		{"1", "🇳🇱 NL-1", false},
+	}
+	for _, c := range cases {
+		got, err := pickProfile(ps, c.sel)
+		if c.wantErr {
+			if err == nil {
+				t.Errorf("pickProfile(%q): want error", c.sel)
+			}
+			continue
+		}
+		if err != nil || got.Remark != c.want {
+			t.Errorf("pickProfile(%q) = %q, %v; want %q", c.sel, got.Remark, err, c.want)
+		}
+	}
+}
+
+func TestRouterHandler_SetSlotSource(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	cfg := config.Default()
+	h := &RouterHandler{Config: cfg, ConfigPath: cfgPath}
+
+	// A vless:// link -> primary slot.
+	out, err := h.Handle(context.Background(), Command{
+		Action: ActionSetPrimarySource,
+		Args:   []string{"vless://11111111-2222-3333-4444-555555555555@a.example.com:443?type=tcp&security=none#RU-1"},
+	})
+	if err != nil {
+		t.Fatalf("set_primary_source (vless): %v", err)
+	}
+	if !strings.Contains(out, "primary ← RU-1") {
+		t.Errorf("out = %q", out)
+	}
+	if len(cfg.Profiles) != 1 || cfg.PrimaryIndex != 0 || cfg.PrimarySource == nil {
+		t.Fatalf("after primary: profiles=%d primaryIdx=%d src=%v", len(cfg.Profiles), cfg.PrimaryIndex, cfg.PrimarySource)
+	}
+
+	// A 2-profile subscription with a selector -> backup slot, distinct profile.
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "vless://22222222-3333-4444-5555-666666666666@b.example.com:443?type=tcp&security=none#NL-1\n"+
+			"vless://33333333-4444-5555-6666-777777777777@c.example.com:443?type=tcp&security=none#DE-1\n")
+	}))
+	defer backend.Close()
+
+	out, err = h.Handle(context.Background(), Command{
+		Action: ActionSetBackupSource,
+		Args:   []string{backend.URL, "DE"},
+	})
+	if err != nil {
+		t.Fatalf("set_backup_source (sub): %v", err)
+	}
+	if !strings.Contains(out, "backup ← DE-1") {
+		t.Errorf("out = %q", out)
+	}
+	if len(cfg.Profiles) != 2 || cfg.BackupIndex != 1 {
+		t.Fatalf("after backup: profiles=%d backupIdx=%d", len(cfg.Profiles), cfg.BackupIndex)
+	}
+	if cfg.PrimaryIndex == cfg.BackupIndex {
+		t.Error("primary and backup ended up the same slot")
+	}
+
+	saved, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if saved.BackupSource == nil || saved.BackupSource.Selector != "DE" {
+		t.Errorf("saved BackupSource = %+v", saved.BackupSource)
+	}
+}
+
+func TestRouterHandler_ScrubsSlotSourceURLs(t *testing.T) {
+	cfg := config.Default()
+	cfg.PrimarySource = &config.SlotSource{URL: "https://p.example/sub/PRIMTOKEN"}
+	cfg.BackupSource = &config.SlotSource{URL: "https://b.example/sub/BAKTOKEN"}
+	h := &RouterHandler{Config: cfg}
+
+	got := h.scrubSecrets("primary from https://p.example/sub/PRIMTOKEN and backup from https://b.example/sub/BAKTOKEN")
+	if strings.Contains(got, "PRIMTOKEN") || strings.Contains(got, "BAKTOKEN") {
+		t.Errorf("slot source URLs leaked: %q", got)
 	}
 }
 

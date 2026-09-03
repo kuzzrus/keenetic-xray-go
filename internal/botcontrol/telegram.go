@@ -476,6 +476,8 @@ const helpText = `/menu — меню с кнопками (проще всего)
 /sub_list <router>
 /sub_setprimary <router> <index>
 /sub_setbackup <router> <index>
+/set_primary_source <router> <vless://…|url> [селектор]
+/set_backup_source <router> <vless://…|url> [селектор]
 /proxy0 <router> [show|on|off]
 /restart <router> — перезапустить демон
 /ensure_core <router> — доустановить ядро xray
@@ -518,6 +520,10 @@ func (b *TelegramBot) dispatch(ctx context.Context, text string) string {
 		return b.dispatchSubSetRole(ctx, args, ActionSubSetPrimary)
 	case "/sub_setbackup":
 		return b.dispatchSubSetRole(ctx, args, ActionSubSetBackup)
+	case "/set_primary_source":
+		return b.dispatchSlotSource(ctx, args, ActionSetPrimarySource)
+	case "/set_backup_source":
+		return b.dispatchSlotSource(ctx, args, ActionSetBackupSource)
 	case "/proxy0":
 		return b.dispatchProxy0(ctx, args)
 	case "/restart":
@@ -721,6 +727,20 @@ func (b *TelegramBot) dispatchSubSetRole(ctx context.Context, args []string, act
 		return fmt.Sprintf("неверный индекс %q", args[1])
 	}
 	return b.runRouterCommand(ctx, args[:1], action, []string{args[1]})
+}
+
+// dispatchSlotSource handles /set_primary_source|/set_backup_source
+// <router> <vless|url> [selector]. The source value is redacted in the
+// router's reply.
+func (b *TelegramBot) dispatchSlotSource(ctx context.Context, args []string, action string) string {
+	if len(args) < 2 {
+		return "формат: /set_primary_source|/set_backup_source <роутер> <vless://…|http(s)://…> [селектор]"
+	}
+	cmdArgs := []string{args[1]}
+	if len(args) > 2 {
+		cmdArgs = append(cmdArgs, strings.Join(args[2:], " "))
+	}
+	return b.runRouterCommand(ctx, args[:1], action, cmdArgs)
 }
 
 // runRouterCommand enqueues action for the router named in args[0], then

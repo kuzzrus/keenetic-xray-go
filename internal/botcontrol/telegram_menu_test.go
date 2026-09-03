@@ -45,9 +45,10 @@ func TestTelegramBot_CallbackOpensRouterCardAndRunsAction(t *testing.T) {
 		t.Fatalf("router list buttons = %v", fake.lastEdit(t).Buttons)
 	}
 
-	// Tap the router -> its card, with a Статус button.
+	// Tap the router -> its card, with a Статус button. ("снимок состояния"
+	// is card-only text -- the routers list also contains "home".)
 	fake.pushCallback(1, msgID, "router:home")
-	fake.waitForEditContaining(t, 3*time.Second, "📡 home")
+	fake.waitForEditContaining(t, 3*time.Second, "снимок состояния")
 	if !fake.lastEdit(t).hasButton("act:status:home") || !fake.lastEdit(t).hasButton("del:home") {
 		t.Fatalf("router card buttons = %v", fake.lastEdit(t).Buttons)
 	}
@@ -67,7 +68,7 @@ func TestTelegramBot_CallbackOpensRouterCardAndRunsAction(t *testing.T) {
 	// Tap "Статус" -> queued, then the same message is edited with the result.
 	fake.pushCallback(1, msgID, "act:status:home")
 	got := fake.waitForEditContaining(t, 3*time.Second, "variant: full")
-	if !strings.Contains(got, "📡 home") {
+	if !strings.Contains(got, "home") {
 		t.Errorf("result edit = %q, want the router card plus the output", got)
 	}
 }

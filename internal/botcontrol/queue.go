@@ -15,9 +15,11 @@ import (
 // RouterState is one router's queued commands and most recent result, as
 // tracked by the control server.
 type RouterState struct {
-	Pending    []Command `json:"pending,omitempty"`
-	LastResult *Result   `json:"last_result,omitempty"`
-	LastPollAt time.Time `json:"last_poll_at,omitempty"`
+	Pending      []Command `json:"pending,omitempty"`
+	LastResult   *Result   `json:"last_result,omitempty"`
+	LastPollAt   time.Time `json:"last_poll_at,omitempty"`
+	LastStatus   string    `json:"last_status,omitempty"`    // rendered snapshot from the agent's heartbeat
+	LastStatusAt time.Time `json:"last_status_at,omitempty"` // when that snapshot was received
 }
 
 type storeState struct {
@@ -112,6 +114,17 @@ func (s *Store) Dequeue(routerID string) (*Command, error) {
 		return nil, err
 	}
 	return &cmd, nil
+}
+
+// SetStatus stores the rendered status snapshot from a router's
+// heartbeat. Called from the /agent/heartbeat handler.
+func (s *Store) SetStatus(routerID, status string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rs := s.routerLocked(routerID)
+	rs.LastStatus = status
+	rs.LastStatusAt = time.Now()
+	return s.saveLocked()
 }
 
 // RecordResult stores result as routerID's most recent result. Called

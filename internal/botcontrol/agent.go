@@ -19,6 +19,11 @@ import (
 // queued work when AgentOptions.PollInterval isn't set.
 const DefaultPollInterval = 5 * time.Second
 
+// DefaultHeartbeatInterval is how often the agent pushes a status
+// snapshot so the router card stays fresh, when AgentOptions
+// .HeartbeatInterval isn't set.
+const DefaultHeartbeatInterval = 30 * time.Second
+
 // Handler executes one Command and returns human-readable output, or an
 // error. Injected so the polling/transport code here doesn't need to
 // import the concrete failover/config/subscription plumbing directly --
@@ -34,6 +39,12 @@ type AgentOptions struct {
 	Token             string        // Bearer token; compared constant-time server-side
 	FingerprintSHA256 string        // hex SHA256 of the server's leaf cert, pinned SSH-host-key style
 	PollInterval      time.Duration // 0 -> DefaultPollInterval
+	HeartbeatInterval time.Duration // 0 -> DefaultHeartbeatInterval
+
+	// StatusFunc, if set, renders the status snapshot the agent pushes to
+	// /agent/heartbeat so the router card stays live. Nil disables the
+	// heartbeat entirely (tests, minimal deployments).
+	StatusFunc func(ctx context.Context) string
 
 	// Events, if set, is drained by Run and each value POSTed to
 	// /agent/event (best-effort). Optional -- a nil channel is simply
@@ -69,16 +80,45 @@ func Run(ctx context.Context, opts AgentOptions, handle Handler) error {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
+	hbInterval := opts.HeartbeatInterval
+	if hbInterval <= 0 {
+		hbInterval = DefaultHeartbeatInterval
+	}
+	hbTicker := time.NewTicker(hbInterval)
+	defer hbTicker.Stop()
+	if opts.StatusFunc != nil {
+		sendHeartbeat(ctx, client, opts) // one right away so the card isn't blank
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
 			pollOnce(ctx, client, opts, handle)
+		case <-hbTicker.C:
+			if opts.StatusFunc != nil {
+				sendHeartbeat(ctx, client, opts)
+			}
 		case ev := <-opts.Events:
 			postEvent(ctx, client, opts, ev)
 		}
 	}
+}
+
+// sendHeartbeat renders the current status via opts.StatusFunc and POSTs
+// it to /agent/heartbeat so the control server's router card stays fresh.
+// Best-effort; caller has checked opts.StatusFunc != nil.
+func sendHeartbeat(ctx context.Context, client *http.Client, opts AgentOptions) {
+	out := opts.StatusFunc(ctx)
+	if out == "" {
+		return
+	}
+	body, err := json.Marshal(Heartbeat{Status: out, Time: time.Now()})
+	if err != nil {
+		return
+	}
+	_ = doJSON(ctx, client, opts, "/agent/heartbeat", body, nil)
 }
 
 // postEvent forwards one unsolicited Event to the control server. Best

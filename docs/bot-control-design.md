@@ -53,6 +53,14 @@ PollResponse { command? }   // at most one command per poll
   posts a `Result` before polling again -- no batching.
 - `POST /agent/result` -- router posts the `Result` of the command it
   just ran, as the raw JSON body (no wrapper type).
+- `POST /agent/heartbeat` -- every `HeartbeatInterval` (30s) the agent
+  pushes a `Heartbeat` (`{status, time}`) whose `status` is the rendered
+  `keenetic-xray status` text (active profile, failover state, agent and
+  xray-core version, uptime, Proxy0, subscription age). The server stores
+  it on the router record; the router card shows it verbatim, so the card
+  is live without queuing a `status` command and waiting. Opt-in on the
+  agent: `AgentOptions.StatusFunc` supplies the text, and is nil (no
+  heartbeat) in minimal deployments and tests.
 - `POST /agent/event` -- router pushes an unsolicited `Event`
   (`{kind, text, time}`) when something happens the operator should hear
   about without asking: a failover switch, the daemon starting. `text`

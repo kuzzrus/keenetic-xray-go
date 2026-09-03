@@ -20,11 +20,13 @@ type RouterRecord struct {
 
 // RouterInfo is a read-only view of a registered router for listings.
 type RouterInfo struct {
-	ID         string
-	Name       string
-	AddedAt    time.Time
-	LastPollAt time.Time // zero if the router has never polled
-	Pending    int
+	ID           string
+	Name         string
+	AddedAt      time.Time
+	LastPollAt   time.Time // zero if the router has never polled
+	Pending      int
+	LastStatus   string    // rendered snapshot from the agent's last heartbeat
+	LastStatusAt time.Time // when that snapshot arrived
 }
 
 // ValidRouterID reports whether id is safe to use as a router identifier:
@@ -177,6 +179,8 @@ func (s *Store) Routers() []RouterInfo {
 		if rs := s.state.Routers[id]; rs != nil {
 			info.LastPollAt = rs.LastPollAt
 			info.Pending = len(rs.Pending)
+			info.LastStatus = rs.LastStatus
+			info.LastStatusAt = rs.LastStatusAt
 		}
 		out = append(out, info)
 	}

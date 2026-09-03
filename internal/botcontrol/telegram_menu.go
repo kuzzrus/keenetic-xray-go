@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // This file is the inline-keyboard UX: a main menu, a router list, and a
@@ -102,17 +103,29 @@ func (b *TelegramBot) routerCardText(id string) string {
 		if r.ID != id {
 			continue
 		}
-		s := "📡 " + r.ID
+		s := routerDot(r.LastPollAt) + " " + r.ID
 		if r.Name != "" {
 			s += " (" + r.Name + ")"
 		}
-		if r.LastPollAt.IsZero() {
-			s += "\nещё не подключался"
-		} else {
-			s += "\nпоследний poll: " + r.LastPollAt.Format("2006-01-02 15:04:05")
+		switch {
+		case r.LastPollAt.IsZero():
+			s += " — ещё не подключался"
+		case routerOnline(r.LastPollAt):
+			s += " — на связи, poll " + shortDur(time.Since(r.LastPollAt)) + " назад"
+		default:
+			s += " — молчит с " + r.LastPollAt.Format("2006-01-02 15:04")
 		}
 		if r.Pending > 0 {
-			s += fmt.Sprintf("\nв очереди: %d", r.Pending)
+			s += fmt.Sprintf(", в очереди: %d", r.Pending)
+		}
+		if r.LastStatus != "" {
+			age := "только что"
+			if d := time.Since(r.LastStatusAt); d > time.Minute {
+				age = shortDur(d) + " назад"
+			}
+			s += "\n\n" + strings.TrimRight(r.LastStatus, "\n") + "\n\n(данные " + age + ")"
+		} else {
+			s += "\n\nснимок состояния ещё не пришёл"
 		}
 		return s
 	}

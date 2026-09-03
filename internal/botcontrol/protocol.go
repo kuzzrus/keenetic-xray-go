@@ -23,6 +23,11 @@ const (
 	ActionSubList       = "sub_list"
 	ActionSubSetPrimary = "sub_setprimary"
 	ActionSubSetBackup  = "sub_setbackup"
+	ActionProxy0Show    = "proxy0_show"
+	ActionProxy0On      = "proxy0_on"
+	ActionProxy0Off     = "proxy0_off"
+	ActionDaemonRestart = "daemon_restart"
+	ActionEnsureCore    = "ensure_core"
 )
 
 // Command is a single unit of work queued for a router by the control

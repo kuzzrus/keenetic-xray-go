@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -35,6 +36,10 @@ type RouterHandler struct {
 	// cmdDaemon from the same path helpers the CLI uses.
 	XrayBinary string
 	OptPath    string
+
+	// InitScript is the daemon's init.d script, exec'd by the
+	// daemon_restart action. Empty -> that action returns an error.
+	InitScript string
 }
 
 // Handle implements Handler. It scrubs known secrets out of both the
@@ -84,6 +89,16 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 		return h.subSetRole(cmd.Args, true)
 	case ActionSubSetBackup:
 		return h.subSetRole(cmd.Args, false)
+	case ActionProxy0Show:
+		return h.proxy0Show(ctx), nil
+	case ActionProxy0On:
+		return h.proxy0Set(ctx)
+	case ActionProxy0Off:
+		return h.proxy0Off(ctx)
+	case ActionDaemonRestart:
+		return h.daemonRestart()
+	case ActionEnsureCore:
+		return h.ensureCore(ctx)
 	default:
 		return "", fmt.Errorf("unknown action %q", cmd.Action)
 	}
@@ -282,6 +297,117 @@ func (h *RouterHandler) switchTo(ctx context.Context, role failover.Role) (strin
 		return "", err
 	}
 	return fmt.Sprintf("switched to %s", role), nil
+}
+
+// rebindXray re-runs the current live switch so xray picks up a changed
+// Proxy0.Enabled (loopback vs 0.0.0.0 bind). Best-effort: a daemon not
+// yet running will bind correctly on its own next start.
+func (h *RouterHandler) rebindXray(ctx context.Context) {
+	if h.Daemon == nil {
+		return
+	}
+	if snap, ok := h.Daemon.Snapshot(ctx); ok {
+		_ = h.Daemon.ForceSwitch(ctx, snap.LiveRole)
+	}
+}
+
+func (h *RouterHandler) proxy0Show(ctx context.Context) string {
+	on := "выкл"
+	if h.Config.Proxy0.Enabled {
+		on = "вкл"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "proxy0: %s\n", on)
+	if !keenetic.Available() {
+		b.WriteString("ndmc недоступен (не роутер Keenetic?)")
+		return b.String()
+	}
+	if ip, err := keenetic.LANIP(ctx, h.Config.Proxy0.LANIP); err == nil {
+		fmt.Fprintf(&b, "LAN IP роутера: %s\n", ip)
+	}
+	host, port, ok, err := keenetic.Proxy0Upstream(ctx, h.Config.Proxy0.Interface)
+	switch {
+	case err != nil:
+		fmt.Fprintf(&b, "upstream: ошибка чтения (%v)", err)
+	case ok:
+		fmt.Fprintf(&b, "upstream: %s:%d", host, port)
+	default:
+		b.WriteString("upstream: не задан")
+	}
+	return b.String()
+}
+
+func (h *RouterHandler) proxy0Set(ctx context.Context) (string, error) {
+	if !keenetic.Available() {
+		return "", fmt.Errorf("ndmc не найден -- работает только на роутере Keenetic")
+	}
+	ip, err := keenetic.LANIP(ctx, h.Config.Proxy0.LANIP)
+	if err != nil {
+		return "", fmt.Errorf("определение LAN IP роутера: %w", err)
+	}
+	port := h.Config.Proxy0Port()
+	if port <= 0 {
+		return "", fmt.Errorf("не настроен порт для proxy0.protocol %q", h.Config.Proxy0.Protocol)
+	}
+	if err := keenetic.ConfigureProxy0(ctx, keenetic.Proxy0Options{
+		Interface:    h.Config.Proxy0.Interface,
+		UpstreamHost: ip,
+		UpstreamPort: port,
+		Protocol:     h.Config.Proxy0.Protocol,
+	}); err != nil {
+		return "", err
+	}
+	h.Config.Proxy0.Enabled = true
+	if err := h.Config.Save(h.ConfigPath); err != nil {
+		return "", err
+	}
+	h.rebindXray(ctx)
+	return fmt.Sprintf("proxy0 включён → %s:%d. Назначьте устройства/политики на Proxy0 в UI Keenetic.", ip, port), nil
+}
+
+func (h *RouterHandler) proxy0Off(ctx context.Context) (string, error) {
+	if keenetic.Available() {
+		if err := keenetic.DisableProxy0(ctx, h.Config.Proxy0.Interface); err != nil {
+			return "", err
+		}
+	}
+	h.Config.Proxy0.Enabled = false
+	if err := h.Config.Save(h.ConfigPath); err != nil {
+		return "", err
+	}
+	h.rebindXray(ctx)
+	return "proxy0 выключен (xray снова слушает loopback после rebind)", nil
+}
+
+// daemonRestart spawns a detached "restart after a short delay" so this
+// process can post the command result before the init script SIGTERMs
+// it. The replacement daemon reconnects on its own and emits daemon_start.
+func (h *RouterHandler) daemonRestart() (string, error) {
+	if h.InitScript == "" {
+		return "", fmt.Errorf("init-скрипт не задан")
+	}
+	c := exec.Command("sh", "-c", "sleep 2; "+h.InitScript+" restart")
+	if err := c.Start(); err != nil {
+		return "", fmt.Errorf("запуск перезапуска: %w", err)
+	}
+	go func() { _ = c.Wait() }() // reap the shell if we outlive the sleep
+	return "перезапуск демона через 2с…", nil
+}
+
+// ensureCore retries the xray-core install (vendored build, opkg
+// fallback). Bounded at 5 min; it holds the agent's poll loop while it
+// runs, acceptable for a personal single-router setup.
+func (h *RouterHandler) ensureCore(ctx context.Context) (string, error) {
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	src, err := xraycore.Ensure(cctx, xraycore.Options{Dest: h.XrayBinary})
+	if err != nil {
+		return "", err
+	}
+	if v, verr := xraycore.Version(h.XrayBinary); verr == nil {
+		return fmt.Sprintf("xray-core готов (%s): %s", src, v), nil
+	}
+	return fmt.Sprintf("xray-core установлен (%s)", src), nil
 }
 
 func (h *RouterHandler) profileList() string {

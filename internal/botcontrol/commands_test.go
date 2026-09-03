@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -258,6 +259,43 @@ func TestRouterHandler_Doctor(t *testing.T) {
 	}
 	if !strings.Contains(out, "проблем:") && !strings.Contains(out, "пройдены") {
 		t.Errorf("doctor output missing a trailing summary:\n%s", out)
+	}
+}
+
+func TestRouterHandler_Proxy0_WithoutNdmc(t *testing.T) {
+	// CI / dev machines have no ndmc: show is informational, on/off error.
+	h := &RouterHandler{Config: config.Default(), ConfigPath: filepath.Join(t.TempDir(), "c.json")}
+
+	out, err := h.Handle(context.Background(), Command{Action: ActionProxy0Show})
+	if err != nil {
+		t.Fatalf("proxy0_show: %v", err)
+	}
+	if !strings.Contains(out, "proxy0:") {
+		t.Errorf("proxy0_show output = %q", out)
+	}
+
+	if _, err := h.Handle(context.Background(), Command{Action: ActionProxy0On}); err == nil {
+		t.Error("proxy0_on should error without ndmc")
+	}
+}
+
+func TestRouterHandler_DaemonRestart(t *testing.T) {
+	h := &RouterHandler{Config: config.Default()}
+
+	if _, err := h.Handle(context.Background(), Command{Action: ActionDaemonRestart}); err == nil {
+		t.Error("daemon_restart with no InitScript should error")
+	}
+
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh on PATH to exercise the restart spawn")
+	}
+	h.InitScript = "/bin/true"
+	out, err := h.Handle(context.Background(), Command{Action: ActionDaemonRestart})
+	if err != nil {
+		t.Fatalf("daemon_restart: %v", err)
+	}
+	if !strings.Contains(out, "перезапуск") {
+		t.Errorf("daemon_restart output = %q", out)
 	}
 }
 

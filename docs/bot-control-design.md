@@ -258,6 +258,19 @@ its config and state dirs), runs the `setup` wizard, and
 `systemctl enable --now`s the service. systemd only -- there's no
 OpenRC/sysvinit path.
 
+### Self-update from the bot
+
+The main menu's **⬆️ Обновить сервер** button re-runs `server-install.sh`.
+The control-server process is unprivileged and can't swap its own binary
+or restart itself, so the update goes through systemd: `server-install.sh`
+also installs `keenetic-xray-control-server-update.path` (watches
+`/var/lib/keenetic-xray-control-server/update.request`, which the service
+user *can* create) and `keenetic-xray-control-server-update.service` (a
+root `oneshot` running `control-server-self-update.sh`). The bot touches
+the trigger file (`TelegramBot.SelfUpdatePath`); the `.path` unit fires
+the root oneshot; the oneshot clears the trigger and pipes
+`server-install.sh` into `sh`.
+
 ### The `setup` wizard
 
 ```sh

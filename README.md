@@ -149,6 +149,10 @@ allowlist, and the public URL routers dial) and generates the
 certificate. To reconfigure later, run `keenetic-xray-control-server
 setup` again and `systemctl restart keenetic-xray-control-server`.
 
+To **update** later, re-run the same `curl … | sudo sh` — or use the
+bot's **⬆️ Обновить сервер** menu button, which does it through a
+systemd path-unit + root helper the installer also sets up.
+
 Routers are then managed from the Telegram chat itself — no restart, no
 config edit. `/menu` opens a button UI (main menu → router list →
 per-router card with status / primary·backup switch / subscription /

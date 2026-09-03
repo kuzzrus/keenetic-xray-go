@@ -17,9 +17,13 @@
 set -eu
 
 REPO="kuzzrus/keenetic-xray-go"
+RAW="https://raw.githubusercontent.com/${REPO}/main/packaging/server"
 BIN_PATH="/usr/local/bin/keenetic-xray-control-server"
 UNIT_PATH="/etc/systemd/system/keenetic-xray-control-server.service"
-UNIT_URL="https://raw.githubusercontent.com/${REPO}/main/packaging/server/keenetic-xray-control-server.service"
+UNIT_URL="${RAW}/keenetic-xray-control-server.service"
+UPDATE_SVC_PATH="/etc/systemd/system/keenetic-xray-control-server-update.service"
+UPDATE_PATH_PATH="/etc/systemd/system/keenetic-xray-control-server-update.path"
+SELF_UPDATE_SCRIPT="/usr/local/lib/keenetic-xray/control-server-self-update.sh"
 CONFIG_DIR="/etc/keenetic-xray-control-server"
 STATE_DIR="/var/lib/keenetic-xray-control-server"
 SVC_USER="keenetic-xray"
@@ -69,7 +73,19 @@ install -d -o "$SVC_USER" -g "$SVC_USER" -m 0700 "$CONFIG_DIR" "$STATE_DIR"
 
 echo "server-install: installing the systemd unit"
 fetch "$UNIT_URL" "$UNIT_PATH"
+
+# Self-update path: the control-server runs unprivileged and can't swap
+# its own binary or restart itself. The .path unit watches a trigger file
+# the service *can* create (the Telegram "Обновить сервер" button), and
+# fires a root oneshot that re-runs this installer.
+echo "server-install: installing the self-update units"
+install -d -m 0755 /usr/local/lib/keenetic-xray
+fetch "${RAW}/control-server-self-update.sh" "$SELF_UPDATE_SCRIPT"
+chmod 0755 "$SELF_UPDATE_SCRIPT"
+fetch "${RAW}/keenetic-xray-control-server-update.service" "$UPDATE_SVC_PATH"
+fetch "${RAW}/keenetic-xray-control-server-update.path" "$UPDATE_PATH_PATH"
 systemctl daemon-reload
+systemctl enable --now keenetic-xray-control-server-update.path >/dev/null 2>&1 || true
 
 # Re-running the installer is the update path: the new binary is already
 # in place above. Only run the wizard on a first install (no config yet);

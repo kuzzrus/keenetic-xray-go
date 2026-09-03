@@ -151,3 +151,28 @@ func TestConfigValidate_ProfileIndicesOutOfRange(t *testing.T) {
 		t.Error("expected error for backup_index below the -1 unset sentinel")
 	}
 }
+
+func TestConfigValidate_Proxy0Protocol(t *testing.T) {
+	c := Default()
+	for _, ok := range []string{"", "socks5", "http"} {
+		c.Proxy0.Protocol = ok
+		if err := c.Validate(); err != nil {
+			t.Errorf("proxy0.protocol %q: unexpected error %v", ok, err)
+		}
+	}
+	c.Proxy0.Protocol = "ftp"
+	if err := c.Validate(); err == nil {
+		t.Error("proxy0.protocol \"ftp\": expected an error")
+	}
+}
+
+func TestConfig_Proxy0Port(t *testing.T) {
+	c := Default() // SOCKSPort 1080, HTTPPort 1081 from DefaultFailoverConfig
+	if got := c.Proxy0Port(); got != c.Failover.SOCKSPort {
+		t.Errorf("Proxy0Port() default = %d, want SOCKS port %d", got, c.Failover.SOCKSPort)
+	}
+	c.Proxy0.Protocol = "http"
+	if got := c.Proxy0Port(); got != c.Failover.HTTPPort {
+		t.Errorf("Proxy0Port() http = %d, want HTTP port %d", got, c.Failover.HTTPPort)
+	}
+}

@@ -11,9 +11,17 @@ import (
 // used as the outbound differ, so the two configs cannot structurally
 // drift apart from each other.
 type XrayConfigOptions struct {
-	SOCKSPort int     // local SOCKS5 inbound port; 0 disables it
-	HTTPPort  int     // local HTTP inbound port; 0 disables it
-	Outbound  Profile // the profile to route all traffic through
+	SOCKSPort  int     // local SOCKS5 inbound port; 0 disables it
+	HTTPPort   int     // local HTTP inbound port; 0 disables it
+	ListenHost string  // inbound bind address; "" -> "127.0.0.1". Set to "0.0.0.0" so Keenetic's Proxy0 can reach the inbound over the LAN.
+	Outbound   Profile // the profile to route all traffic through
+}
+
+func (o XrayConfigOptions) listenHost() string {
+	if o.ListenHost != "" {
+		return o.ListenHost
+	}
+	return "127.0.0.1"
 }
 
 // GenerateXrayConfig renders an Xray-core JSON config. There is
@@ -33,7 +41,7 @@ func GenerateXrayConfig(opts XrayConfigOptions) ([]byte, error) {
 	var inbounds []xrayInbound
 	if opts.SOCKSPort != 0 {
 		inbounds = append(inbounds, xrayInbound{
-			Listen:   "127.0.0.1",
+			Listen:   opts.listenHost(),
 			Port:     opts.SOCKSPort,
 			Protocol: "socks",
 			Settings: map[string]any{"udp": true},
@@ -42,7 +50,7 @@ func GenerateXrayConfig(opts XrayConfigOptions) ([]byte, error) {
 	}
 	if opts.HTTPPort != 0 {
 		inbounds = append(inbounds, xrayInbound{
-			Listen:   "127.0.0.1",
+			Listen:   opts.listenHost(),
 			Port:     opts.HTTPPort,
 			Protocol: "http",
 			Settings: map[string]any{},

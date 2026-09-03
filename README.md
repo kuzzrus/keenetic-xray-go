@@ -23,9 +23,11 @@ fits together, `docs/full-vs-mini.md` for the Mini/Full variant split, and
   with `opkg install xray-core` from the Entware feed as the fallback.
   `install.sh --xray-core=entware` forces the feed;
   `keenetic-xray doctor` reports which core is active. Ships no
-  geoip/geosite routing data — whole-LAN redirection through the local
-  proxy port is handled by Keenetic's own Policy-Based Routing, not by
-  this project.
+  geoip/geosite routing data — routing which traffic goes through the
+  proxy is Keenetic's own Policy-Based Routing. `keenetic-xray proxy0`
+  does the one router-side step needed to make that possible: it detects
+  the router's LAN IP (never a loopback) and points Keenetic's `Proxy0`
+  interface at the local Xray inbound, verifying the change stuck.
 - Optional remote control via a Telegram bot (Full variant only): a
   separate `keenetic-xray-control-server` binary runs on a VPS, and each
   router polls it for queued commands (`/status`, `/switch`,
@@ -90,7 +92,14 @@ keenetic-xray status
 keenetic-xray doctor
 keenetic-xray variant {show|set mini|set full}
 keenetic-xray agent {configure <url> <router-id> <fingerprint> <token>|enable|disable|status}
+keenetic-xray proxy0 {show|set [--lan-ip=192.168.x.1]|off}
 ```
+
+`proxy0 set` points Keenetic's `Proxy0` at the local inbound and flips the
+daemon to bind `0.0.0.0` (so `Proxy0` can reach it) instead of loopback;
+the daemon re-asserts it on every start. `setup` offers this
+interactively. Then assign devices or policies to `Proxy0` in the
+Keenetic UI.
 
 `status`/`doctor` currently report saved configuration only (`config.json`),
 not live daemon state -- there's no CLI↔daemon IPC layer yet. `agent enable`

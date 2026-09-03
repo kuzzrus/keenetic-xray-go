@@ -233,6 +233,33 @@ func TestGenerateXrayConfig_ProductionAndPretestDoNotDrift(t *testing.T) {
 	}
 }
 
+func TestGenerateXrayConfig_ListenHost(t *testing.T) {
+	decode := func(opts XrayConfigOptions) []map[string]any {
+		data, err := GenerateXrayConfig(opts)
+		if err != nil {
+			t.Fatalf("GenerateXrayConfig: %v", err)
+		}
+		var cfg struct {
+			Inbounds []map[string]any `json:"inbounds"`
+		}
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		return cfg.Inbounds
+	}
+
+	for _, in := range decode(XrayConfigOptions{SOCKSPort: 1080, HTTPPort: 1081, Outbound: validProfile()}) {
+		if in["listen"] != "127.0.0.1" {
+			t.Errorf("default listen = %v, want 127.0.0.1", in["listen"])
+		}
+	}
+	for _, in := range decode(XrayConfigOptions{SOCKSPort: 1080, HTTPPort: 1081, ListenHost: "0.0.0.0", Outbound: validProfile()}) {
+		if in["listen"] != "0.0.0.0" {
+			t.Errorf("listen = %v, want 0.0.0.0", in["listen"])
+		}
+	}
+}
+
 func TestGenerateXrayConfig_Errors(t *testing.T) {
 	t.Run("no ports", func(t *testing.T) {
 		_, err := GenerateXrayConfig(XrayConfigOptions{Outbound: validProfile()})

@@ -14,6 +14,7 @@ import "time"
 // registry would be premature for the command set this project has.
 const (
 	ActionStatus        = "status"
+	ActionDoctor        = "doctor"
 	ActionSwitchPrimary = "switch_primary"
 	ActionSwitchBackup  = "switch_backup"
 	ActionProfileList   = "profile_list"

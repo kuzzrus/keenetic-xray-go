@@ -3,13 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
-	"os/exec"
-	"strings"
 	"time"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 	"github.com/kuzzrus/keenetic-xray-go/internal/diskspace"
 	"github.com/kuzzrus/keenetic-xray-go/internal/keenetic"
+	"github.com/kuzzrus/keenetic-xray-go/internal/xraycore"
 )
 
 // checkProxy0 verifies Keenetic's Proxy interface actually forwards to
@@ -39,18 +38,10 @@ func checkProxy0(cfg *config.Config, check func(bool, string)) {
 		fmt.Sprintf("%s upstream %s:%d matches the inbound port %d", iface, host, port, cfg.Proxy0Port()))
 }
 
-// xrayCoreVersion runs `<xray> version` and returns its first line, e.g.
+// xrayCoreVersion returns the first line of `<xray> version`, e.g.
 // "Xray 26.3.27 (Xray, Penetrates Everything.) ...".
 func xrayCoreVersion() (string, error) {
-	out, err := exec.Command(xrayBinaryPath(), "version").Output()
-	if err != nil {
-		return "", err
-	}
-	first := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0]
-	if first == "" {
-		return "", fmt.Errorf("%s version printed nothing", xrayBinaryPath())
-	}
-	return first, nil
+	return xraycore.Version(xrayBinaryPath())
 }
 
 func cmdStatus(args []string) error {

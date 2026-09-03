@@ -189,6 +189,58 @@ func TestRouterHandler_Status(t *testing.T) {
 	}
 }
 
+func TestRouterHandler_Status_RichFields(t *testing.T) {
+	d := newTestDaemon(t)
+	cfg := config.Default()
+	cfg.Profiles = []config.Profile{testProfile("primary", "a"), testProfile("backup", "b")}
+	cfg.PrimaryIndex = 0
+	cfg.BackupIndex = 1
+	h := &RouterHandler{Daemon: d, Config: cfg, OptPath: t.TempDir()}
+
+	out, err := h.Handle(context.Background(), Command{Action: ActionStatus})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	for _, want := range []string{"uptime:", "в эфире: primary", "xray:", "proxy0: выкл"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status output missing %q:\n%s", want, out)
+		}
+	}
+
+	if err := d.ForceSwitch(context.Background(), failover.RoleBackup); err != nil {
+		t.Fatalf("ForceSwitch: %v", err)
+	}
+	out, err = h.Handle(context.Background(), Command{Action: ActionStatus})
+	if err != nil {
+		t.Fatalf("Handle after switch: %v", err)
+	}
+	if !strings.Contains(out, "в эфире: backup") {
+		t.Errorf("after switch, status should show backup live:\n%s", out)
+	}
+	if !strings.Contains(out, "последнее переключение:") {
+		t.Errorf("after switch, status should show the last transition:\n%s", out)
+	}
+}
+
+func TestRouterHandler_Doctor(t *testing.T) {
+	cfg := config.Default()
+	cfg.Profiles = []config.Profile{testProfile("primary", "a.example.com"), testProfile("backup", "b.example.com")}
+	cfg.PrimaryIndex = 0
+	cfg.BackupIndex = 1
+	h := &RouterHandler{Config: cfg, ConfigPath: filepath.Join(t.TempDir(), "c.json"), OptPath: t.TempDir()}
+
+	out, err := h.Handle(context.Background(), Command{Action: ActionDoctor})
+	if err != nil {
+		t.Fatalf("Handle(doctor): %v", err)
+	}
+	if !strings.Contains(out, "выбран primary") || !strings.Contains(out, "✅") {
+		t.Errorf("doctor output missing pass lines:\n%s", out)
+	}
+	if !strings.Contains(out, "проблем:") && !strings.Contains(out, "пройдены") {
+		t.Errorf("doctor output missing a trailing summary:\n%s", out)
+	}
+}
+
 func TestRouterHandler_SwitchTo(t *testing.T) {
 	d := newTestDaemon(t)
 	h := &RouterHandler{Daemon: d, Config: config.Default()}

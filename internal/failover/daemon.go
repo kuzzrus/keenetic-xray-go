@@ -29,6 +29,8 @@ type realActions struct {
 
 	prod    *xrayctl.Supervisor
 	pretest *xrayctl.Supervisor
+
+	liveRole Role // the role production was last successfully switched to
 }
 
 func newRealActions(paths Paths, cfg *config.Config) *realActions {
@@ -98,7 +100,11 @@ func (a *realActions) SwitchLiveTo(ctx context.Context, role Role) error {
 		return fmt.Errorf("writing production config: %w", err)
 	}
 
-	return a.prod.Restart()
+	if err := a.prod.Restart(); err != nil {
+		return err
+	}
+	a.liveRole = role
+	return nil
 }
 
 func (a *realActions) StartIsolatedPretest(ctx context.Context) error {
@@ -154,7 +160,22 @@ type Daemon struct {
 	actions  *realActions
 	cfg      *config.Config
 	commands chan daemonCommand
+
+	startedAt   time.Time
+	transitions []Transition // bounded history, oldest first; appended on the Run goroutine only
 }
+
+// Transition is one recorded failover state change, for `status` output
+// and (later) push notifications.
+type Transition struct {
+	At   time.Time
+	From State
+	To   State
+}
+
+// maxTransitions bounds the in-memory history: it feeds `status` output
+// and push notifications, it is not an audit log.
+const maxTransitions = 20
 
 type daemonCommand struct {
 	fn   func(context.Context)
@@ -165,7 +186,49 @@ type daemonCommand struct {
 func NewDaemon(paths Paths, cfg *config.Config) *Daemon {
 	actions := newRealActions(paths, cfg)
 	machine := NewMachine(failoverConfig(cfg.Failover), actions, nil, StateActivePrimary)
-	return &Daemon{machine: machine, actions: actions, cfg: cfg, commands: make(chan daemonCommand)}
+	d := &Daemon{
+		machine:   machine,
+		actions:   actions,
+		cfg:       cfg,
+		commands:  make(chan daemonCommand),
+		startedAt: time.Now(),
+	}
+	// transitionTo runs only on the Run goroutine (via Tick) or on a
+	// command closure (via ForceSwitch), both serialized by Run's select
+	// loop -- the same goroutine Snapshot reads on, so the slice needs no
+	// lock.
+	machine.onTransition = d.recordTransition
+	return d
+}
+
+func (d *Daemon) recordTransition(from, to State) {
+	d.transitions = append(d.transitions, Transition{At: time.Now(), From: from, To: to})
+	if len(d.transitions) > maxTransitions {
+		d.transitions = d.transitions[len(d.transitions)-maxTransitions:]
+	}
+}
+
+// Snapshot is a consistent read of the daemon's observable state.
+type Snapshot struct {
+	State       State
+	LiveRole    Role      // which profile production is pointed at (last successful SwitchLiveTo)
+	StartedAt   time.Time // time.Since(StartedAt) is uptime
+	Transitions []Transition
+}
+
+// Snapshot reads State, LiveRole, StartedAt and the transition history in
+// one hop on the Run goroutine, so the fields can't disagree with each
+// other. Like State, the bool is false if Run isn't active to answer.
+func (d *Daemon) Snapshot(ctx context.Context) (Snapshot, bool) {
+	var s Snapshot
+	ran := d.do(ctx, func(context.Context) {
+		s.State = d.machine.State()
+		s.LiveRole = d.actions.liveRole
+		s.StartedAt = d.startedAt
+		s.Transitions = make([]Transition, len(d.transitions))
+		copy(s.Transitions, d.transitions)
+	})
+	return s, ran
 }
 
 func failoverConfig(c config.FailoverConfig) Config {

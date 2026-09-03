@@ -113,6 +113,74 @@ func TestDaemon_ForceSwitchAndState_NotRunning(t *testing.T) {
 	}
 }
 
+func TestDaemon_Snapshot(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.Profiles = []config.Profile{
+		{UUID: "p", Address: "primary.invalid", Port: 443, Network: "tcp", Security: "none", Encryption: "none", Remark: "primary"},
+		{UUID: "b", Address: "backup.invalid", Port: 443, Network: "tcp", Security: "none", Encryption: "none", Remark: "backup"},
+	}
+	cfg.PrimaryIndex = 0
+	cfg.BackupIndex = 1
+	cfg.Failover.CheckIntervalSeconds = 60  // quiet: no automatic ticks during the test
+	cfg.Failover.FailuresRequired = 1 << 30 // and never fail over on its own anyway
+
+	paths := Paths{
+		XrayBinary:       os.Args[0],
+		ProductionConfig: filepath.Join(dir, "production.json"),
+		PretestConfig:    filepath.Join(dir, "pretest.json"),
+		Env:              []string{"FAILOVER_TEST_HELPER=1"},
+	}
+	d := NewDaemon(paths, cfg)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runErr := make(chan error, 1)
+	go func() { runErr <- d.Run(ctx) }()
+
+	// Snapshot blocks on the command channel until Run's select loop is
+	// live, which is after Run's initial SwitchLiveTo(primary) -- so
+	// LiveRole is already primary here without an explicit wait.
+	snap, ran := d.Snapshot(ctx)
+	if !ran {
+		t.Fatal("Snapshot: daemon reported not running")
+	}
+	if snap.State != StateActivePrimary {
+		t.Errorf("State = %v, want ACTIVE_PRIMARY", snap.State)
+	}
+	if snap.LiveRole != RolePrimary {
+		t.Errorf("LiveRole = %v, want primary", snap.LiveRole)
+	}
+	if snap.StartedAt.IsZero() {
+		t.Error("StartedAt is zero")
+	}
+
+	if err := d.ForceSwitch(ctx, RoleBackup); err != nil {
+		t.Fatalf("ForceSwitch(backup): %v", err)
+	}
+	snap, _ = d.Snapshot(ctx)
+	if snap.LiveRole != RoleBackup {
+		t.Errorf("after ForceSwitch(backup), LiveRole = %v, want backup", snap.LiveRole)
+	}
+	if len(snap.Transitions) == 0 {
+		t.Fatal("no transitions recorded after a forced switch")
+	}
+	last := snap.Transitions[len(snap.Transitions)-1]
+	if last.To != StateActiveBackup {
+		t.Errorf("last transition To = %v, want ACTIVE_BACKUP", last.To)
+	}
+	if last.At.IsZero() {
+		t.Error("transition timestamp is zero")
+	}
+
+	cancel()
+	select {
+	case <-runErr:
+	case <-time.After(20 * time.Second):
+		t.Fatal("Run did not return after ctx cancellation")
+	}
+}
+
 // TestDaemon_ForceSwitchAndStateConcurrentWithRun is the actual
 // concurrency-safety test: it calls ForceSwitch/State from a separate
 // goroutine while Run's own tick loop is simultaneously live (fast

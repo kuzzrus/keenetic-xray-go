@@ -89,6 +89,22 @@ func Ensure(ctx context.Context, opts Options) (string, error) {
 	return "entware", nil
 }
 
+// Version runs `<binary> version` and returns its first line, e.g.
+// "Xray 26.3.27 (Xray, Penetrates Everything.) ...". Shared by
+// `keenetic-xray status`/`doctor` and the bot's status command so they
+// report the core version the same way.
+func Version(binary string) (string, error) {
+	out, err := exec.Command(binary, "version").Output()
+	if err != nil {
+		return "", err
+	}
+	first := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0]
+	if first == "" {
+		return "", fmt.Errorf("%s version printed nothing", binary)
+	}
+	return first, nil
+}
+
 func realOpkgInstall(ctx context.Context) error {
 	if _, err := exec.LookPath("opkg"); err != nil {
 		return fmt.Errorf("opkg not found: %w", err)

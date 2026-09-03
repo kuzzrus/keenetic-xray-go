@@ -121,7 +121,10 @@ func cmdDaemon(args []string) error {
 		if err != nil {
 			return fmt.Errorf("agent is enabled but misconfigured: %w", err)
 		}
-		handler := &botcontrol.RouterHandler{Daemon: d, Config: cfg, ConfigPath: configPath()}
+		handler := &botcontrol.RouterHandler{
+			Daemon: d, Config: cfg, ConfigPath: configPath(),
+			XrayBinary: xrayBinaryPath(), OptPath: optPath(),
+		}
 		go func() {
 			if err := botcontrol.Run(ctx, opts, handler); err != nil && ctx.Err() == nil {
 				fmt.Fprintln(os.Stderr, "agent stopped:", err)

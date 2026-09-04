@@ -386,23 +386,59 @@ func TestRouterHandler_SetSlotSource(t *testing.T) {
 	}
 }
 
-func TestRouterHandler_SetSlotSource_MirrorsEmptyOtherSlot(t *testing.T) {
-	cfg := config.Default() // PrimaryIndex/BackupIndex both -1
-	h := &RouterHandler{Config: cfg, ConfigPath: filepath.Join(t.TempDir(), "config.json")}
+// TestRouterHandler_SetSlotSource_NeverMirrorsIntoEmptyOtherSlot is the
+// regression test for a live incident: primary had gone unset (an
+// unrelated subscription refresh couldn't re-match it), and setting
+// backup's source afterward silently mirrored that same profile into
+// primary too -- "so the daemon can run" -- leaving primary and backup
+// on the identical profile with no real redundancy, discovered only
+// later via the bot's own "primary и backup — один профиль" warning.
+// Setting one slot must only ever warn about an empty other slot, never
+// fill it in. Covers both directions.
+func TestRouterHandler_SetSlotSource_NeverMirrorsIntoEmptyOtherSlot(t *testing.T) {
+	t.Run("primary set while backup empty", func(t *testing.T) {
+		cfg := config.Default() // PrimaryIndex/BackupIndex both -1
+		h := &RouterHandler{Config: cfg, ConfigPath: filepath.Join(t.TempDir(), "config.json")}
 
-	out, err := h.Handle(context.Background(), Command{
-		Action: ActionSetPrimarySource,
-		Args:   []string{"vless://11111111-2222-3333-4444-555555555555@a.example:443?type=tcp&security=none#RU-1"},
+		out, err := h.Handle(context.Background(), Command{
+			Action: ActionSetPrimarySource,
+			Args:   []string{"vless://11111111-2222-3333-4444-555555555555@a.example:443?type=tcp&security=none#RU-1"},
+		})
+		if err != nil {
+			t.Fatalf("set_primary_source: %v", err)
+		}
+		if cfg.PrimaryIndex != 0 {
+			t.Errorf("PrimaryIndex = %d, want 0", cfg.PrimaryIndex)
+		}
+		if cfg.BackupIndex != -1 {
+			t.Errorf("BackupIndex = %d, want -1 (setting primary must never fill in backup)", cfg.BackupIndex)
+		}
+		if !strings.Contains(out, "backup не задан") {
+			t.Errorf("out = %q, want a note that backup still needs its own source", out)
+		}
 	})
-	if err != nil {
-		t.Fatalf("set_primary_source: %v", err)
-	}
-	if cfg.PrimaryIndex != 0 || cfg.BackupIndex != 0 {
-		t.Errorf("indices = %d/%d, want 0/0 (backup mirrored so the daemon can run)", cfg.PrimaryIndex, cfg.BackupIndex)
-	}
-	if !strings.Contains(out, "backup тоже") {
-		t.Errorf("out = %q, want a note that backup was mirrored", out)
-	}
+
+	t.Run("backup set while primary empty", func(t *testing.T) {
+		cfg := config.Default() // PrimaryIndex/BackupIndex both -1
+		h := &RouterHandler{Config: cfg, ConfigPath: filepath.Join(t.TempDir(), "config.json")}
+
+		out, err := h.Handle(context.Background(), Command{
+			Action: ActionSetBackupSource,
+			Args:   []string{"vless://11111111-2222-3333-4444-555555555555@a.example:443?type=tcp&security=none#RU-1"},
+		})
+		if err != nil {
+			t.Fatalf("set_backup_source: %v", err)
+		}
+		if cfg.BackupIndex != 0 {
+			t.Errorf("BackupIndex = %d, want 0", cfg.BackupIndex)
+		}
+		if cfg.PrimaryIndex != -1 {
+			t.Errorf("PrimaryIndex = %d, want -1 (setting backup must never fill in primary)", cfg.PrimaryIndex)
+		}
+		if !strings.Contains(out, "primary не задан") {
+			t.Errorf("out = %q, want a note that primary still needs its own source", out)
+		}
+	})
 }
 
 func TestRouterHandler_RebindRestartsIdleDaemon(t *testing.T) {

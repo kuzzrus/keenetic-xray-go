@@ -548,24 +548,27 @@ func (h *RouterHandler) setSlotSource(ctx context.Context, primary bool, args []
 		return "", err
 	}
 	idx := h.Config.UpsertProfile(prof)
-
 	slot := &config.SlotSource{URL: src, Selector: selector}
-	word, mirrored := "backup", false
+
+	// Never touch the *other* slot's index here: an earlier version
+	// mirrored this profile into an empty other slot "so the daemon can
+	// run", which quietly overwrote a primary/backup that was merely
+	// unset for some unrelated reason (e.g. a subscription refresh that
+	// couldn't re-match it) with a copy of whatever was just set --
+	// live-reproduced as primary and backup silently ending up on the
+	// identical profile. Each slot's source is independent, same as the
+	// reference installer's per-slot files: setting one only ever warns
+	// about the other, never mutates it.
+	word, other := "backup", "primary"
+	otherSet := h.slotSet(h.Config.PrimaryIndex)
 	if primary {
+		word, other = "primary", "backup"
+		otherSet = h.slotSet(h.Config.BackupIndex)
 		h.Config.PrimaryIndex = idx
 		h.Config.PrimarySource = slot
-		word = "primary"
-		if !h.slotSet(h.Config.BackupIndex) {
-			h.Config.BackupIndex = idx // no backup yet -- mirror so the daemon can run
-			mirrored = true
-		}
 	} else {
 		h.Config.BackupIndex = idx
 		h.Config.BackupSource = slot
-		if !h.slotSet(h.Config.PrimaryIndex) {
-			h.Config.PrimaryIndex = idx
-			mirrored = true
-		}
 	}
 	if err := h.Config.Save(h.ConfigPath); err != nil {
 		return "", err
@@ -573,12 +576,8 @@ func (h *RouterHandler) setSlotSource(ctx context.Context, primary bool, args []
 	h.rebindXray(ctx)
 
 	msg := fmt.Sprintf("%s ← %s", word, prof.Remark)
-	if mirrored {
-		other := "backup"
-		if !primary {
-			other = "primary"
-		}
-		msg += fmt.Sprintf(" (%s тоже — задай ему отдельный источник для настоящего failover)", other)
+	if !otherSet {
+		msg += fmt.Sprintf(" (⚠️ %s не задан — демон простаивает, пока не зададите и его)", other)
 	}
 	return msg, nil
 }

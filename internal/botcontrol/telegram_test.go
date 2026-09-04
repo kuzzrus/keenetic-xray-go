@@ -583,6 +583,57 @@ func TestTelegramBot_SwitchDispatchesCorrectAction(t *testing.T) {
 	}
 }
 
+func TestTelegramBot_FailoverDispatchesShowAndSet(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	mustRegister(t, store, "router-1")
+	bot := &TelegramBot{
+		Token: "test-token", AllowedChats: map[int64]bool{1: true},
+		Store: store, APIBase: srv.URL, ResultTimeout: 2 * time.Second,
+	}
+	runBotInBackground(t, bot)
+
+	answer := func(action, output string) {
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			if cmd, _ := store.Dequeue("router-1"); cmd != nil {
+				if cmd.Action != action {
+					t.Errorf("dequeued action = %q, want %q", cmd.Action, action)
+				}
+				_ = store.RecordResult("router-1", Result{CommandID: cmd.ID, Output: output})
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		t.Error("no command was enqueued")
+	}
+
+	go answer(ActionFailoverShow, "failures_required: 3")
+	fake.push(1, "/failover router-1 show")
+	waitSent(t, fake, 3*time.Second, "failures_required: 3")
+
+	go answer(ActionFailoverSet, "failures_required = 6.")
+	fake.push(1, "/failover router-1 set failures_required 6")
+	waitSent(t, fake, 3*time.Second, "failures_required = 6")
+}
+
+func TestTelegramBot_FailoverSetRejectsWithoutEnqueue(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	mustRegister(t, store, "router-1")
+	bot := &TelegramBot{Token: "test-token", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL}
+	runBotInBackground(t, bot)
+
+	fake.push(1, "/failover router-1 set failures_required")
+	reply := fake.waitForReply(t, 3*time.Second)
+	if !strings.Contains(reply, "формат:") {
+		t.Errorf("reply = %q, want a usage message", reply)
+	}
+	if n := store.PendingCount("router-1"); n != 0 {
+		t.Errorf("PendingCount = %d, want 0 (malformed set must not enqueue)", n)
+	}
+}
+
 func TestTelegramBot_SwitchInvalidRoleRejectedWithoutEnqueue(t *testing.T) {
 	srv, fake := newFakeTelegram(t)
 	store := newBotStore(t)

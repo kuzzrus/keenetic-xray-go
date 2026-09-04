@@ -99,14 +99,29 @@ type FailoverConfig struct {
 	CooldownCycles            int    `json:"cooldown_cycles"`
 	RollbackBackoffSeconds    int    `json:"rollback_backoff_seconds"`
 	HealthCheckURL            string `json:"health_check_url"`
-	SOCKSPort                 int    `json:"socks_port"`
-	HTTPPort                  int    `json:"http_port"`
-	PretestPort               int    `json:"pretest_port"`
+	// HealthCheckFallbackURLs are tried, in order, only if HealthCheckURL's
+	// attempts all fail -- insurance against that one endpoint being the
+	// thing that's actually down or throttled, independent of the tunnel.
+	HealthCheckFallbackURLs []string `json:"health_check_fallback_urls,omitempty"`
+	// CheckRetries/CheckRetryDelaySeconds: extra attempts against the same
+	// URL, within a single Tick, before moving to the next URL or counting
+	// the tick as a failure. Smooths over a single sub-second blip that a
+	// bare "N consecutive ticks" counter would otherwise treat the same as
+	// a real outage.
+	CheckRetries           int `json:"check_retries"`
+	CheckRetryDelaySeconds int `json:"check_retry_delay_seconds"`
+	SOCKSPort              int `json:"socks_port"`
+	HTTPPort               int `json:"http_port"`
+	PretestPort            int `json:"pretest_port"`
 }
 
 // DefaultFailoverConfig returns the plan's defaults: the numbers given
 // directly (3 attempts / 10s interval / symmetric counts) plus the
 // cooldown/backoff/port defaults proposed and flagged as open to tuning.
+// The fallback-URL/retry defaults mirror the reference installer
+// (keenetic_xray_installer's watchdog: CHECK_URLS + CHECK_RETRIES) --
+// loaded into an *existing* config.json that predates these fields too,
+// since Load starts from these defaults before unmarshalling over them.
 func DefaultFailoverConfig() FailoverConfig {
 	return FailoverConfig{
 		CheckIntervalSeconds:      10,
@@ -115,9 +130,15 @@ func DefaultFailoverConfig() FailoverConfig {
 		CooldownCycles:            2,
 		RollbackBackoffSeconds:    300,
 		HealthCheckURL:            "https://www.gstatic.com/generate_204",
-		SOCKSPort:                 1080,
-		HTTPPort:                  1081,
-		PretestPort:               11080,
+		HealthCheckFallbackURLs: []string{
+			"https://cp.cloudflare.com/generate_204",
+			"http://connectivitycheck.gstatic.com/generate_204",
+		},
+		CheckRetries:           1,
+		CheckRetryDelaySeconds: 2,
+		SOCKSPort:              1080,
+		HTTPPort:               1081,
+		PretestPort:            11080,
 	}
 }
 

@@ -48,19 +48,25 @@ func newRealActions(paths Paths, cfg *config.Config) *realActions {
 }
 
 func (a *realActions) ProbeLive(ctx context.Context) error {
-	return xrayctl.Probe(ctx, xrayctl.ProbeOptions{
-		SOCKSAddr: a.socks,
-		URL:       a.cfg.Failover.HealthCheckURL,
-		Timeout:   a.probeTimeout(),
-	})
+	return xrayctl.Probe(ctx, a.probeOptions(a.socks))
 }
 
 func (a *realActions) ProbeIsolated(ctx context.Context) error {
-	return xrayctl.Probe(ctx, xrayctl.ProbeOptions{
-		SOCKSAddr: fmt.Sprintf("127.0.0.1:%d", a.cfg.Failover.PretestPort),
-		URL:       a.cfg.Failover.HealthCheckURL,
-		Timeout:   a.probeTimeout(),
-	})
+	return xrayctl.Probe(ctx, a.probeOptions(fmt.Sprintf("127.0.0.1:%d", a.cfg.Failover.PretestPort)))
+}
+
+// probeOptions builds the shared probe configuration (URL + fallbacks +
+// retries, from cfg.Failover) for a given SOCKS address -- the live and
+// isolated-pretest probes differ only in which local inbound they hit.
+func (a *realActions) probeOptions(socksAddr string) xrayctl.ProbeOptions {
+	return xrayctl.ProbeOptions{
+		SOCKSAddr:    socksAddr,
+		URL:          a.cfg.Failover.HealthCheckURL,
+		FallbackURLs: a.cfg.Failover.HealthCheckFallbackURLs,
+		Retries:      a.cfg.Failover.CheckRetries,
+		RetryDelay:   time.Duration(a.cfg.Failover.CheckRetryDelaySeconds) * time.Second,
+		Timeout:      a.probeTimeout(),
+	}
 }
 
 func (a *realActions) probeTimeout() time.Duration {

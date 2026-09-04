@@ -434,6 +434,57 @@ func TestRouterHandler_ScrubsSlotSourceURLs(t *testing.T) {
 	}
 }
 
+func TestRouterHandler_FailoverShow(t *testing.T) {
+	h := &RouterHandler{Config: config.Default()}
+	out, err := h.Handle(context.Background(), Command{Action: ActionFailoverShow})
+	if err != nil {
+		t.Fatalf("failover_show: %v", err)
+	}
+	if !strings.Contains(out, "failures_required: 3") {
+		t.Errorf("out = %q", out)
+	}
+}
+
+func TestRouterHandler_FailoverSet(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	cfg := config.Default()
+	h := &RouterHandler{Config: cfg, ConfigPath: cfgPath}
+
+	if _, err := exec.LookPath("sh"); err == nil {
+		h.InitScript = "/bin/true"
+	}
+
+	out, err := h.Handle(context.Background(), Command{
+		Action: ActionFailoverSet,
+		Args:   []string{"failures_required", "6"},
+	})
+	if err != nil {
+		t.Fatalf("failover_set: %v", err)
+	}
+	if !strings.Contains(out, "failures_required = 6") {
+		t.Errorf("out = %q", out)
+	}
+
+	saved, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if saved.Failover.FailuresRequired != 6 {
+		t.Errorf("saved FailuresRequired = %d, want 6", saved.Failover.FailuresRequired)
+	}
+}
+
+func TestRouterHandler_FailoverSet_RejectsBadValue(t *testing.T) {
+	h := &RouterHandler{Config: config.Default(), ConfigPath: filepath.Join(t.TempDir(), "c.json")}
+	if _, err := h.Handle(context.Background(), Command{
+		Action: ActionFailoverSet,
+		Args:   []string{"failures_required", "0"},
+	}); err == nil {
+		t.Error("expected an error for a non-positive failures_required")
+	}
+}
+
 func TestRouterHandler_SelfUpdate(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("no sh on PATH to exercise the update spawn")

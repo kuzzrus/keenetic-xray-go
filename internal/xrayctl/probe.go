@@ -11,21 +11,77 @@ import (
 	"time"
 )
 
-// ProbeOptions configures a single health-check attempt.
+// ProbeOptions configures one logical health check, which may try
+// several URLs and retry each -- so one rate-limited/flaky endpoint or
+// one sub-second blip doesn't by itself read as "primary is down".
 type ProbeOptions struct {
 	SOCKSAddr string // e.g. "127.0.0.1:1080"
-	URL       string // health-check target, e.g. https://www.gstatic.com/generate_204
-	Timeout   time.Duration
+	URL       string // primary health-check target, e.g. https://www.gstatic.com/generate_204
+
+	// FallbackURLs are tried in order, only if URL's attempts all fail --
+	// insurance against one target being the thing that's actually down
+	// or throttled, independent of the tunnel.
+	FallbackURLs []string
+
+	// Retries is how many extra attempts to make against the *same* URL
+	// after its first failure, waiting RetryDelay between them, before
+	// moving on to the next URL (or giving up). 0 -> a single attempt.
+	Retries    int
+	RetryDelay time.Duration
+
+	Timeout time.Duration // per-attempt timeout
 }
 
-// Probe performs one HTTP GET to URL through the SOCKS5 proxy at
-// SOCKSAddr and reports whether it got back a non-error response. This is
-// the only supported health check: a bare ICMP ping or a raw TCP connect
-// to the VLESS server wouldn't prove the VLESS/TLS/auth path actually
-// works, and ICMP is often filtered independently of tunnel health.
+// Probe reports whether at least one configured URL answered a non-error
+// HTTP GET through the SOCKS5 proxy at SOCKSAddr, within Retries+1
+// attempts each. This is the only supported health check: a bare ICMP
+// ping or a raw TCP connect to the VLESS server wouldn't prove the
+// VLESS/TLS/auth path actually works, and ICMP is often filtered
+// independently of tunnel health.
 func Probe(ctx context.Context, opts ProbeOptions) error {
+	urls := make([]string, 0, 1+len(opts.FallbackURLs))
+	if opts.URL != "" {
+		urls = append(urls, opts.URL)
+	}
+	urls = append(urls, opts.FallbackURLs...)
+	if len(urls) == 0 {
+		return fmt.Errorf("no probe URL configured")
+	}
+
+	var lastErr error
+	for _, u := range urls {
+		lastErr = probeWithRetries(ctx, opts.SOCKSAddr, u, opts.Timeout, opts.Retries, opts.RetryDelay)
+		if lastErr == nil {
+			return nil
+		}
+	}
+	return lastErr
+}
+
+// probeWithRetries attempts one URL up to retries+1 times, waiting
+// retryDelay between attempts.
+func probeWithRetries(ctx context.Context, socksAddr, url string, timeout time.Duration, retries int, retryDelay time.Duration) error {
+	var err error
+	for attempt := 0; ; attempt++ {
+		if err = probeOnce(ctx, socksAddr, url, timeout); err == nil {
+			return nil
+		}
+		if attempt >= retries {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(retryDelay):
+		}
+	}
+}
+
+// probeOnce performs a single HTTP GET to url through the SOCKS5 proxy
+// at socksAddr and reports whether it got back a non-error response.
+func probeOnce(ctx context.Context, socksAddr, url string, timeout time.Duration) error {
 	client := &http.Client{
-		Timeout: opts.Timeout,
+		Timeout: timeout,
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 				host, portStr, err := net.SplitHostPort(addr)
@@ -36,12 +92,12 @@ func Probe(ctx context.Context, opts ProbeOptions) error {
 				if err != nil {
 					return nil, fmt.Errorf("invalid port in dial address %q: %w", addr, err)
 				}
-				return dialSOCKS5(ctx, opts.SOCKSAddr, host, port)
+				return dialSOCKS5(ctx, socksAddr, host, port)
 			},
 		},
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, opts.URL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return fmt.Errorf("building probe request: %w", err)
 	}

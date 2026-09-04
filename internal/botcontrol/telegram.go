@@ -486,7 +486,9 @@ const helpText = `/menu — меню с кнопками (проще всего)
 /proxy0 <router> [show|on|off]
 /restart <router> — перезапустить демон
 /ensure_core <router> — доустановить ядро xray
-/update <router> — обновить агент (переустановить .ipk)`
+/update <router> — обновить агент (переустановить .ipk)
+/failover <router> show — текущие пороги health-check
+/failover <router> set <ключ> <значение> — подстроить их (перезапустит демон)`
 
 func (b *TelegramBot) dispatch(ctx context.Context, text string) string {
 	fields := strings.Fields(text)
@@ -537,8 +539,30 @@ func (b *TelegramBot) dispatch(ctx context.Context, text string) string {
 		return b.runRouterCommand(ctx, args, ActionEnsureCore, nil)
 	case "/update":
 		return b.runRouterCommand(ctx, args, ActionSelfUpdate, nil)
+	case "/failover":
+		return b.dispatchFailover(ctx, args)
 	default:
 		return "неизвестная команда. Откройте /menu или /help"
+	}
+}
+
+// dispatchFailover routes /failover <router> show|set <key> <value>.
+func (b *TelegramBot) dispatchFailover(ctx context.Context, args []string) string {
+	usage := "формат: /failover <роутер> show | /failover <роутер> set <ключ> <значение>"
+	if len(args) < 2 {
+		return usage
+	}
+	routerID := args[:1]
+	switch args[1] {
+	case "show":
+		return b.runRouterCommand(ctx, routerID, ActionFailoverShow, nil)
+	case "set":
+		if len(args) != 4 {
+			return usage
+		}
+		return b.runRouterCommand(ctx, routerID, ActionFailoverSet, []string{args[2], args[3]})
+	default:
+		return usage
 	}
 }
 

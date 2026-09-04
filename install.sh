@@ -31,6 +31,13 @@ set -eu
 
 REPO="kuzzrus/keenetic-xray-go"
 TMP_IPK="/opt/keenetic-xray-install.ipk"
+# A fixed path, not mktemp: it needs to live on /opt (the Entware
+# overlay, real flash) rather than a router's often tiny /tmp tmpfs,
+# which a several-MB download could exhaust. Cleaned up on every exit
+# path -- set -e above means a failed `opkg install` would otherwise
+# skip a plain trailing `rm`, leaving it behind on the router's limited
+# flash (same reasoning as packaging/build-ipk.sh's own trap).
+trap 'rm -f "$TMP_IPK"' EXIT
 
 for arg in "$@"; do
     case "$arg" in
@@ -105,4 +112,3 @@ fi
 echo "keenetic-xray: downloading $ASSET_URL"
 fetch "$ASSET_URL" "$TMP_IPK"
 opkg install "$TMP_IPK"
-rm -f "$TMP_IPK"

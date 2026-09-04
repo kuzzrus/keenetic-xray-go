@@ -2,4 +2,14 @@
 
 /opt/etc/init.d/S99keenetic-xray stop || true
 
+# No-op without --purge (see internal/install.PrermCleanup): opkg's
+# remove-vs-upgrade prerm argument isn't reliably documented, so this
+# never guesses -- a full wipe is only the explicit `keenetic-xray
+# internal prerm-cleanup --purge` a user runs by hand before removing
+# the package. Called anyway, mirroring postinst's own `internal
+# postinst-setup` call, so a future non-purge cleanup added there runs
+# automatically too. || true: the binary may already be gone by the
+# time this fires on some opkg versions.
+/opt/sbin/keenetic-xray internal prerm-cleanup || true
+
 exit 0

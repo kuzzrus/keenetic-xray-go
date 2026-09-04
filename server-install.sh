@@ -63,6 +63,9 @@ ASSET_URL="$(fetch "$API_URL" \
 
 echo "server-install: downloading ${ASSET_URL}"
 TMP_BIN="$(mktemp)"
+# A no-op once mv below succeeds (nothing left at $TMP_BIN to remove);
+# guards the case where fetch/chmod fails first and set -e exits early.
+trap 'rm -f "$TMP_BIN"' EXIT
 fetch "$ASSET_URL" "$TMP_BIN"
 chmod 0755 "$TMP_BIN"
 mv "$TMP_BIN" "$BIN_PATH"

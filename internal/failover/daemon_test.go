@@ -2,8 +2,10 @@ package failover
 
 import (
 	"context"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -90,6 +92,54 @@ func TestFailoverConfig_CopiesFromConfigPackage(t *testing.T) {
 	want := Config{FailuresRequired: 3, RecoverySuccessesRequired: 3, CooldownCycles: 2, RollbackBackoffSeconds: 300}
 	if got != want {
 		t.Errorf("failoverConfig(%+v) = %+v, want %+v", src, got, want)
+	}
+}
+
+// TestRealActions_ProbeLive_BoundedByCheckInterval is the regression
+// test for a real incident: a router went silent for 17+ minutes with
+// no recovery. One contributing cause was that Probe's own
+// Retries/RetryDelay/FallbackURLs have no ceiling on their *sum* -- a
+// single ProbeLive call, and so a single Tick, could run for several
+// times CheckIntervalSeconds. Since Daemon.Run is one goroutine that
+// also services Snapshot/ForceSwitch between ticks (and the bot-control
+// agent's heartbeat reads Snapshot), a slow Tick delayed everything else
+// the daemon does. ProbeLive/ProbeIsolated now wrap the whole call in a
+// context.WithTimeout(ctx, probeTimeout()) -- this proves that actually
+// bounds it, using a retry/fallback config that would take 30+ seconds
+// if that wrap were removed.
+func TestRealActions_ProbeLive_BoundedByCheckInterval(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	freeSOCKSAddr := ln.Addr().String()
+	ln.Close() // freed -- guaranteed nothing answers on it
+
+	_, portStr, _ := net.SplitHostPort(freeSOCKSAddr)
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatalf("parsing port %q: %v", portStr, err)
+	}
+
+	cfg := config.Default()
+	cfg.Failover.CheckIntervalSeconds = 1 // the ceiling under test
+	cfg.Failover.SOCKSPort = port
+	cfg.Failover.HealthCheckURL = "https://example.invalid/"
+	cfg.Failover.HealthCheckFallbackURLs = []string{"https://example2.invalid/", "https://example3.invalid/"}
+	cfg.Failover.CheckRetries = 5
+	cfg.Failover.CheckRetryDelaySeconds = 2 // retries alone: 10s+ per URL, 30s+ across all 3 if unbounded
+
+	actions := newRealActions(Paths{}, cfg)
+
+	start := time.Now()
+	err = actions.ProbeLive(context.Background())
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected an error -- nothing is listening on the SOCKS port")
+	}
+	if elapsed > 5*time.Second {
+		t.Errorf("ProbeLive took %v, want it bounded by ~CheckIntervalSeconds (1s), not by Retries*RetryDelay*len(URLs) (30s+)", elapsed)
 	}
 }
 

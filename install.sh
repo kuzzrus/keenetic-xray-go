@@ -11,6 +11,10 @@
 #   curl -fsSL https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/install.sh | sh
 # (curl, not wget: some routers' busybox wget can't fetch https:// at all.
 #  opkg update && opkg install curl if it's missing.)
+# With no --sub=/--vless= this drops straight into the interactive setup
+# wizard (primary link, backup link, SOCKS/HTTP ports, Proxy0) -- it
+# reads from /dev/tty rather than this script's own stdin, so it works
+# even piped through `curl | sh` like the command above.
 #
 # One-shot -- pass a link and the install configures itself, no follow-up:
 #   ... | sh -s -- --sub="https://provider.example/sub/token"

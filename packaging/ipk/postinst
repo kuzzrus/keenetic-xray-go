@@ -12,11 +12,31 @@ set -e
 # If install.sh was given a link (--sub=/--vless=), do the whole first-run
 # configuration here so nothing else is needed. Best-effort: a failure
 # (bad URL, offline) just leaves it for `keenetic-xray setup` by hand.
+#
+# Otherwise, if there's a controlling terminal, run the interactive
+# wizard right here -- even under `curl ... | sh`, where install.sh's own
+# stdin is the piped script, not the keyboard, so the wizard reads from
+# /dev/tty directly instead (same trick server-install.sh already uses
+# for the control-server installer). Without a link AND without a tty
+# (e.g. driven by cron/CI with stdin/stdout redirected to files), there's
+# nothing to prompt into -- leave the daemon idling until `keenetic-xray
+# setup` is run by hand, exactly as before this existed.
 if [ -n "${KEENETIC_XRAY_SETUP_FROM:-}" ]; then
     _proxy0=--proxy0
     [ -n "${KEENETIC_XRAY_NO_PROXY0:-}" ] && _proxy0=--no-proxy0
     /opt/sbin/keenetic-xray setup --yes "$_proxy0" --from "$KEENETIC_XRAY_SETUP_FROM" \
         || echo "keenetic-xray: auto-setup failed -- run 'keenetic-xray setup' by hand"
+elif [ -e /dev/tty ]; then
+    echo "keenetic-xray: no link given -- running the interactive setup wizard"
+    if [ -n "${KEENETIC_XRAY_NO_PROXY0:-}" ]; then
+        /opt/sbin/keenetic-xray setup --no-proxy0 </dev/tty \
+            || echo "keenetic-xray: setup wizard failed or was cancelled -- run 'keenetic-xray setup' by hand"
+    else
+        /opt/sbin/keenetic-xray setup </dev/tty \
+            || echo "keenetic-xray: setup wizard failed or was cancelled -- run 'keenetic-xray setup' by hand"
+    fi
+else
+    echo "keenetic-xray: no link and no controlling terminal -- run 'keenetic-xray setup' by hand to finish configuring"
 fi
 
 # Start last, so it comes up with the full config -- no restart needed.

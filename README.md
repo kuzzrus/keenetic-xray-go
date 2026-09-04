@@ -45,7 +45,10 @@ wiring, and the daemon all set up in one go:
 curl -fsSL https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/install.sh | sh -s -- --sub="https://provider.example/sub/token"
 ```
 
-Without a link it installs and waits for `keenetic-xray setup`:
+Without a link, it installs and then drops straight into the interactive
+setup wizard over the same SSH session -- primary link, backup link (each
+independently, like `🔗 Источники` in the bot), SOCKS/HTTP port numbers,
+then Proxy0:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/install.sh | sh

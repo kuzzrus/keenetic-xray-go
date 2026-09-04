@@ -285,3 +285,66 @@ func (c *Config) profileAt(i int) *Profile {
 	}
 	return &c.Profiles[i]
 }
+
+// UpsertProfile ensures p is in c.Profiles -- updating the existing entry
+// if one already matches by identity (UUID+Address+Port), appending
+// otherwise -- and returns its index either way. Shared by the bot's
+// per-slot source flow (🔗 Источники) and subscription refresh's
+// independent-slot preservation, so a profile from one source is never
+// silently duplicated by another.
+func (c *Config) UpsertProfile(p Profile) int {
+	for i, e := range c.Profiles {
+		if e.UUID == p.UUID && e.Address == p.Address && e.Port == p.Port {
+			c.Profiles[i] = p
+			return i
+		}
+	}
+	c.Profiles = append(c.Profiles, p)
+	return len(c.Profiles) - 1
+}
+
+// IndependentSlots snapshots the primary/backup profile of any slot fed
+// by its own SlotSource, so a caller about to wholesale-replace Profiles
+// (a subscription refresh) can restore that slot afterward -- otherwise
+// refreshing the *shared* Subscription silently discards a slot that
+// subscription had nothing to do with.
+type IndependentSlots struct {
+	Primary *Profile
+	Backup  *Profile
+}
+
+// SnapshotIndependentSlots captures the current primary/backup profile
+// for each slot that has its own PrimarySource/BackupSource. Call this
+// before replacing c.Profiles.
+func (c *Config) SnapshotIndependentSlots() IndependentSlots {
+	var s IndependentSlots
+	if c.PrimarySource != nil {
+		if p := c.Primary(); p != nil {
+			cp := *p
+			s.Primary = &cp
+		}
+	}
+	if c.BackupSource != nil {
+		if p := c.Backup(); p != nil {
+			cp := *p
+			s.Backup = &cp
+		}
+	}
+	return s
+}
+
+// Restore re-adds each captured slot's profile to c.Profiles (via
+// UpsertProfile, so an identical entry the fresh fetch already carries
+// isn't duplicated) and repoints the corresponding index at it,
+// overriding whatever the caller derived from the fresh fetch. Call
+// after replacing c.Profiles and setting Primary/BackupIndex from a
+// refresh -- an independent source always wins over a shared
+// subscription's own remark-match for the same slot.
+func (s IndependentSlots) Restore(c *Config) {
+	if s.Primary != nil {
+		c.PrimaryIndex = c.UpsertProfile(*s.Primary)
+	}
+	if s.Backup != nil {
+		c.BackupIndex = c.UpsertProfile(*s.Backup)
+	}
+}

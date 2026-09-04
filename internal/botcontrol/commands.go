@@ -123,6 +123,10 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 		return h.ensureCore(ctx)
 	case ActionSelfUpdate:
 		return h.selfUpdate()
+	case ActionFailoverShow:
+		return h.Config.Failover.TunablesText(), nil
+	case ActionFailoverSet:
+		return h.setFailoverTunable(cmd.Args)
 	default:
 		return "", fmt.Errorf("unknown action %q", cmd.Action)
 	}
@@ -353,12 +357,25 @@ func (h *RouterHandler) rebindXray(ctx context.Context) {
 		_ = h.Daemon.ForceSwitch(ctx, snap.LiveRole)
 		return
 	}
-	if h.InitScript != "" && h.Config.Primary() != nil && h.Config.Backup() != nil {
-		c := exec.Command("sh", "-c", "sleep 2; "+h.InitScript+" restart")
-		if err := c.Start(); err == nil {
-			go func() { _ = c.Wait() }()
-		}
+	if h.Config.Primary() != nil && h.Config.Backup() != nil {
+		_ = h.restartDaemonDetached()
 	}
+}
+
+// restartDaemonDetached spawns a detached "sleep 2; <InitScript> restart"
+// so the caller's own command result can be posted to the control server
+// before the init script SIGTERMs this process. Best-effort beyond that:
+// the restart itself is fire-and-forget once spawned.
+func (h *RouterHandler) restartDaemonDetached() error {
+	if h.InitScript == "" {
+		return fmt.Errorf("init-скрипт не задан")
+	}
+	c := exec.Command("sh", "-c", "sleep 2; "+h.InitScript+" restart")
+	if err := c.Start(); err != nil {
+		return fmt.Errorf("запуск перезапуска: %w", err)
+	}
+	go func() { _ = c.Wait() }() // reap the shell if we outlive the sleep
+	return nil
 }
 
 func (h *RouterHandler) proxy0Show(ctx context.Context) string {
@@ -433,15 +450,32 @@ func (h *RouterHandler) proxy0Off(ctx context.Context) (string, error) {
 // process can post the command result before the init script SIGTERMs
 // it. The replacement daemon reconnects on its own and emits daemon_start.
 func (h *RouterHandler) daemonRestart() (string, error) {
-	if h.InitScript == "" {
-		return "", fmt.Errorf("init-скрипт не задан")
+	if err := h.restartDaemonDetached(); err != nil {
+		return "", err
 	}
-	c := exec.Command("sh", "-c", "sleep 2; "+h.InitScript+" restart")
-	if err := c.Start(); err != nil {
-		return "", fmt.Errorf("запуск перезапуска: %w", err)
-	}
-	go func() { _ = c.Wait() }() // reap the shell if we outlive the sleep
 	return "перезапуск демона через 2с…", nil
+}
+
+// setFailoverTunable adjusts one health-check/failover knob and restarts
+// the daemon to apply it -- the Machine reads Config once at
+// construction, there is no live reload for these.
+func (h *RouterHandler) setFailoverTunable(args []string) (string, error) {
+	if len(args) != 2 {
+		return "", fmt.Errorf("usage: set <key> <value>")
+	}
+	if err := h.Config.Failover.SetTunable(args[0], args[1]); err != nil {
+		return "", err
+	}
+	if err := h.Config.Save(h.ConfigPath); err != nil {
+		return "", err
+	}
+	msg := fmt.Sprintf("%s = %s.", args[0], args[1])
+	if err := h.restartDaemonDetached(); err != nil {
+		msg += " Перезапусти демон вручную, чтобы применить: " + err.Error()
+	} else {
+		msg += " Демон перезапускается (~2с), чтобы применить."
+	}
+	return msg, nil
 }
 
 // selfUpdate re-runs install.sh (whole keenetic-xray package: new .ipk,

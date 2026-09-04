@@ -35,6 +35,8 @@ const (
 	ActionDaemonRestart    = "daemon_restart"
 	ActionEnsureCore       = "ensure_core"
 	ActionSelfUpdate       = "self_update" // re-run install.sh on the router (whole keenetic-xray package)
+	ActionFailoverShow     = "failover_show"
+	ActionFailoverSet      = "failover_set" // args[0]=key, args[1]=value
 )
 
 // Command is a single unit of work queued for a router by the control

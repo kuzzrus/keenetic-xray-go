@@ -213,17 +213,26 @@ ones are text-only:
 /restart <router>               restart the failover daemon (detached; the replacement emits daemon_start)
 /ensure_core <router>           (re)install the xray-core binary -- vendored build, opkg fallback
 /update <router>                re-run install.sh (whole keenetic-xray package)
+/failover <router> show                        current health-check thresholds
+/failover <router> set <key> <value>           tune one (restarts the daemon to apply)
 ```
 
 `restart` and `update` are also router-card buttons (`update` behind a confirm).
 
-`sub_refresh`, `sub_setprimary`, `sub_setbackup` and `proxy0 on`/`off`
-call `RouterHandler.rebindXray` after saving: it re-forces the current
-live role, so the daemon regenerates `xray-production.json` and restarts
-the supervised xray process -- picking up the new profile/link/bind
-**without a full daemon restart and without touching the Proxy0
-interface**. It no-ops if the daemon is still idling (no primary/backup
-yet); that case still needs `♻️ Рестарт демона`.
+`sub_refresh`, `sub_setprimary`, `sub_setbackup`, `set_primary_source`,
+`set_backup_source` and `proxy0 on`/`off` call `RouterHandler.rebindXray`
+after saving. If the daemon is already in its Run loop, that re-forces
+the current live role, so it regenerates `xray-production.json` and
+restarts the supervised xray process -- **without a full daemon restart
+and without touching the Proxy0 interface**. If the daemon is still
+idling (it starts idle until *both* primary and backup are set) and the
+config now has both, `rebindXray` instead kicks a detached `init.d
+restart` so a setup done entirely from the bot actually starts serving,
+with no SSH step.
+
+`failover set` (and any other config-only change with no live-reload
+path) always restarts the daemon the same detached way -- the state
+machine's tunables are fixed at construction.
 
 A text command enqueues and then blocks up to `ResultTimeout` for the
 router to answer before replying (an online router, default poll interval

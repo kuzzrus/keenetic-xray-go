@@ -55,6 +55,8 @@ func run(args []string) error {
 		return cmdAgent(rest)
 	case "proxy0":
 		return cmdProxy0(rest)
+	case "failover":
+		return cmdFailover(rest)
 	case "internal":
 		return cmdInternal(rest)
 	default:
@@ -84,7 +86,8 @@ commands:
   doctor                                            run diagnostic checks
   variant {show|set mini|set full}
   agent {configure <url> <router-id> <fingerprint> <token>|enable|disable|status}
-  proxy0 {show|set [--lan-ip=192.168.x.1]|off}   point Keenetic's Proxy0 at the local inbound`)
+  proxy0 {show|set [--lan-ip=192.168.x.1]|off}   point Keenetic's Proxy0 at the local inbound
+  failover {show|set <key> <value>}              tune health-check thresholds (restart to apply)`)
 }
 
 func cmdDaemon(args []string) error {

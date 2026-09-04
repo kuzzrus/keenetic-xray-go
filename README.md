@@ -109,6 +109,7 @@ keenetic-xray doctor
 keenetic-xray variant {show|set mini|set full}
 keenetic-xray agent {configure <url> <router-id> <fingerprint> <token>|enable|disable|status}
 keenetic-xray proxy0 {show|set [--lan-ip=192.168.x.1]|off}
+keenetic-xray failover {show|set <key> <value>}
 ```
 
 `proxy0 set` points Keenetic's `Proxy0` at the local inbound and flips the
@@ -116,6 +117,14 @@ daemon to bind `0.0.0.0` (so `Proxy0` can reach it) instead of loopback;
 the daemon re-asserts it on every start. `setup` offers this
 interactively. Then assign devices or policies to `Proxy0` in the
 Keenetic UI.
+
+`failover show`/`set` read or tune the health-check thresholds -- useful
+when primary is a single flaky server and the defaults switch too
+eagerly. Keys: `check_interval_seconds`, `failures_required`,
+`recovery_successes_required`, `cooldown_cycles`,
+`rollback_backoff_seconds`, `check_retries`, `check_retry_delay_seconds`,
+`health_check_url`. `set` takes effect after a daemon restart (no live
+config reload yet).
 
 `menu` is a numbered control panel for running the router from an SSH
 session without the Telegram bot: status, `doctor`, profile list,

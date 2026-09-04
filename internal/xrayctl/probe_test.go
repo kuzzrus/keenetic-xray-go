@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -133,6 +134,102 @@ func TestProbe_UpstreamError(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("expected error for 500 status")
+	}
+}
+
+func TestProbe_RetriesBeforeSucceeding(t *testing.T) {
+	var hits int32
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&hits, 1)
+		if n < 3 { // fail the first 2 attempts, succeed the 3rd
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer backend.Close()
+
+	socksAddr := fakeSOCKS5Server(t)
+	err := Probe(context.Background(), ProbeOptions{
+		SOCKSAddr:  socksAddr,
+		URL:        backend.URL,
+		Retries:    2,
+		RetryDelay: 10 * time.Millisecond,
+		Timeout:    2 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+	if got := atomic.LoadInt32(&hits); got != 3 {
+		t.Errorf("backend was hit %d times, want 3 (2 failures + 1 success)", got)
+	}
+}
+
+func TestProbe_ExhaustsRetriesThenFails(t *testing.T) {
+	var hits int32
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer backend.Close()
+
+	socksAddr := fakeSOCKS5Server(t)
+	err := Probe(context.Background(), ProbeOptions{
+		SOCKSAddr:  socksAddr,
+		URL:        backend.URL,
+		Retries:    2,
+		RetryDelay: 10 * time.Millisecond,
+		Timeout:    2 * time.Second,
+	})
+	if err == nil {
+		t.Fatal("expected an error once all attempts fail")
+	}
+	if got := atomic.LoadInt32(&hits); got != 3 {
+		t.Errorf("backend was hit %d times, want 3 (1 + 2 retries)", got)
+	}
+}
+
+func TestProbe_FallsBackToSecondURL(t *testing.T) {
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer bad.Close()
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer good.Close()
+
+	socksAddr := fakeSOCKS5Server(t)
+	err := Probe(context.Background(), ProbeOptions{
+		SOCKSAddr:    socksAddr,
+		URL:          bad.URL,
+		FallbackURLs: []string{good.URL},
+		Timeout:      2 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("Probe: %v, want the fallback URL to save it", err)
+	}
+}
+
+func TestProbe_AllURLsFail(t *testing.T) {
+	bad1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer bad1.Close()
+	bad2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer bad2.Close()
+
+	socksAddr := fakeSOCKS5Server(t)
+	err := Probe(context.Background(), ProbeOptions{
+		SOCKSAddr:    socksAddr,
+		URL:          bad1.URL,
+		FallbackURLs: []string{bad2.URL},
+		Timeout:      2 * time.Second,
+	})
+	if err == nil {
+		t.Fatal("expected an error when every URL fails")
 	}
 }
 

@@ -108,6 +108,9 @@ func runSetup(stdin io.Reader, o setupOpts) error {
 	if len(profiles) == 0 {
 		return fmt.Errorf("no usable vless:// profiles found")
 	}
+	if cfg.PrimarySource != nil || cfg.BackupSource != nil {
+		fmt.Println("warning: this replaces ALL profiles, including the independent primary/backup sources set via the bot's 🔗 Источники -- re-add them afterward if you still want them")
+	}
 	cfg.Profiles = profiles
 
 	if interactive {

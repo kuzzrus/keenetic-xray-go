@@ -547,7 +547,7 @@ func (h *RouterHandler) setSlotSource(ctx context.Context, primary bool, args []
 	if err != nil {
 		return "", err
 	}
-	idx := h.upsertProfile(prof)
+	idx := h.Config.UpsertProfile(prof)
 
 	slot := &config.SlotSource{URL: src, Selector: selector}
 	word, mirrored := "backup", false
@@ -634,20 +634,6 @@ func pickProfile(ps []config.Profile, selector string) (config.Profile, error) {
 	default:
 		return config.Profile{}, fmt.Errorf("под %q подходит %d профилей — уточни селектор", selector, matches)
 	}
-}
-
-// upsertProfile returns the index of p in Config.Profiles, appending it
-// (or refreshing a match on UUID+address+port) first.
-func (h *RouterHandler) upsertProfile(p config.Profile) int {
-	for i := range h.Config.Profiles {
-		e := h.Config.Profiles[i]
-		if e.UUID == p.UUID && e.Address == p.Address && e.Port == p.Port {
-			h.Config.Profiles[i] = p
-			return i
-		}
-	}
-	h.Config.Profiles = append(h.Config.Profiles, p)
-	return len(h.Config.Profiles) - 1
 }
 
 func (h *RouterHandler) subSetURL(args []string) (string, error) {

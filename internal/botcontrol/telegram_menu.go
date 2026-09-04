@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -49,7 +48,7 @@ func routerCardKB(id string) inlineKeyboard {
 	return inlineKeyboard{InlineKeyboard: [][]inlineButton{
 		{{Text: "📊 Статус", CallbackData: "act:status:" + id}, {Text: "🩺 Doctor", CallbackData: "act:doctor:" + id}},
 		{{Text: "⬆️ primary", CallbackData: "act:sw_pri:" + id}, {Text: "⬇️ backup", CallbackData: "act:sw_bak:" + id}},
-		{{Text: "📋 Профили", CallbackData: "pf:" + id}, {Text: "🔗 Источники", CallbackData: "srcm:" + id}},
+		{{Text: "🔗 Источники", CallbackData: "srcm:" + id}},
 		{{Text: "🔄 Обновить подписку", CallbackData: "act:sub_refresh:" + id}},
 		{{Text: "♻️ Рестарт демона", CallbackData: "act:restart:" + id}, {Text: "🔁 Обновить агент", CallbackData: "upd:" + id}},
 		{{Text: "✏️ Переименовать", CallbackData: "rename:" + id}, {Text: "📦 Установка агента", CallbackData: "install:" + id}},
@@ -89,7 +88,7 @@ func (b *TelegramBot) triggerServerUpdate() string {
 func sourcesScreenText(id string) string {
 	return "🔗 Источники " + id + "\n\n" +
 		"Задай, откуда брать профиль для каждого слота — можно из разных ссылок или подписок.\n" +
-		"Основной/резервный среди уже загруженных профилей меняются в 📋 Профили."
+		"Переключить основной/резервный среди уже загруженных профилей: /profile_list " + id + ", затем /sub_setprimary или /sub_setbackup."
 }
 
 func sourcesScreenKB(id string) inlineKeyboard {
@@ -208,10 +207,6 @@ func (b *TelegramBot) handleCallback(ctx context.Context, cb tgCallbackQuery) {
 		b.startSlotSourceWizard(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "srcb:"), false)
 	case strings.HasPrefix(data, "rename:"):
 		b.startRenameWizard(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "rename:"))
-	case strings.HasPrefix(data, "pf:"):
-		b.showProfilesScreen(ctx, cb, strings.TrimPrefix(data, "pf:"))
-	case strings.HasPrefix(data, "pfp:"), strings.HasPrefix(data, "pfb:"):
-		b.handleProfileRole(ctx, cb, data)
 	case strings.HasPrefix(data, "router:"):
 		id := strings.TrimPrefix(data, "router:")
 		b.editCB(ctx, cb, b.routerCardText(id), routerCardKB(id))
@@ -274,104 +269,6 @@ func (b *TelegramBot) handleActionCallback(ctx context.Context, cb tgCallbackQue
 	chatID, msgID := cb.Message.Chat.ID, cb.Message.MessageID
 	b.editMessageText(ctx, chatID, msgID, b.routerCardText(id)+"\n\n⏳ команда в очереди…", routerCardKB(id))
 	go b.awaitActionResult(ctx, chatID, msgID, id, cmdID)
-}
-
-// showProfilesScreen renders the interactive 📋 Профили screen: it edits
-// the card to a loading note, then (in a goroutine, since fetching the
-// list blocks up to ResultTimeout) replaces it with one row per profile
-// carrying "⬆️ основным" / "⬇️ резервным" buttons.
-func (b *TelegramBot) showProfilesScreen(ctx context.Context, cb tgCallbackQuery, id string) {
-	if !b.Store.HasRouter(id) {
-		b.editCB(ctx, cb, "нет такого роутера: "+id, b.routersListKB())
-		return
-	}
-	if cb.Message == nil {
-		return
-	}
-	chatID, msgID := cb.Message.Chat.ID, cb.Message.MessageID
-	b.editMessageText(ctx, chatID, msgID, "📋 Профили "+id+"\n\n⏳ загрузка…", inlineKeyboard{})
-	go func() {
-		text, kb := b.profilesScreen(ctx, id)
-		b.editMessageText(ctx, chatID, msgID, text, kb)
-	}()
-}
-
-// profilesScreen fetches the router's profile list and formats the body
-// text + keyboard. Blocks up to ResultTimeout; call it off the update
-// goroutine.
-func (b *TelegramBot) profilesScreen(ctx context.Context, id string) (string, inlineKeyboard) {
-	back := inlineKeyboard{InlineKeyboard: [][]inlineButton{{
-		{Text: "🔄 Обновить", CallbackData: "pf:" + id},
-		{Text: "⬅️ Назад", CallbackData: "router:" + id},
-	}}}
-	out, answered, errText := b.enqueueAndWait(ctx, id, ActionProfileList, nil)
-	if !answered {
-		msg := "роутер не ответил — выполнится при следующем poll"
-		if errText != "" {
-			msg = errText
-		}
-		return "📋 Профили " + id + "\n\n" + msg, back
-	}
-	if errText != "" {
-		return "📋 Профили " + id + "\n\nошибка: " + errText, back
-	}
-
-	rows := parseProfileRows(out)
-	if len(rows) == 0 {
-		return "📋 Профили " + id + "\n\nпрофилей нет. Задай источник — кнопка 🔗 Источники.", back
-	}
-
-	var body strings.Builder
-	fmt.Fprintf(&body, "📋 Профили %s\nТапни ⬆️ — сделать основным, ⬇️ — резервным.\n\n", id)
-	kbRows := make([][]inlineButton, 0, len(rows)+1)
-	for i, r := range rows {
-		mark := ""
-		if r.primary {
-			mark += " ⬆️осн"
-		}
-		if r.backup {
-			mark += " ⬇️рез"
-		}
-		fmt.Fprintf(&body, "%d: %s%s\n", i, r.remark, mark)
-		si := strconv.Itoa(i)
-		kbRows = append(kbRows, []inlineButton{
-			{Text: fmt.Sprintf("⬆️ %d основным", i), CallbackData: "pfp:" + id + ":" + si},
-			{Text: fmt.Sprintf("⬇️ %d резервным", i), CallbackData: "pfb:" + id + ":" + si},
-		})
-	}
-	kbRows = append(kbRows, []inlineButton{
-		{Text: "🔄 Обновить", CallbackData: "pf:" + id},
-		{Text: "⬅️ Назад", CallbackData: "router:" + id},
-	})
-	return body.String(), inlineKeyboard{InlineKeyboard: kbRows}
-}
-
-// handleProfileRole assigns a profile to the primary or backup slot from
-// a 📋 Профили button, then re-renders the screen (the follow-up
-// profile_list runs after the assignment, so it reflects the change).
-func (b *TelegramBot) handleProfileRole(ctx context.Context, cb tgCallbackQuery, data string) {
-	primary := strings.HasPrefix(data, "pfp:")
-	rest := data[len("pfX:"):]
-	k := strings.LastIndex(rest, ":")
-	if k < 0 {
-		b.editCB(ctx, cb, "плохая кнопка", mainMenuKB())
-		return
-	}
-	id, si := rest[:k], rest[k+1:]
-	if !b.Store.HasRouter(id) {
-		b.editCB(ctx, cb, "нет такого роутера: "+id, b.routersListKB())
-		return
-	}
-
-	action := ActionSubSetBackup
-	if primary {
-		action = ActionSubSetPrimary
-	}
-	if _, err := b.Store.Enqueue(id, action, []string{si}); err != nil {
-		b.editCB(ctx, cb, "не поставлено в очередь: "+err.Error(), routerCardKB(id))
-		return
-	}
-	b.showProfilesScreen(ctx, cb, id)
 }
 
 func (b *TelegramBot) awaitActionResult(ctx context.Context, chatID int64, msgID int, routerID, cmdID string) {

@@ -825,34 +825,3 @@ func (b *TelegramBot) enqueueAndWait(ctx context.Context, routerID, action strin
 	}
 	return result.Output, true, result.Err
 }
-
-// profileRow is one line of profileList() output, parsed.
-type profileRow struct {
-	remark  string
-	primary bool
-	backup  bool
-}
-
-// parseProfileRows turns profileList() output ("0: remark -- addr:port
-// [primary]\n1: ...") into a row per profile index, keeping the role
-// markers so the 📋 Профили screen can show current state.
-func parseProfileRows(s string) []profileRow {
-	var out []profileRow
-	for _, line := range strings.Split(strings.TrimSpace(s), "\n") {
-		i := strings.Index(line, ": ")
-		if i < 0 {
-			continue
-		}
-		rest := line[i+2:]
-		row := profileRow{
-			primary: strings.Contains(rest, "[primary]"),
-			backup:  strings.Contains(rest, "[backup]"),
-		}
-		if j := strings.Index(rest, " -- "); j >= 0 {
-			rest = rest[:j]
-		}
-		row.remark = strings.TrimSpace(rest)
-		out = append(out, row)
-	}
-	return out
-}

@@ -69,11 +69,13 @@ opkg install https://github.com/kuzzrus/keenetic-xray-go/releases/download/v0.1.
 opkg install https://github.com/kuzzrus/keenetic-xray-go/releases/download/v0.1.1/keenetic-xray_0.1.1-1_mipsel-3.4.ipk     # older, MIPS-based models
 ```
 
-If your `opkg` build doesn't handle the release CDN's HTTPS redirect,
-download first and install the local file instead:
+If your `opkg` build doesn't handle the release CDN's HTTPS redirect
+(same busybox-`wget`-can't-do-`https://` limitation as above — `opkg`
+downloads through `wget` internally, so it fails the same way), download
+first with `curl` and install the local file instead:
 
 ```sh
-wget https://github.com/kuzzrus/keenetic-xray-go/releases/download/v0.1.1/keenetic-xray_0.1.1-1_aarch64-3.10.ipk -O /opt/keenetic-xray.ipk
+curl -fsSL -o /opt/keenetic-xray.ipk https://github.com/kuzzrus/keenetic-xray-go/releases/download/v0.1.1/keenetic-xray_0.1.1-1_aarch64-3.10.ipk
 opkg install /opt/keenetic-xray.ipk
 ```
 

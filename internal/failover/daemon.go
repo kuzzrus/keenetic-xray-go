@@ -47,11 +47,28 @@ func newRealActions(paths Paths, cfg *config.Config) *realActions {
 	}
 }
 
+// ProbeLive and ProbeIsolated cap the *whole* Probe call -- every URL and
+// retry -- at probeTimeout(), the same duration as Run's tick interval.
+// ProbeOptions.Timeout below is only a per-attempt ceiling: with several
+// fallback URLs and retries all getting their own fresh per-attempt
+// timeout, a single Probe call could otherwise run for URLs*(retries+1)
+// attempts worth of time -- multiple minutes, in the worst case, versus
+// the one probeTimeout() a Tick is meant to take. Run's select loop
+// processes one thing at a time, so a Tick running that long delays
+// every other daemon interaction (ForceSwitch, Snapshot -- the latter is
+// what the bot-control agent's heartbeat reads) for just as long. A slow
+// first attempt eating the whole budget leaves no room for this call's
+// own retries/fallbacks -- that's fine, since the next Tick tries fresh
+// regardless.
 func (a *realActions) ProbeLive(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, a.probeTimeout())
+	defer cancel()
 	return xrayctl.Probe(ctx, a.probeOptions(a.socks))
 }
 
 func (a *realActions) ProbeIsolated(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, a.probeTimeout())
+	defer cancel()
 	return xrayctl.Probe(ctx, a.probeOptions(fmt.Sprintf("127.0.0.1:%d", a.cfg.Failover.PretestPort)))
 }
 

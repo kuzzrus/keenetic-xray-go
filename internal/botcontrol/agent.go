@@ -24,6 +24,23 @@ const DefaultPollInterval = 5 * time.Second
 // .HeartbeatInterval isn't set.
 const DefaultHeartbeatInterval = 30 * time.Second
 
+// DefaultCommandTimeout bounds one dispatched unit of work -- a poll's
+// Handler.Handle call, or a heartbeat's StatusFunc call -- so a slow or
+// stuck one can never freeze Run's single-threaded select loop past this
+// ceiling. StatusFunc and several Handle actions read the failover
+// Daemon's state (RouterHandler.status -> Daemon.Snapshot), which blocks
+// on Daemon.do until its own goroutine is free -- normally fast, but
+// bounded only by how long a Tick takes, which grew sharply once a probe
+// could retry across several URLs (internal/xrayctl.Probe). Before this,
+// ctx here was the agent's whole-process lifetime context (never
+// cancelled short of shutdown), so nothing capped that wait: a
+// sufficiently slow Tick could stall heartbeat, which stalls poll (same
+// goroutine), for as long as the Tick ran. Comfortably under
+// DefaultOfflineThreshold (90s, see OfflineWatcher) so a single slow call
+// can't itself cost the router an "не выходит на связь" -- the very next
+// poll tick still lands in time.
+const DefaultCommandTimeout = 60 * time.Second
+
 // Handler executes one Command and returns human-readable output, or an
 // error. Injected so the polling/transport code here doesn't need to
 // import the concrete failover/config/subscription plumbing directly --
@@ -40,6 +57,7 @@ type AgentOptions struct {
 	FingerprintSHA256 string        // hex SHA256 of the server's leaf cert, pinned SSH-host-key style
 	PollInterval      time.Duration // 0 -> DefaultPollInterval
 	HeartbeatInterval time.Duration // 0 -> DefaultHeartbeatInterval
+	CommandTimeout    time.Duration // 0 -> DefaultCommandTimeout
 
 	// StatusFunc, if set, renders the status snapshot the agent pushes to
 	// /agent/heartbeat so the router card stays live. Nil disables the
@@ -86,8 +104,13 @@ func Run(ctx context.Context, opts AgentOptions, handle Handler) error {
 	}
 	hbTicker := time.NewTicker(hbInterval)
 	defer hbTicker.Stop()
+
+	cmdTimeout := opts.CommandTimeout
+	if cmdTimeout <= 0 {
+		cmdTimeout = DefaultCommandTimeout
+	}
 	if opts.StatusFunc != nil {
-		sendHeartbeat(ctx, client, opts) // one right away so the card isn't blank
+		runBounded(ctx, cmdTimeout, func(c context.Context) { sendHeartbeat(c, client, opts) }) // one right away so the card isn't blank
 	}
 
 	for {
@@ -95,15 +118,25 @@ func Run(ctx context.Context, opts AgentOptions, handle Handler) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			pollOnce(ctx, client, opts, handle)
+			runBounded(ctx, cmdTimeout, func(c context.Context) { pollOnce(c, client, opts, handle) })
 		case <-hbTicker.C:
 			if opts.StatusFunc != nil {
-				sendHeartbeat(ctx, client, opts)
+				runBounded(ctx, cmdTimeout, func(c context.Context) { sendHeartbeat(c, client, opts) })
 			}
 		case ev := <-opts.Events:
 			postEvent(ctx, client, opts, ev)
 		}
 	}
+}
+
+// runBounded derives a child context capped at timeout and runs fn with
+// it, so one dispatch from Run's loop can never withhold the goroutine
+// from the next select iteration past that ceiling -- see
+// DefaultCommandTimeout.
+func runBounded(ctx context.Context, timeout time.Duration, fn func(context.Context)) {
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	fn(callCtx)
 }
 
 // sendHeartbeat renders the current status via opts.StatusFunc and POSTs

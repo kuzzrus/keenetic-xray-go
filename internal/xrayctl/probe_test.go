@@ -233,6 +233,55 @@ func TestProbe_AllURLsFail(t *testing.T) {
 	}
 }
 
+// TestProbe_OuterContextBoundsTotalTime is the regression test for a
+// real incident: Probe's own Retries/RetryDelay/FallbackURLs/Timeout can
+// add up to several times a single Timeout, and Probe has no ceiling of
+// its own on the *sum* of every attempt across every URL -- a caller
+// that wants "try hard, but never take dramatically longer than a
+// single ordinary check" (internal/failover's Daemon.Run, whose one
+// goroutine also services heartbeats and forced switches between ticks)
+// must wrap ctx itself. This proves that wrap actually works: a short
+// outer deadline cuts the whole call short even though the configured
+// retry/fallback budget alone would run much longer.
+func TestProbe_OuterContextBoundsTotalTime(t *testing.T) {
+	var hits int32
+	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer failing.Close()
+	alsoFailing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer alsoFailing.Close()
+
+	socksAddr := fakeSOCKS5Server(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err := Probe(ctx, ProbeOptions{
+		SOCKSAddr:    socksAddr,
+		URL:          failing.URL,
+		FallbackURLs: []string{alsoFailing.URL},
+		Retries:      5,
+		RetryDelay:   500 * time.Millisecond, // retries alone: 2.5s+
+		Timeout:      2 * time.Second,        // *2 URLs, up to ~12s+ if unbounded
+	})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected an error -- every attempt fails")
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("Probe took %v, want it bounded by the outer context's ~150ms deadline, not by Retries*RetryDelay*len(URLs)", elapsed)
+	}
+	if atomic.LoadInt32(&hits) == 0 {
+		t.Error("expected at least one attempt before the deadline cut it off")
+	}
+}
+
 func TestProbe_NoSOCKSServer(t *testing.T) {
 	err := Probe(context.Background(), ProbeOptions{
 		SOCKSAddr: "127.0.0.1:1", // nothing listens on tcpmux here

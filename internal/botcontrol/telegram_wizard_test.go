@@ -31,26 +31,6 @@ func (r *recorder) list() []string {
 	return append([]string(nil), r.seen...)
 }
 
-func TestParseProfileRows(t *testing.T) {
-	in := "0: alpha -- a.example.com:443 [primary]\n1: beta -- b.example.com:443 [backup]\n2: gamma -- c:80"
-	got := parseProfileRows(in)
-	if len(got) != 3 {
-		t.Fatalf("parseProfileRows returned %d rows: %+v", len(got), got)
-	}
-	if got[0].remark != "alpha" || !got[0].primary || got[0].backup {
-		t.Errorf("row 0 = %+v", got[0])
-	}
-	if got[1].remark != "beta" || got[1].primary || !got[1].backup {
-		t.Errorf("row 1 = %+v", got[1])
-	}
-	if got[2].remark != "gamma" || got[2].primary || got[2].backup {
-		t.Errorf("row 2 = %+v", got[2])
-	}
-	if parseProfileRows("no profiles configured") != nil {
-		t.Error("a non-list string should parse to nil")
-	}
-}
-
 func TestStepResult(t *testing.T) {
 	b := &TelegramBot{Store: newBotStore(t)}
 	if got := b.stepResult("r", true, "", "done"); got != "done" {
@@ -164,42 +144,6 @@ func TestTelegramBot_SlotSourceWizard_PrimaryFromLink(t *testing.T) {
 	}
 	if !rec.has(ActionSetPrimarySource) {
 		t.Errorf("router did not receive set_primary_source, saw %v", rec.list())
-	}
-}
-
-func TestTelegramBot_ProfilesScreen_ShowsRolesAndSets(t *testing.T) {
-	srv, fake := newFakeTelegram(t)
-	store := newBotStore(t)
-	mustRegister(t, store, "r1")
-	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL, ResultTimeout: 2 * time.Second}
-	runBotInBackground(t, bot)
-
-	rec := &recorder{}
-	fakeAgent(t, store, "r1", func(action string) string {
-		rec.add(action)
-		if action == ActionProfileList {
-			return "0: alpha -- a:443 [primary] [backup]\n1: beta -- b:443"
-		}
-		return "ok"
-	})
-
-	fake.push(1, "/menu")
-	fake.waitForReply(t, 3*time.Second)
-	msgID := fake.lastSent(t).MessageID
-
-	fake.pushCallback(1, msgID, "pf:r1")
-	screen := fake.waitForEditContaining(t, 4*time.Second, "1: beta")
-	if !strings.Contains(screen, "0: alpha ⬆️осн ⬇️рез") {
-		t.Errorf("profiles screen = %q", screen)
-	}
-
-	fake.pushCallback(1, msgID, "pfp:r1:1") // make profile 1 primary
-	deadline := time.Now().Add(4 * time.Second)
-	for !rec.has(ActionSubSetPrimary) {
-		if time.Now().After(deadline) {
-			t.Fatalf("pfp button did not enqueue sub_setprimary, saw %v", rec.list())
-		}
-		time.Sleep(20 * time.Millisecond)
 	}
 }
 

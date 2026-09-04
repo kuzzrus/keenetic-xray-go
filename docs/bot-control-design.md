@@ -159,11 +159,6 @@ Proxy0 has no card button -- it's on by default (`config.Default`,
 `install.sh --no-proxy0` opts out) and the daemon asserts it at startup;
 `/proxy0 <router> [show|on|off]` is still there as a text command.
 
-`📋 Профили` opens an interactive screen: one row per profile with
-`⬆️ N основным` / `⬇️ N резервным` buttons (`pfp:` / `pfb:` callbacks ->
-`sub_setprimary` / `sub_setbackup`), the body text showing current role
-markers. It re-renders after each tap.
-
 `🔗 Источники` (`srcm:`) opens a two-button screen -- `⬆️ Основная`
 (`srcp:`) / `⬇️ Резервная` (`srcb:`) -- each starting a one-step dialog:
 paste a `vless://` link or an `http(s)://` subscription URL, optionally
@@ -173,8 +168,18 @@ which resolve the source to one profile, merge it into `Config.Profiles`,
 repoint the slot index and rebind xray. The two slots can be fed from
 independent sources; `Config.PrimarySource` / `BackupSource` remember
 where each came from (URL kept in the 0600 config, redacted from every
-reply alongside `Subscription.URL`). Picking among *already loaded*
-profiles stays in `📋 Профили`.
+reply alongside `Subscription.URL`). Setting one slot's source never
+fills in an empty other slot -- see internal/botcontrol/commands.go's
+setSlotSource; it only warns when the other slot still needs its own.
+
+There used to be a `📋 Профили` card button (an interactive screen for
+picking among *already loaded* profiles by index, `pfp:`/`pfb:`
+callbacks). Removed as low-value next to `🔗 Источники` -- it invited
+pointing a slot at whatever a subscription happened to currently
+contain instead of an explicit source, which is more fragile. The
+underlying commands are still text-only: `/profile_list <router>` to
+see indices, then `/sub_setprimary <router> <index>` / `/sub_setbackup
+<router> <index>`.
 
 `➕ Добавить роутер` starts a two-step text dialog (`telegram_wizard.go`):
 id, then display name. `✏️ Переименовать` (or `/rename <id> <name>`) is

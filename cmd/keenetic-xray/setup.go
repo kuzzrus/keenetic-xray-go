@@ -18,19 +18,26 @@ import (
 // setupOpts drives runSetup. With From set (and/or --yes) it runs fully
 // non-interactive -- that's the path the .ipk postinst takes when the
 // installer was given a link, so `install.sh --sub=...` needs no follow-up
-// commands.
+// commands. Without From and without --yes, postinst now runs this
+// interactively too (see packaging/ipk/postinst), asking primary and
+// backup as two independent sources -- same model as the bot's
+// 🔗 Источники (Config.PrimarySource/BackupSource) -- plus the SOCKS/HTTP
+// port numbers, rather than the older single-source-then-pick-an-index
+// flow non-interactive mode still uses.
 type setupOpts struct {
-	From       string // vless:// link or http(s):// subscription URL
-	PrimarySel string // index or a remark substring; "" -> 0
-	BackupSel  string // index or a remark substring; "" -> 1 (or 0 with one profile)
+	From       string // vless:// link or http(s):// subscription URL -- non-interactive mode only
+	PrimarySel string // index or a remark substring; "" -> 0 -- non-interactive mode only
+	BackupSel  string // index or a remark substring; "" -> 1 (or 0 with one profile) -- non-interactive mode only
 	Proxy0     string // "", "yes", "no" ("" -> prompt interactively, or auto when non-interactive)
+	SOCKSPort  int    // 0 -> prompt interactively, or config.Default's 1080 when non-interactive
+	HTTPPort   int    // 0 -> prompt interactively, or config.Default's 1081 when non-interactive
 	Yes        bool
 }
 
-// cmdSetup is the first-run configurator: pick a primary/backup pair from
-// a pasted vless:// link or a subscription URL, optionally wire Keenetic's
-// Proxy0 to the local inbound, and (interactively) offer to restart the
-// daemon so the change takes effect.
+// cmdSetup is the first-run configurator: pick a primary/backup pair,
+// optionally wire Keenetic's Proxy0 to the local inbound, and
+// (interactively) offer to restart the daemon so the change takes
+// effect.
 func cmdSetup(args []string) error {
 	var o setupOpts
 	for i := 0; i < len(args); i++ {
@@ -51,6 +58,18 @@ func cmdSetup(args []string) error {
 			o.PrimarySel = a[len("--primary="):]
 		case strings.HasPrefix(a, "--backup="):
 			o.BackupSel = a[len("--backup="):]
+		case strings.HasPrefix(a, "--socks-port="):
+			n, err := strconv.Atoi(a[len("--socks-port="):])
+			if err != nil {
+				return fmt.Errorf("--socks-port: %w", err)
+			}
+			o.SOCKSPort = n
+		case strings.HasPrefix(a, "--http-port="):
+			n, err := strconv.Atoi(a[len("--http-port="):])
+			if err != nil {
+				return fmt.Errorf("--http-port: %w", err)
+			}
+			o.HTTPPort = n
 		default:
 			return fmt.Errorf("setup: unexpected argument %q", a)
 		}
@@ -60,24 +79,23 @@ func cmdSetup(args []string) error {
 
 func runSetup(stdin io.Reader, o setupOpts) error {
 	reader := bufio.NewReader(stdin)
-	interactive := o.From == "" && !o.Yes
-
 	cfg, err := config.Load(configPath())
 	if err != nil {
 		return err
 	}
-
-	input := strings.TrimSpace(o.From)
-	if input == "" {
-		fmt.Println("keenetic-xray setup")
-		fmt.Println("Paste a vless:// link, or a subscription http(s):// URL:")
-		fmt.Print("> ")
-		line, err := reader.ReadString('\n')
-		if err != nil && line == "" {
-			return fmt.Errorf("reading input: %w", err)
-		}
-		input = strings.TrimSpace(line)
+	if o.From == "" && !o.Yes {
+		return runSetupInteractive(reader, cfg, o)
 	}
+	return runSetupNonInteractive(cfg, o)
+}
+
+// runSetupNonInteractive is the postinst / scripted path: one source
+// (a link or a subscription), primary/backup picked from it by index or
+// name, no prompts. Unchanged in shape since before per-slot independent
+// sources existed; `install.sh --sub=...` and CI depend on this exact
+// behavior.
+func runSetupNonInteractive(cfg *config.Config, o setupOpts) error {
+	input := strings.TrimSpace(o.From)
 	if input == "" {
 		return fmt.Errorf("no vless:// link or subscription URL given")
 	}
@@ -113,43 +131,20 @@ func runSetup(stdin io.Reader, o setupOpts) error {
 	}
 	cfg.Profiles = profiles
 
-	if interactive {
-		fmt.Println("\nAvailable profiles:")
-		for i, p := range profiles {
-			fmt.Printf("  %d: %s -- %s:%d\n", i, p.Remark, p.Address, p.Port)
+	primaryIdx, err := resolveProfileSelector(profiles, o.PrimarySel, 0)
+	if err != nil {
+		return fmt.Errorf("--primary: %w", err)
+	}
+	defBackup := 0
+	if len(profiles) > 1 {
+		defBackup = 1
+		if primaryIdx == 1 {
+			defBackup = 0
 		}
 	}
-
-	var primaryIdx, backupIdx int
-	if interactive {
-		primaryIdx, err = promptIndex(reader, "Select PRIMARY", len(profiles), 0)
-		if err != nil {
-			return err
-		}
-		backupIdx = primaryIdx
-		if len(profiles) > 1 {
-			def := 1
-			if primaryIdx == 1 {
-				def = 0
-			}
-			if backupIdx, err = promptIndex(reader, "Select BACKUP", len(profiles), def); err != nil {
-				return err
-			}
-		}
-	} else {
-		if primaryIdx, err = resolveProfileSelector(profiles, o.PrimarySel, 0); err != nil {
-			return fmt.Errorf("--primary: %w", err)
-		}
-		defBackup := 0
-		if len(profiles) > 1 {
-			defBackup = 1
-			if primaryIdx == 1 {
-				defBackup = 0
-			}
-		}
-		if backupIdx, err = resolveProfileSelector(profiles, o.BackupSel, defBackup); err != nil {
-			return fmt.Errorf("--backup: %w", err)
-		}
+	backupIdx, err := resolveProfileSelector(profiles, o.BackupSel, defBackup)
+	if err != nil {
+		return fmt.Errorf("--backup: %w", err)
 	}
 
 	cfg.PrimaryIndex = primaryIdx
@@ -158,27 +153,194 @@ func runSetup(stdin io.Reader, o setupOpts) error {
 		cfg.Subscription.PrimaryKey = profiles[primaryIdx].Remark
 		cfg.Subscription.BackupKey = profiles[backupIdx].Remark
 	}
+	applyPortOverrides(cfg, o)
 
 	if err := cfg.Save(configPath()); err != nil {
 		return err
 	}
 	fmt.Printf("\nSaved: primary=%s, backup=%s\n", profiles[primaryIdx].Remark, profiles[backupIdx].Remark)
 
+	if o.Proxy0 == "yes" || (o.Proxy0 != "no" && keenetic.Available()) {
+		doSetupProxy0(cfg)
+	}
+	fmt.Println("apply with: /opt/etc/init.d/S99keenetic-xray restart")
+	return nil
+}
+
+// runSetupInteractive is the terminal wizard: primary and backup each
+// get their own prompt (a vless:// link, or a subscription URL with an
+// interactive pick among its profiles) and their own SlotSource, exactly
+// like the bot's 🔗 Источники -- so a slot set up this way is never at
+// risk of a subscription refresh elsewhere silently discarding it (see
+// Config.PrimarySource/BackupSource, IndependentSlots). Then SOCKS/HTTP
+// port numbers, Proxy0, and a restart offer.
+func runSetupInteractive(reader *bufio.Reader, cfg *config.Config, o setupOpts) error {
+	fmt.Println("keenetic-xray setup")
+
+	primary, err := promptSlotSource(reader, cfg, "PRIMARY")
+	if err != nil {
+		return err
+	}
+	cfg.PrimaryIndex = cfg.UpsertProfile(primary.profile)
+	cfg.PrimarySource = &config.SlotSource{URL: primary.src, Selector: primary.selector}
+	fmt.Printf("Saved primary: %s\n\n", primary.profile.Remark)
+
+	backup, err := promptSlotSource(reader, cfg, "BACKUP")
+	if err != nil {
+		return err
+	}
+	cfg.BackupIndex = cfg.UpsertProfile(backup.profile)
+	cfg.BackupSource = &config.SlotSource{URL: backup.src, Selector: backup.selector}
+	fmt.Printf("Saved backup: %s\n", backup.profile.Remark)
+
+	socksPort, httpPort, err := promptPorts(reader, cfg, o)
+	if err != nil {
+		return err
+	}
+	cfg.Failover.SOCKSPort = socksPort
+	cfg.Failover.HTTPPort = httpPort
+
+	if err := cfg.Save(configPath()); err != nil {
+		return err
+	}
+
 	switch {
 	case o.Proxy0 == "no":
 		// leave Proxy0 alone
-	case o.Proxy0 == "yes", !interactive && keenetic.Available():
+	case o.Proxy0 == "yes":
 		doSetupProxy0(cfg)
-	case interactive:
+	default:
 		maybeSetupProxy0(reader, cfg)
 	}
 
-	if interactive {
-		offerDaemonRestart(reader)
-	} else {
-		fmt.Println("apply with: /opt/etc/init.d/S99keenetic-xray restart")
-	}
+	offerDaemonRestart(reader)
 	return nil
+}
+
+// slotSourceResult is one resolved slot source: the chosen profile, plus
+// what to persist in Config.PrimarySource/BackupSource (the source
+// string as typed, and the selector -- either what the user typed, or
+// the index they picked from a listed subscription -- so a later
+// re-resolution of the same source picks the same profile).
+type slotSourceResult struct {
+	profile  config.Profile
+	src      string
+	selector string
+}
+
+// promptSlotSource asks for one slot's source (a vless:// link, or a
+// subscription URL followed by an interactive pick if it has more than
+// one profile) and resolves it to a single profile. label is "PRIMARY"
+// or "BACKUP", used only in the prompts.
+func promptSlotSource(reader *bufio.Reader, cfg *config.Config, label string) (slotSourceResult, error) {
+	fmt.Printf("%s -- paste a vless:// link, or a subscription http(s):// URL:\n> ", label)
+	line, err := reader.ReadString('\n')
+	if err != nil && line == "" {
+		return slotSourceResult{}, fmt.Errorf("reading input: %w", err)
+	}
+	src := strings.TrimSpace(line)
+	if src == "" {
+		return slotSourceResult{}, fmt.Errorf("%s: no vless:// link or subscription URL given", label)
+	}
+
+	switch {
+	case strings.HasPrefix(src, "vless://"):
+		p, err := config.ParseVLESSURI(src)
+		if err != nil {
+			return slotSourceResult{}, fmt.Errorf("%s: parsing vless link: %w", label, err)
+		}
+		return slotSourceResult{profile: p, src: src}, nil
+	case strings.HasPrefix(src, "http://"), strings.HasPrefix(src, "https://"):
+		fmt.Println("fetching subscription...")
+		result, err := subscription.Refresh(context.Background(), src, "", "")
+		if err != nil {
+			return slotSourceResult{}, fmt.Errorf("%s: fetching subscription: %w", label, err)
+		}
+		for _, w := range result.Warnings {
+			fmt.Println("warning:", w)
+		}
+		if len(result.Profiles) == 0 {
+			return slotSourceResult{}, fmt.Errorf("%s: no usable vless:// profiles found in that subscription", label)
+		}
+		if len(result.Profiles) == 1 {
+			return slotSourceResult{profile: result.Profiles[0], src: src}, nil
+		}
+		fmt.Println("\nAvailable profiles:")
+		for i, p := range result.Profiles {
+			fmt.Printf("  %d: %s -- %s:%d\n", i, p.Remark, p.Address, p.Port)
+		}
+		idx, err := promptIndex(reader, "Select "+label, len(result.Profiles), 0)
+		if err != nil {
+			return slotSourceResult{}, err
+		}
+		return slotSourceResult{profile: result.Profiles[idx], src: src, selector: strconv.Itoa(idx)}, nil
+	default:
+		return slotSourceResult{}, fmt.Errorf("%s: input doesn't look like a vless:// link or an http(s):// subscription URL", label)
+	}
+}
+
+// promptPorts asks for the SOCKS/HTTP inbound ports, defaulting to
+// whatever's already in cfg (config.Default's 1080/1081 on a fresh
+// config). A flag (--socks-port=/--http-port=) skips its own prompt.
+// Re-prompts if the two would collide.
+func promptPorts(reader *bufio.Reader, cfg *config.Config, o setupOpts) (socksPort, httpPort int, err error) {
+	fmt.Println()
+	for {
+		socksPort = o.SOCKSPort
+		if socksPort == 0 {
+			if socksPort, err = promptPort(reader, "SOCKS port", cfg.Failover.SOCKSPort); err != nil {
+				return 0, 0, err
+			}
+		}
+		httpPort = o.HTTPPort
+		if httpPort == 0 {
+			if httpPort, err = promptPort(reader, "HTTP port", cfg.Failover.HTTPPort); err != nil {
+				return 0, 0, err
+			}
+		}
+		if socksPort != httpPort {
+			return socksPort, httpPort, nil
+		}
+		fmt.Println("SOCKS and HTTP ports must differ, try again")
+		if o.SOCKSPort != 0 && o.HTTPPort != 0 {
+			// Both came from flags -- re-prompting can't change them.
+			return 0, 0, fmt.Errorf("--socks-port and --http-port must differ")
+		}
+	}
+}
+
+// promptPort reads a line, re-prompting on an invalid or out-of-range
+// port; an empty line (just Enter) accepts def.
+func promptPort(reader *bufio.Reader, label string, def int) (int, error) {
+	for {
+		fmt.Printf("%s [default %d]: ", label, def)
+		line, err := reader.ReadString('\n')
+		if err != nil && line == "" {
+			return 0, fmt.Errorf("reading input: %w", err)
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			return def, nil
+		}
+		n, err := strconv.Atoi(line)
+		if err != nil || n < 1 || n > 65535 {
+			fmt.Println("invalid port, try again")
+			continue
+		}
+		return n, nil
+	}
+}
+
+// applyPortOverrides sets cfg's SOCKS/HTTP ports from --socks-port=/
+// --http-port= when given; used by the non-interactive path, which
+// otherwise never touches them (config.Default's 1080/1081 stand).
+func applyPortOverrides(cfg *config.Config, o setupOpts) {
+	if o.SOCKSPort != 0 {
+		cfg.Failover.SOCKSPort = o.SOCKSPort
+	}
+	if o.HTTPPort != 0 {
+		cfg.Failover.HTTPPort = o.HTTPPort
+	}
 }
 
 // resolveProfileSelector turns a --primary/--backup value into an index:

@@ -155,9 +155,11 @@ line; `🔁 Обновить агент` (`upd:` -> confirm -> `self_update`, re
 first. Callback data is a short `kind:arg` string routed by
 `handleCallback`.
 
-Proxy0 has no card button -- it's on by default (`config.Default`,
-`install.sh --no-proxy0` opts out) and the daemon asserts it at startup;
-`/proxy0 <router> [show|on|off]` is still there as a text command.
+Proxy0's on/off has no card button -- it's on by default
+(`config.Default`, `install.sh --no-proxy0` opts out) and the daemon
+asserts it at startup; `/proxy0 <router> [show|on|off]` is still there as
+a text command. Its protocol and interface *are* on a card, under
+`⚙️ Порты и транспорт` (below).
 
 `🔗 Источники` (`srcm:`) opens a two-button screen -- `⬆️ Основная`
 (`srcp:`) / `⬇️ Резервная` (`srcb:`) -- each starting a one-step dialog:
@@ -194,12 +196,29 @@ silently writing an entry nothing will read. `📜 Лог` shows
 an empty log means the watchdog has never had to step in. All four are
 also `/watchdog <router> show|enable|disable|log` as text commands.
 
-`⚙️ Порты` (`ports:`) starts a one-step text wizard (`wizPorts`, same
-shape as the 🔗 Источники dialogs): paste two numbers separated by a
-space, `SOCKS HTTP`. Unlike the CLI setup wizard, the control server has
-no direct view of a router's current config to show as defaults --
-`📊 Статус` has that ("xray: слушает :N"). Applied via `set_ports`; also
-`/ports <router> <socks> <http>` as a text command.
+`⚙️ Порты и транспорт` (`ptm:`) opens a screen, not a dialog straight
+away, since it now covers three things:
+
+- `✏️ Порты SOCKS/HTTP` (`ptwiz:`) -- the one-step wizard (`wizPorts`,
+  same shape as the 🔗 Источники dialogs): paste two numbers separated
+  by a space, `SOCKS HTTP`. Applied via `set_ports`.
+- `SOCKS5` / `HTTP` (`ptpr:<id>:<proto>`) -- which local inbound the
+  Keenetic Proxy interface is pointed at. xray always listens on both;
+  this only moves the router side. Applied via `proxy0_config`
+  (`args = [proto, ""]`).
+- `✏️ Интерфейс Keenetic` (`ptif:`) -- a one-step wizard (`wizProxyIface`)
+  for the interface name (`Proxy0` default, or `Proxy1`, `Proxy2`, …),
+  validated by `config.ValidProxyIface`. Applied via `proxy0_config`
+  (`args = ["", iface]`).
+
+`proxy0_config` saves the change and, if Proxy0 is already on, re-points
+it immediately -- bringing the previous interface down first when that
+changed. When Proxy0 is off it's saved for the next enable. Unlike the
+CLI setup wizard the control server has no direct view of a router's
+current config to show as defaults -- `📊 Показать` on the screen (a
+`proxy0_show`) has that. Text equivalents: `/ports <router> <socks>
+<http>`, `/proxy0 <router> protocol socks5|http`, `/proxy0 <router>
+interface Proxy1`.
 
 `➕ Добавить роутер` starts a two-step text dialog (`telegram_wizard.go`):
 id, then display name. `✏️ Переименовать` (or `/rename <id> <name>`) is
@@ -234,7 +253,10 @@ ones are text-only:
 /sub_setbackup <router> <index>
 /set_primary_source <router> <vless://…|url> [selector]   feed the primary slot from its own source
 /set_backup_source  <router> <vless://…|url> [selector]
-/proxy0 <router> [show|on|off]   point Keenetic's Proxy0 at the local inbound
+/proxy0 <router> [show|on|off]                  point Keenetic's Proxy interface at the local inbound
+/proxy0 <router> protocol socks5|http           which local inbound that interface serves
+/proxy0 <router> interface Proxy0|Proxy1|…       which Keenetic Proxy interface to drive
+/ports  <router> <socks> <http>                 change the local SOCKS/HTTP inbound ports (live)
 /restart <router>               restart the failover daemon (detached; the replacement emits daemon_start)
 /ensure_core <router>           (re)install the xray-core binary -- vendored build, opkg fallback
 /update <router>                re-run install.sh (whole keenetic-xray package)
@@ -245,8 +267,9 @@ ones are text-only:
 `restart` and `update` are also router-card buttons (`update` behind a confirm).
 
 `sub_refresh`, `sub_setprimary`, `sub_setbackup`, `set_primary_source`,
-`set_backup_source`, `proxy0 on`/`off`, `failover_set` and `set_ports`
-all call `RouterHandler.rebindXray` after saving. If the daemon is
+`set_backup_source`, `proxy0 on`/`off`, `proxy0_config` (when Proxy0 is
+on, via `proxy0Set`), `failover_set` and `set_ports` all call
+`RouterHandler.rebindXray` after saving. If the daemon is
 already in its Run loop, that calls `failover.Daemon.ReloadConfig`
 -- since `h.Config` is the exact `*config.Config` the Daemon already
 holds (wired once in `cmdDaemon`), this refreshes the two fields only
@@ -264,11 +287,11 @@ until *both* primary and backup are set) and the config now has both,
 `rebindXray` instead kicks a detached `init.d restart` so a setup done
 entirely from the bot actually starts serving, with no SSH step.
 
-`set_ports` (`/ports <router> <socks> <http>`, or `⚙️ Порты` on a card,
-a one-step text wizard) additionally re-points Proxy0's own upstream
-binding via `proxy0Set` if Proxy0 is currently enabled -- otherwise LAN
-traffic routed through it would keep hitting the port it was last
-pointed at. That step is best-effort: reported alongside the port
+`set_ports` (`/ports <router> <socks> <http>`, or `✏️ Порты SOCKS/HTTP`
+under `⚙️ Порты и транспорт` on a card, a one-step text wizard)
+additionally re-points Proxy0's own upstream binding via `proxy0Set` if
+Proxy0 is currently enabled -- otherwise LAN traffic routed through it
+would keep hitting the port it was last pointed at. That step is best-effort: reported alongside the port
 change's own success, not as an overall failure, since the port change
 itself already took effect either way.
 

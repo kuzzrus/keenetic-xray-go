@@ -131,6 +131,8 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 		return h.proxy0Set(ctx)
 	case ActionProxy0Off:
 		return h.proxy0Off(ctx)
+	case ActionProxy0Config:
+		return h.proxy0Config(ctx, cmd.Args)
 	case ActionDaemonRestart:
 		return h.daemonRestart()
 	case ActionEnsureCore:
@@ -478,6 +480,60 @@ func (h *RouterHandler) proxy0Off(ctx context.Context) (string, error) {
 	}
 	h.rebindXray(ctx)
 	return "proxy0 выключен (xray снова слушает loopback после rebind)", nil
+}
+
+// proxy0Config changes which local protocol (socks5/http) and which
+// Keenetic Proxy interface (Proxy0, Proxy1, ...) the daemon points at
+// the local inbound. Both xray inbounds always listen regardless -- this
+// only moves the Keenetic side. args[0]=protocol, args[1]=interface;
+// an empty string in either position keeps the current value. When
+// Proxy0 is already on the change is applied immediately (the previous
+// interface is brought down first if it changed); otherwise it's just
+// saved for the next enable.
+func (h *RouterHandler) proxy0Config(ctx context.Context, args []string) (string, error) {
+	if len(args) != 2 {
+		return "", fmt.Errorf("usage: proxy0_config <protocol|\"\"> <interface|\"\">")
+	}
+	proto, iface := args[0], args[1]
+	if proto == "" && iface == "" {
+		return "", fmt.Errorf("нечего менять: укажи протокол и/или интерфейс")
+	}
+	switch proto {
+	case "", "socks5", "http":
+	default:
+		return "", fmt.Errorf("протокол %q: нужно socks5 или http", proto)
+	}
+	if !config.ValidProxyIface(iface) {
+		return "", fmt.Errorf("интерфейс %q: нужно имя вида Proxy0 или Proxy1", iface)
+	}
+
+	old := h.Config.Proxy0
+	if proto != "" {
+		h.Config.Proxy0.Protocol = proto
+	}
+	if iface != "" {
+		h.Config.Proxy0.Interface = iface
+	}
+	if err := h.Config.Save(h.ConfigPath); err != nil {
+		return "", err
+	}
+
+	summary := fmt.Sprintf("proxy0: %s через %s (порт %d)",
+		h.Config.Proxy0.ProtoName(), h.Config.Proxy0.IfaceName(), h.Config.Proxy0Port())
+	if !h.Config.Proxy0.Enabled {
+		return summary + "\nсохранено — применится при включении proxy0", nil
+	}
+
+	if h.Config.Proxy0.Interface != old.Interface && keenetic.Available() {
+		if err := keenetic.DisableProxy0(ctx, old.Interface); err != nil {
+			summary += fmt.Sprintf("\n⚠️ прежний интерфейс %s не опущен: %v", old.IfaceName(), err)
+		}
+	}
+	out, err := h.proxy0Set(ctx)
+	if err != nil {
+		return "", err
+	}
+	return summary + "\n" + out, nil
 }
 
 // daemonRestart spawns a detached "restart after a short delay" so this

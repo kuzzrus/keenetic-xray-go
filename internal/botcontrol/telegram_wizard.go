@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 )
 
 // wizState is a per-chat multi-step text dialog: /add_router (id, then
@@ -24,6 +26,7 @@ const (
 	wizRenameName
 	wizSlotSource
 	wizPorts
+	wizProxyIface
 )
 
 func (b *TelegramBot) startAddRouterWizard(ctx context.Context, chatID int64) {
@@ -84,6 +87,24 @@ func (b *TelegramBot) startPortsWizard(ctx context.Context, chatID int64, router
 	b.sendMessage(ctx, chatID,
 		"Смена портов ("+routerID+").\nПришли два новых номера через пробел: SOCKS HTTP (например: 1080 1081).\n"+
 			"Текущие видно в 📊 Статус.\nОтмена: /cancel")
+}
+
+// startProxyIfaceWizard prompts for the Keenetic Proxy interface name
+// the daemon should drive (Proxy0, Proxy1, ...). Like the ports wizard it
+// doesn't echo the current value -- the control server has no direct view
+// of the router's config; 📊 Показать on the same screen has it. Applied
+// via proxy0_config with an empty protocol slot (interface only).
+func (b *TelegramBot) startProxyIfaceWizard(ctx context.Context, chatID int64, routerID string) {
+	if !b.Store.HasRouter(routerID) {
+		b.sendMessage(ctx, chatID, fmt.Sprintf("нет такого роутера %q. Список: /routers", routerID))
+		return
+	}
+	b.wizardMu.Lock()
+	b.wizards[chatID] = &wizState{step: wizProxyIface, routerID: routerID}
+	b.wizardMu.Unlock()
+	b.sendMessage(ctx, chatID,
+		"Интерфейс Keenetic для ("+routerID+").\nПришли имя: Proxy0, Proxy1, Proxy2 …\n"+
+			"Proxy0 — по умолчанию. Отмена: /cancel")
 }
 
 func (b *TelegramBot) wizardClear(chatID int64) {
@@ -163,6 +184,10 @@ func (b *TelegramBot) handleWizardText(ctx context.Context, chatID int64, text s
 	case wizPorts:
 		b.wizardSetPorts(ctx, chatID, st, strings.TrimSpace(text))
 		return true
+
+	case wizProxyIface:
+		b.wizardSetProxyIface(ctx, chatID, st, strings.TrimSpace(text))
+		return true
 	}
 
 	b.wizardClear(chatID)
@@ -203,6 +228,18 @@ func (b *TelegramBot) wizardSetPorts(ctx context.Context, chatID int64, st *wizS
 
 	b.wizardClear(chatID)
 	out, answered, errText := b.enqueueAndWait(ctx, st.routerID, ActionSetPorts, fields)
+	b.sendMessage(ctx, chatID, b.stepResult(st.routerID, answered, errText, "✅ "+strings.TrimSpace(out)))
+}
+
+func (b *TelegramBot) wizardSetProxyIface(ctx context.Context, chatID int64, st *wizState, line string) {
+	iface := strings.Fields(line)
+	if len(iface) != 1 || !config.ValidProxyIface(iface[0]) {
+		b.sendMessage(ctx, chatID, "нужно одно имя вида Proxy0 / Proxy1. Ещё раз или /cancel") // stays armed
+		return
+	}
+
+	b.wizardClear(chatID)
+	out, answered, errText := b.enqueueAndWait(ctx, st.routerID, ActionProxy0Config, []string{"", iface[0]})
 	b.sendMessage(ctx, chatID, b.stepResult(st.routerID, answered, errText, "✅ "+strings.TrimSpace(out)))
 }
 

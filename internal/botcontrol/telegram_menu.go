@@ -49,7 +49,7 @@ func routerCardKB(id string) inlineKeyboard {
 		{{Text: "📊 Статус", CallbackData: "act:status:" + id}, {Text: "🩺 Doctor", CallbackData: "act:doctor:" + id}},
 		{{Text: "⬆️ primary", CallbackData: "act:sw_pri:" + id}, {Text: "⬇️ backup", CallbackData: "act:sw_bak:" + id}},
 		{{Text: "🔗 Источники", CallbackData: "srcm:" + id}, {Text: "🐕 Вотчдог", CallbackData: "wdm:" + id}},
-		{{Text: "⚙️ Порты", CallbackData: "ports:" + id}},
+		{{Text: "⚙️ Порты и транспорт", CallbackData: "ptm:" + id}},
 		{{Text: "🔄 Обновить подписку", CallbackData: "act:sub_refresh:" + id}},
 		{{Text: "♻️ Рестарт демона", CallbackData: "act:restart:" + id}, {Text: "🔁 Обновить агент", CallbackData: "upd:" + id}},
 		{{Text: "✏️ Переименовать", CallbackData: "rename:" + id}, {Text: "📦 Установка агента", CallbackData: "install:" + id}},
@@ -113,6 +113,25 @@ func watchdogScreenKB(id string) inlineKeyboard {
 	}}
 }
 
+func portsTransportScreenText(id string) string {
+	return "⚙️ Порты и транспорт " + id + "\n\n" +
+		"xray всегда слушает оба локальных входа сразу — SOCKS5 и HTTP. " +
+		"Здесь настраивается, на какой из них и через какой Proxy-интерфейс Keenetic заворачивать LAN-трафик.\n\n" +
+		"• Порты — сменить номера локальных входов SOCKS/HTTP.\n" +
+		"• SOCKS5 / HTTP — какой протокол отдаёт Proxy-интерфейс.\n" +
+		"• Интерфейс — Proxy0 (по умолчанию), Proxy1, Proxy2 …\n\n" +
+		"Текущие значения — в 📊 Показать."
+}
+
+func portsTransportScreenKB(id string) inlineKeyboard {
+	return inlineKeyboard{InlineKeyboard: [][]inlineButton{
+		{{Text: "✏️ Порты SOCKS/HTTP", CallbackData: "ptwiz:" + id}},
+		{{Text: "SOCKS5", CallbackData: "ptpr:" + id + ":socks5"}, {Text: "HTTP", CallbackData: "ptpr:" + id + ":http"}},
+		{{Text: "✏️ Интерфейс Keenetic", CallbackData: "ptif:" + id}},
+		{{Text: "📊 Показать", CallbackData: "act:proxy0_show:" + id}, {Text: "⬅️ Назад", CallbackData: "router:" + id}},
+	}}
+}
+
 // callbackAction maps a router-card button name to a Store command
 // action. Only parameterless commands are on the keyboard; the ones that
 // need an argument (sub_seturl, sub_setprimary/backup) stay text-only.
@@ -128,6 +147,8 @@ func callbackAction(name string) string {
 		return ActionSwitchBackup
 	case "sub_refresh":
 		return ActionSubRefresh
+	case "proxy0_show":
+		return ActionProxy0Show
 	case "restart":
 		return ActionDaemonRestart
 	case "self_update":
@@ -231,8 +252,25 @@ func (b *TelegramBot) handleCallback(ctx context.Context, cb tgCallbackQuery) {
 			return
 		}
 		b.editCB(ctx, cb, watchdogScreenText(id), watchdogScreenKB(id))
-	case strings.HasPrefix(data, "ports:"):
-		b.startPortsWizard(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "ports:"))
+	case strings.HasPrefix(data, "ptm:"):
+		id := strings.TrimPrefix(data, "ptm:")
+		if !b.Store.HasRouter(id) {
+			b.editCB(ctx, cb, "нет такого роутера: "+id, b.routersListKB())
+			return
+		}
+		b.editCB(ctx, cb, portsTransportScreenText(id), portsTransportScreenKB(id))
+	case strings.HasPrefix(data, "ptwiz:"):
+		b.startPortsWizard(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "ptwiz:"))
+	case strings.HasPrefix(data, "ptif:"):
+		b.startProxyIfaceWizard(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "ptif:"))
+	case strings.HasPrefix(data, "ptpr:"):
+		rest := strings.TrimPrefix(data, "ptpr:")
+		id, proto, ok := strings.Cut(rest, ":")
+		if !ok {
+			b.editCB(ctx, cb, "плохая кнопка", mainMenuKB())
+			return
+		}
+		b.enqueueCardArgs(ctx, cb, id, ActionProxy0Config, []string{proto, ""})
 	case strings.HasPrefix(data, "srcp:"):
 		b.startSlotSourceWizard(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "srcp:"), true)
 	case strings.HasPrefix(data, "srcb:"):
@@ -289,11 +327,19 @@ func (b *TelegramBot) handleActionCallback(ctx context.Context, cb tgCallbackQue
 		b.editCB(ctx, cb, "не поддерживается: "+name, routerCardKB(id))
 		return
 	}
+	b.enqueueCardArgs(ctx, cb, id, action, nil)
+}
+
+// enqueueCardArgs queues one command for a router, shows "queued" on the
+// card in place, then edits the same message with the result. Same flow
+// as handleActionCallback, but for buttons that carry their own action
+// and args rather than an "act:<name>:<id>" string.
+func (b *TelegramBot) enqueueCardArgs(ctx context.Context, cb tgCallbackQuery, id, action string, args []string) {
 	if !b.Store.HasRouter(id) {
 		b.editCB(ctx, cb, "нет такого роутера: "+id, b.routersListKB())
 		return
 	}
-	cmdID, err := b.Store.Enqueue(id, action, nil)
+	cmdID, err := b.Store.Enqueue(id, action, args)
 	if err != nil {
 		b.editCB(ctx, cb, "не поставлено в очередь: "+err.Error(), routerCardKB(id))
 		return

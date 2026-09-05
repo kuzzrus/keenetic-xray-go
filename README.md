@@ -113,7 +113,7 @@ keenetic-xray status
 keenetic-xray doctor
 keenetic-xray variant {show|set mini|set full}
 keenetic-xray agent {configure <url> <router-id> <fingerprint> <token>|enable|disable|status}
-keenetic-xray proxy0 {show|set [--lan-ip=192.168.x.1]|off}
+keenetic-xray proxy0 {show|set [--lan-ip=192.168.x.1] [--protocol=socks5|http] [--interface=Proxy0]|off}
 keenetic-xray failover {show|set <key> <value>}
 ```
 
@@ -121,7 +121,11 @@ keenetic-xray failover {show|set <key> <value>}
 daemon to bind `0.0.0.0` (so `Proxy0` can reach it) instead of loopback;
 the daemon re-asserts it on every start. `setup` offers this
 interactively. Then assign devices or policies to `Proxy0` in the
-Keenetic UI.
+Keenetic UI. `--protocol=http` targets the HTTP inbound instead of SOCKS
+(xray listens on both regardless); `--interface=Proxy1` drives a
+different Keenetic Proxy interface (the old one is brought down first).
+Both are also bot actions -- `⚙️ Порты и транспорт` on a router card, or
+`/proxy0 <router> protocol http` / `/proxy0 <router> interface Proxy1`.
 
 `failover show`/`set` read or tune the health-check thresholds -- useful
 when primary is a single flaky server and the defaults switch too
@@ -143,10 +147,11 @@ log means it's never had to step in -- also in the bot, `🐕 Вотчдог` on
 a router card.
 
 Changing the SOCKS/HTTP inbound ports later (not just at `setup` time)
-is a bot action too -- `⚙️ Порты` on a router card (or `/ports <router>
-<socks> <http>`) -- applied live, and if Proxy0 is already on, its
-upstream binding is re-pointed to match so LAN traffic doesn't keep
-hitting the old port.
+is a bot action too -- `⚙️ Порты и транспорт` on a router card (or
+`/ports <router> <socks> <http>`) -- applied live, and if Proxy0 is
+already on, its upstream binding is re-pointed to match so LAN traffic
+doesn't keep hitting the old port. That same screen switches the Proxy
+protocol (SOCKS5/HTTP) and interface (`Proxy0`, `Proxy1`, …).
 
 `menu` is a numbered control panel for running the router from an SSH
 session without the Telegram bot: status, `doctor`, profile list,

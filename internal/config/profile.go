@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"time"
 )
 
@@ -164,9 +165,40 @@ const (
 // loopback so Proxy0 can reach it.
 type Proxy0Config struct {
 	Enabled   bool   `json:"enabled"`
-	Interface string `json:"interface,omitempty"` // "" -> "Proxy0"
+	Interface string `json:"interface,omitempty"` // "" -> "Proxy0"; also Proxy1, Proxy2, ...
 	Protocol  string `json:"protocol,omitempty"`  // "" -> "socks5"; also "http"
 	LANIP     string `json:"lan_ip,omitempty"`    // override; "" -> auto-detect via ndmc
+}
+
+// proxyIfaceRe matches the Keenetic Proxy interface names this project
+// can drive -- Proxy0 (the default) through however many the firmware
+// exposes. Deliberately not capped at a specific N: newer firmware keeps
+// adding slots, and an over-tight check would reject a valid one.
+var proxyIfaceRe = regexp.MustCompile(`^Proxy[0-9]+$`)
+
+// ValidProxyIface reports whether s is an acceptable Proxy0.Interface
+// value: empty (meaning the "Proxy0" default) or "Proxy<n>". Shared by
+// the CLI flag parser and the bot action so both reject the same typos
+// ("proxy1", "Proxy 1") with the same rule.
+func ValidProxyIface(s string) bool {
+	return s == "" || proxyIfaceRe.MatchString(s)
+}
+
+// IfaceName resolves Interface to a concrete name ("" -> "Proxy0"), for
+// display and for passing to ndmc.
+func (p Proxy0Config) IfaceName() string {
+	if p.Interface == "" {
+		return "Proxy0"
+	}
+	return p.Interface
+}
+
+// ProtoName resolves Protocol to a concrete name ("" -> "socks5").
+func (p Proxy0Config) ProtoName() string {
+	if p.Protocol == "" {
+		return "socks5"
+	}
+	return p.Protocol
 }
 
 // Config is the full persisted /opt/etc/keenetic-xray/config.json shape.
@@ -260,6 +292,9 @@ func (c *Config) Validate() error {
 	case "", "socks5", "http":
 	default:
 		return fmt.Errorf("proxy0.protocol %q: want socks5 or http", c.Proxy0.Protocol)
+	}
+	if !ValidProxyIface(c.Proxy0.Interface) {
+		return fmt.Errorf("proxy0.interface %q: want a name like Proxy0 or Proxy1", c.Proxy0.Interface)
 	}
 	return nil
 }

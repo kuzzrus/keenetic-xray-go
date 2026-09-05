@@ -135,7 +135,7 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 	case ActionFailoverShow:
 		return h.Config.Failover.TunablesText(), nil
 	case ActionFailoverSet:
-		return h.setFailoverTunable(cmd.Args)
+		return h.setFailoverTunable(ctx, cmd.Args)
 	case ActionWatchdogShow:
 		return h.watchdogShow()
 	case ActionWatchdogEnable:
@@ -144,6 +144,8 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 		return h.watchdogDisable()
 	case ActionWatchdogLog:
 		return h.watchdogLog()
+	case ActionSetPorts:
+		return h.setPorts(ctx, cmd.Args)
 	default:
 		return "", fmt.Errorf("unknown action %q", cmd.Action)
 	}
@@ -370,8 +372,18 @@ func (h *RouterHandler) rebindXray(ctx context.Context) {
 	if h.Daemon == nil {
 		return
 	}
-	if snap, ok := h.Daemon.Snapshot(ctx); ok {
-		_ = h.Daemon.ForceSwitch(ctx, snap.LiveRole)
+	// h.Config is the exact *config.Config the Daemon already holds
+	// (wired once in cmd/keenetic-xray's cmdDaemon), so this reloads the
+	// daemon's own state from itself -- refreshing the two fields only
+	// computed at startup (realActions.socks, Machine's tunable counts)
+	// in addition to re-applying the current live role, unlike a bare
+	// ForceSwitch. Matters here specifically because a bot action can
+	// change the SOCKS/HTTP port (setPorts) or a failover tunable
+	// (setFailoverTunable used to skip this and restart the whole
+	// daemon instead) -- either would otherwise leave realActions.socks
+	// stale, so future health-check probes would dial the *old* port.
+	if _, ok := h.Daemon.Snapshot(ctx); ok {
+		_ = h.Daemon.ReloadConfig(ctx, h.Config)
 		return
 	}
 	if h.Config.Primary() != nil && h.Config.Backup() != nil {
@@ -473,10 +485,11 @@ func (h *RouterHandler) daemonRestart() (string, error) {
 	return "перезапуск демона через 2с…", nil
 }
 
-// setFailoverTunable adjusts one health-check/failover knob and restarts
-// the daemon to apply it -- the Machine reads Config once at
-// construction, there is no live reload for these.
-func (h *RouterHandler) setFailoverTunable(args []string) (string, error) {
+// setFailoverTunable adjusts one health-check/failover knob and applies
+// it live via rebindXray (Daemon.ReloadConfig refreshes Machine's own
+// copy of these counts -- they used to be fixed at construction, which
+// is why this needed a full daemon restart before).
+func (h *RouterHandler) setFailoverTunable(ctx context.Context, args []string) (string, error) {
 	if len(args) != 2 {
 		return "", fmt.Errorf("usage: set <key> <value>")
 	}
@@ -486,13 +499,8 @@ func (h *RouterHandler) setFailoverTunable(args []string) (string, error) {
 	if err := h.Config.Save(h.ConfigPath); err != nil {
 		return "", err
 	}
-	msg := fmt.Sprintf("%s = %s.", args[0], args[1])
-	if err := h.restartDaemonDetached(); err != nil {
-		msg += " Перезапусти демон вручную, чтобы применить: " + err.Error()
-	} else {
-		msg += " Демон перезапускается (~2с), чтобы применить."
-	}
-	return msg, nil
+	h.rebindXray(ctx)
+	return fmt.Sprintf("%s = %s.", args[0], args[1]), nil
 }
 
 // watchdogShow reports both halves of "is this actually working": the
@@ -566,6 +574,54 @@ func (h *RouterHandler) watchdogLog() (string, error) {
 		lines = lines[len(lines)-maxLines:]
 	}
 	return strings.Join(lines, "\n"), nil
+}
+
+// setPorts changes the local SOCKS/HTTP inbound ports (config.Failover
+// .SOCKSPort/HTTPPort) and applies live via rebindXray -- which, since
+// ReloadConfig refreshes realActions.socks, is what makes this safe:
+// without that refresh a changed SOCKS port would leave future
+// health-check probes dialing the *old* one. Same validation as the
+// setup wizard's own port prompt (internal/config doesn't enforce this
+// itself, since 0 is a legitimate "inbound disabled" value elsewhere).
+//
+// If Proxy0 is already enabled, also re-points its Keenetic-side
+// upstream binding (proxy0Set, which recomputes Config.Proxy0Port --
+// now reflecting the port just saved) -- otherwise LAN traffic routed
+// through Proxy0 would keep hitting the port it was last pointed at.
+// That step is best-effort: its failure is reported alongside the
+// success of the port change itself, not as an overall failure, since
+// the port change already took effect regardless.
+func (h *RouterHandler) setPorts(ctx context.Context, args []string) (string, error) {
+	if len(args) != 2 {
+		return "", fmt.Errorf("usage: set_ports <socks-port> <http-port>")
+	}
+	socksPort, err := strconv.Atoi(args[0])
+	if err != nil || socksPort < 1 || socksPort > 65535 {
+		return "", fmt.Errorf("некорректный SOCKS-порт %q (1-65535)", args[0])
+	}
+	httpPort, err := strconv.Atoi(args[1])
+	if err != nil || httpPort < 1 || httpPort > 65535 {
+		return "", fmt.Errorf("некорректный HTTP-порт %q (1-65535)", args[1])
+	}
+	if socksPort == httpPort {
+		return "", fmt.Errorf("SOCKS и HTTP порты должны различаться")
+	}
+
+	h.Config.Failover.SOCKSPort = socksPort
+	h.Config.Failover.HTTPPort = httpPort
+	if err := h.Config.Save(h.ConfigPath); err != nil {
+		return "", err
+	}
+	h.rebindXray(ctx)
+
+	msg := fmt.Sprintf("SOCKS: %d, HTTP: %d", socksPort, httpPort)
+	if h.Config.Proxy0.Enabled {
+		if _, err := h.proxy0Set(ctx); err != nil {
+			return msg + fmt.Sprintf(" (⚠️ proxy0 не перенастроен: %v — выполните proxy0 on ещё раз)", err), nil
+		}
+		msg += " (proxy0 перенаправлен на новый порт)"
+	}
+	return msg, nil
 }
 
 // selfUpdate re-runs install.sh (whole keenetic-xray package: new .ipk,

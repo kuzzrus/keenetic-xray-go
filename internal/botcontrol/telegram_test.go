@@ -195,6 +195,24 @@ func (f *fakeTelegram) waitForEditContaining(t *testing.T, timeout time.Duration
 	})
 }
 
+func TestTelegramBot_NotifyServer_ReachesEveryAllowedChat(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	b := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true, 2: true}, APIBase: srv.URL}
+
+	b.NotifyServer("✅ Сервер обновлён: 0.6.1 → 0.6.2")
+
+	texts := fake.sentTexts()
+	got := 0
+	for _, tx := range texts {
+		if tx == "✅ Сервер обновлён: 0.6.1 → 0.6.2" {
+			got++
+		}
+	}
+	if got != 2 {
+		t.Errorf("exact message sent to %d chats, want 2 (one per allowed chat, unprefixed)", got)
+	}
+}
+
 func newBotStore(t *testing.T) *Store {
 	t.Helper()
 	store, err := LoadStore("")
@@ -674,6 +692,24 @@ func TestTelegramBot_WatchdogRejectsBadUsage(t *testing.T) {
 
 	if cmd, _ := store.Dequeue("router-1"); cmd != nil {
 		t.Errorf("expected no command enqueued for a bad watchdog action, got %+v", cmd)
+	}
+}
+
+func TestTelegramBot_PortsRejectsBadUsage(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	mustRegister(t, store, "router-1")
+	bot := &TelegramBot{
+		Token: "test-token", AllowedChats: map[int64]bool{1: true},
+		Store: store, APIBase: srv.URL, ResultTimeout: 2 * time.Second,
+	}
+	runBotInBackground(t, bot)
+
+	fake.push(1, "/ports router-1 1090")
+	waitSent(t, fake, 3*time.Second, "формат: /ports")
+
+	if cmd, _ := store.Dequeue("router-1"); cmd != nil {
+		t.Errorf("expected no command enqueued for a bad /ports usage, got %+v", cmd)
 	}
 }
 

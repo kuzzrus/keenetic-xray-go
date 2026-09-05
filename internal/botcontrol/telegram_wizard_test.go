@@ -147,6 +147,42 @@ func TestTelegramBot_SlotSourceWizard_PrimaryFromLink(t *testing.T) {
 	}
 }
 
+func TestTelegramBot_PortsWizard(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	mustRegister(t, store, "r1")
+	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL, ResultTimeout: 2 * time.Second}
+	runBotInBackground(t, bot)
+
+	fake.push(1, "/menu")
+	fake.waitForReply(t, 3*time.Second)
+	msgID := fake.lastSent(t).MessageID
+
+	fake.pushCallback(1, msgID, "ports:r1")
+	waitSent(t, fake, 3*time.Second, "Смена портов")
+
+	// Malformed input (not two fields) is rejected without ending the dialog.
+	fake.push(1, "1090")
+	waitSent(t, fake, 3*time.Second, "нужно два числа")
+
+	fake.push(1, "1090 1091")
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if cmd, _ := store.Dequeue("r1"); cmd != nil {
+			if cmd.Action != ActionSetPorts {
+				t.Errorf("dequeued action = %q, want %q", cmd.Action, ActionSetPorts)
+			}
+			if len(cmd.Args) != 2 || cmd.Args[0] != "1090" || cmd.Args[1] != "1091" {
+				t.Errorf("dequeued args = %v, want [1090 1091]", cmd.Args)
+			}
+			_ = store.RecordResult("r1", Result{CommandID: cmd.ID, Output: "SOCKS: 1090, HTTP: 1091"})
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	waitSent(t, fake, 3*time.Second, "SOCKS: 1090, HTTP: 1091")
+}
+
 func contains(xs []string, want string) bool {
 	for _, x := range xs {
 		if x == want {

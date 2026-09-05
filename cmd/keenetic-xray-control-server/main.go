@@ -85,6 +85,13 @@ func run(args []string) error {
 		SelfUpdatePath: filepath.Join(filepath.Dir(cfg.QueuePath), "update.request"),
 	}
 
+	// Best-effort: announce a just-completed self-update (see
+	// notifyIfUpdated) -- never fatal to starting up.
+	versionFile := filepath.Join(filepath.Dir(cfg.QueuePath), "last_version.txt")
+	if err := notifyIfUpdated(versionFile, bot.NotifyServer); err != nil {
+		logger.Println("version-change check failed:", err)
+	}
+
 	// The agent pushes failover/daemon-start events to /agent/event; the
 	// bot fans them out to the allowed chats.
 	server := botcontrol.NewServer(botcontrol.ServerConfig{

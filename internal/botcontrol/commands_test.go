@@ -624,6 +624,55 @@ func TestRouterHandler_WatchdogLog_ReturnsContent(t *testing.T) {
 	}
 }
 
+func TestRouterHandler_SetPorts(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	cfg := config.Default()
+	h := &RouterHandler{Config: cfg, ConfigPath: cfgPath}
+
+	out, err := h.Handle(context.Background(), Command{Action: ActionSetPorts, Args: []string{"1090", "1091"}})
+	if err != nil {
+		t.Fatalf("set_ports: %v", err)
+	}
+	if !strings.Contains(out, "SOCKS: 1090") || !strings.Contains(out, "HTTP: 1091") {
+		t.Errorf("out = %q", out)
+	}
+	if cfg.Failover.SOCKSPort != 1090 || cfg.Failover.HTTPPort != 1091 {
+		t.Errorf("SOCKSPort/HTTPPort = %d/%d, want 1090/1091", cfg.Failover.SOCKSPort, cfg.Failover.HTTPPort)
+	}
+
+	saved, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if saved.Failover.SOCKSPort != 1090 || saved.Failover.HTTPPort != 1091 {
+		t.Errorf("saved SOCKSPort/HTTPPort = %d/%d, want 1090/1091", saved.Failover.SOCKSPort, saved.Failover.HTTPPort)
+	}
+}
+
+func TestRouterHandler_SetPorts_RejectsSamePort(t *testing.T) {
+	h := &RouterHandler{Config: config.Default(), ConfigPath: filepath.Join(t.TempDir(), "c.json")}
+	if _, err := h.Handle(context.Background(), Command{Action: ActionSetPorts, Args: []string{"1090", "1090"}}); err == nil {
+		t.Error("expected an error when SOCKS and HTTP ports are the same")
+	}
+}
+
+func TestRouterHandler_SetPorts_RejectsOutOfRange(t *testing.T) {
+	h := &RouterHandler{Config: config.Default(), ConfigPath: filepath.Join(t.TempDir(), "c.json")}
+	cases := [][2]string{{"0", "1091"}, {"70000", "1091"}, {"abc", "1091"}}
+	for _, c := range cases {
+		if _, err := h.Handle(context.Background(), Command{Action: ActionSetPorts, Args: []string{c[0], c[1]}}); err == nil {
+			t.Errorf("socks=%q: expected an error", c[0])
+		}
+	}
+}
+
+func TestRouterHandler_SetPorts_RejectsWrongArgCount(t *testing.T) {
+	h := &RouterHandler{Config: config.Default(), ConfigPath: filepath.Join(t.TempDir(), "c.json")}
+	if _, err := h.Handle(context.Background(), Command{Action: ActionSetPorts, Args: []string{"1090"}}); err == nil {
+		t.Error("expected an error for a single argument")
+	}
+}
+
 func TestRouterHandler_SelfUpdate(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("no sh on PATH to exercise the update spawn")

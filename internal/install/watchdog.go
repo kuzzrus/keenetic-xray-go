@@ -31,7 +31,16 @@ const WatchdogSchedule = "*/2 * * * *"
 // not `restart`: status already established nothing is running, so
 // there's nothing to stop first.
 //
-// The entry appends one timestamped line to logFile *only* when it
+// The check-and-restart logic lives in a small script at scriptPath, not
+// inline in the crontab line, for one reason: busybox crond echoes the
+// *entire* command of every job it runs to syslog on each tick, so an
+// inline `sh`-snippet here would spell the whole thing out in the router
+// log every couple of minutes. A bare path keeps that echo down to one
+// short `cmd <scriptPath>`. The script is (re)written on every enable and
+// removed on disable, so it always matches the current initScript/logFile
+// and never lingers after the entry is gone.
+//
+// The script appends one timestamped line to logFile *only* when it
 // actually restarts the daemon (status failed) -- not on every routine
 // tick, which would just be noise. A non-empty log is then direct
 // evidence of how often the watchdog has actually had to intervene,
@@ -44,9 +53,17 @@ const WatchdogSchedule = "*/2 * * * *"
 // Any other line already in cronFile (from an unrelated cron user) is
 // preserved untouched; only the single line carrying WatchdogMarker is
 // added, replaced, or removed. Safe to call on every postinst run.
-func SetWatchdogCron(cronFile, initScript, logFile string, enabled bool) error {
+func SetWatchdogCron(cronFile, scriptPath, initScript, logFile string, enabled bool) error {
 	if err := os.MkdirAll(filepath.Dir(cronFile), 0o755); err != nil {
 		return fmt.Errorf("creating cron directory: %w", err)
+	}
+
+	if enabled {
+		if err := writeWatchdogScript(scriptPath, initScript, logFile); err != nil {
+			return err
+		}
+	} else if err := os.Remove(scriptPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("removing %s: %w", scriptPath, err)
 	}
 
 	existing, err := os.ReadFile(cronFile)
@@ -62,9 +79,7 @@ func SetWatchdogCron(cronFile, initScript, logFile string, enabled bool) error {
 		kept = append(kept, line)
 	}
 	if enabled {
-		kept = append(kept, fmt.Sprintf(
-			`%s %s status >/dev/null 2>&1 || { echo "$(date '+%%Y-%%m-%%d %%H:%%M:%%S') restarting -- status check failed" >> %s; %s start >/dev/null 2>&1; } # %s`,
-			WatchdogSchedule, initScript, logFile, initScript, WatchdogMarker))
+		kept = append(kept, fmt.Sprintf("%s %s # %s", WatchdogSchedule, scriptPath, WatchdogMarker))
 	}
 
 	data := ""
@@ -73,6 +88,35 @@ func SetWatchdogCron(cronFile, initScript, logFile string, enabled bool) error {
 	}
 	if err := os.WriteFile(cronFile, []byte(data), 0o600); err != nil {
 		return fmt.Errorf("writing %s: %w", cronFile, err)
+	}
+	return nil
+}
+
+// writeWatchdogScript (re)generates the tiny shell script the cron entry
+// invokes. Kept deliberately dumb -- one status check, one conditional
+// log line, one start -- so the interesting part (when it runs, what a
+// non-empty log means) stays documented on SetWatchdogCron rather than
+// spread across a shell file nobody reads.
+func writeWatchdogScript(scriptPath, initScript, logFile string) error {
+	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o755); err != nil {
+		return fmt.Errorf("creating script directory: %w", err)
+	}
+	body := fmt.Sprintf(`#!/bin/sh
+# %s -- managed by keenetic-xray; regenerated on every install and on
+# `+"`watchdog enable`"+`, so local edits here do not stick. Restarts the
+# failover daemon if its init script reports it stopped; appends to the
+# log only on an actual restart, never on a healthy tick.
+%s status >/dev/null 2>&1 && exit 0
+echo "$(date '+%%Y-%%m-%%d %%H:%%M:%%S') restarting -- status check failed" >> %s
+%s start >/dev/null 2>&1
+`, WatchdogMarker, initScript, logFile, initScript)
+	if err := os.WriteFile(scriptPath, []byte(body), 0o755); err != nil {
+		return fmt.Errorf("writing %s: %w", scriptPath, err)
+	}
+	// WriteFile does not chmod an existing file; make sure a regenerated
+	// script stays executable.
+	if err := os.Chmod(scriptPath, 0o755); err != nil {
+		return fmt.Errorf("chmod %s: %w", scriptPath, err)
 	}
 	return nil
 }

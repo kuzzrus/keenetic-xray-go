@@ -553,11 +553,14 @@ func TestRouterHandler_WatchdogShow(t *testing.T) {
 // first, since a written-but-inert entry is exactly the silent-failure
 // mode this feature exists to avoid.
 func TestRouterHandler_WatchdogEnable_FailsCleanlyWithoutRealCron(t *testing.T) {
-	cronFile := filepath.Join(t.TempDir(), "cron", "root")
+	dir := t.TempDir()
+	cronFile := filepath.Join(dir, "cron", "root")
+	scriptPath := filepath.Join(dir, "watchdog.sh")
 	h := &RouterHandler{
-		Config:     config.Default(),
-		CronFile:   cronFile,
-		InitScript: "/opt/etc/init.d/S99keenetic-xray",
+		Config:         config.Default(),
+		CronFile:       cronFile,
+		WatchdogScript: scriptPath,
+		InitScript:     "/opt/etc/init.d/S99keenetic-xray",
 	}
 	if _, err := h.Handle(context.Background(), Command{Action: ActionWatchdogEnable}); err == nil {
 		t.Fatal("expected an error: no real cron/opkg is available in this environment")
@@ -565,19 +568,32 @@ func TestRouterHandler_WatchdogEnable_FailsCleanlyWithoutRealCron(t *testing.T) 
 	if _, err := os.Stat(cronFile); !os.IsNotExist(err) {
 		t.Errorf("cron file should not have been written when EnsureCron failed first, stat err = %v", err)
 	}
+	if _, err := os.Stat(scriptPath); !os.IsNotExist(err) {
+		t.Errorf("script should not have been written when EnsureCron failed first, stat err = %v", err)
+	}
 }
 
 func TestRouterHandler_WatchdogDisable(t *testing.T) {
-	cronFile := filepath.Join(t.TempDir(), "cron", "root")
+	dir := t.TempDir()
+	cronFile := filepath.Join(dir, "cron", "root")
+	scriptPath := filepath.Join(dir, "watchdog.sh")
 	if err := os.MkdirAll(filepath.Dir(cronFile), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	seed := "0 3 * * * /opt/bin/some-other-job # unrelated-marker\n" +
-		"*/2 * * * * /opt/etc/init.d/S99keenetic-xray status >/dev/null 2>&1 || /opt/etc/init.d/S99keenetic-xray start >/dev/null 2>&1 # keenetic-xray-watchdog\n"
+		"*/2 * * * * " + scriptPath + " # keenetic-xray-watchdog\n"
 	if err := os.WriteFile(cronFile, []byte(seed), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	h := &RouterHandler{Config: config.Default(), CronFile: cronFile, InitScript: "/opt/etc/init.d/S99keenetic-xray"}
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h := &RouterHandler{
+		Config:         config.Default(),
+		CronFile:       cronFile,
+		WatchdogScript: scriptPath,
+		InitScript:     "/opt/etc/init.d/S99keenetic-xray",
+	}
 
 	out, err := h.Handle(context.Background(), Command{Action: ActionWatchdogDisable})
 	if err != nil {
@@ -595,6 +611,9 @@ func TestRouterHandler_WatchdogDisable(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "unrelated-marker") {
 		t.Errorf("cron file = %q, want the unrelated entry preserved", data)
+	}
+	if _, err := os.Stat(scriptPath); !os.IsNotExist(err) {
+		t.Errorf("script should be removed on disable, stat err = %v", err)
 	}
 }
 

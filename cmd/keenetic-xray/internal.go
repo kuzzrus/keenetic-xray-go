@@ -94,7 +94,7 @@ func cmdPostinstSetup() error {
 	if err := install.EnsureCron(); err != nil {
 		fmt.Println("warning: could not ensure a cron daemon is running, the watchdog won't fire:", err)
 	}
-	if err := install.SetWatchdogCron(cronFilePath(), initScript, watchdogLogPath(), true); err != nil {
+	if err := install.SetWatchdogCron(cronFilePath(), watchdogScriptPath(), initScript, watchdogLogPath(), true); err != nil {
 		fmt.Println("warning: could not install the watchdog cron entry:", err)
 	}
 	return nil

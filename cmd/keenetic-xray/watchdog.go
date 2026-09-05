@@ -29,7 +29,7 @@ func cmdWatchdog(args []string) error {
 		fmt.Println(out)
 		return err
 	case "disable":
-		if err := install.SetWatchdogCron(cronFilePath(), initScript, watchdogLogPath(), false); err != nil {
+		if err := install.SetWatchdogCron(cronFilePath(), watchdogScriptPath(), initScript, watchdogLogPath(), false); err != nil {
 			return err
 		}
 		fmt.Println("watchdog disabled")
@@ -68,7 +68,7 @@ func watchdogEnable() (string, error) {
 	if err := install.EnsureCron(); err != nil {
 		return "", fmt.Errorf("cron isn't available and couldn't be installed: %w", err)
 	}
-	if err := install.SetWatchdogCron(cronFilePath(), initScript, watchdogLogPath(), true); err != nil {
+	if err := install.SetWatchdogCron(cronFilePath(), watchdogScriptPath(), initScript, watchdogLogPath(), true); err != nil {
 		return "", err
 	}
 	return "watchdog enabled (cron confirmed running)", nil

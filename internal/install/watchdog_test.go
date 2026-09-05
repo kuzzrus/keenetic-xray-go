@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -14,8 +15,9 @@ const testWatchdogLog = "/opt/var/log/keenetic-xray/watchdog.log"
 func TestSetWatchdogCron_EnableOnFreshFile(t *testing.T) {
 	dir := t.TempDir()
 	cronFile := filepath.Join(dir, "root")
+	scriptPath := filepath.Join(dir, "watchdog.sh")
 
-	if err := SetWatchdogCron(cronFile, testInitScript, testWatchdogLog, true); err != nil {
+	if err := SetWatchdogCron(cronFile, scriptPath, testInitScript, testWatchdogLog, true); err != nil {
 		t.Fatalf("SetWatchdogCron: %v", err)
 	}
 
@@ -27,14 +29,34 @@ func TestSetWatchdogCron_EnableOnFreshFile(t *testing.T) {
 	if !strings.Contains(got, WatchdogSchedule) {
 		t.Errorf("cron file = %q, want schedule %q", got, WatchdogSchedule)
 	}
-	if !strings.Contains(got, testInitScript+" status") || !strings.Contains(got, testInitScript+" start") {
-		t.Errorf("cron file = %q, want both a status check and a start fallback", got)
+	// The crontab line is just the schedule, the script path and the
+	// marker -- no inline shell, so busybox crond has nothing verbose to
+	// echo to syslog every tick.
+	if !strings.Contains(got, scriptPath) {
+		t.Errorf("cron file = %q, want it to invoke the script at %s", got, scriptPath)
 	}
-	if !strings.Contains(got, testWatchdogLog) {
-		t.Errorf("cron file = %q, want it to log restarts to %s", got, testWatchdogLog)
+	if strings.Contains(got, "status >/dev/null") || strings.Contains(got, testWatchdogLog) {
+		t.Errorf("cron file = %q, want the check/restart logic in the script, not inline", got)
 	}
 	if !strings.HasSuffix(strings.TrimRight(got, "\n"), "# "+WatchdogMarker) {
 		t.Errorf("cron file = %q, want the line to end with the marker", got)
+	}
+
+	script, err := os.ReadFile(scriptPath)
+	if err != nil {
+		t.Fatalf("reading the watchdog script: %v", err)
+	}
+	s := string(script)
+	if !strings.Contains(s, testInitScript+" status") || !strings.Contains(s, testInitScript+" start") {
+		t.Errorf("script = %q, want both a status check and a start fallback", s)
+	}
+	if !strings.Contains(s, testWatchdogLog) {
+		t.Errorf("script = %q, want it to log restarts to %s", s, testWatchdogLog)
+	}
+	if fi, err := os.Stat(scriptPath); err != nil {
+		t.Fatalf("Stat script: %v", err)
+	} else if runtime.GOOS != "windows" && fi.Mode().Perm()&0o100 == 0 {
+		t.Errorf("script mode = %v, want the owner-execute bit set", fi.Mode().Perm())
 	}
 
 	enabled, err := WatchdogEnabled(cronFile)
@@ -49,12 +71,13 @@ func TestSetWatchdogCron_EnableOnFreshFile(t *testing.T) {
 func TestSetWatchdogCron_PreservesOtherEntries(t *testing.T) {
 	dir := t.TempDir()
 	cronFile := filepath.Join(dir, "root")
+	scriptPath := filepath.Join(dir, "watchdog.sh")
 	other := "0 3 * * * /opt/bin/some-other-job # unrelated-marker\n"
 	if err := os.WriteFile(cronFile, []byte(other), 0o600); err != nil {
 		t.Fatalf("seeding cron file: %v", err)
 	}
 
-	if err := SetWatchdogCron(cronFile, testInitScript, testWatchdogLog, true); err != nil {
+	if err := SetWatchdogCron(cronFile, scriptPath, testInitScript, testWatchdogLog, true); err != nil {
 		t.Fatalf("SetWatchdogCron: %v", err)
 	}
 
@@ -74,11 +97,12 @@ func TestSetWatchdogCron_PreservesOtherEntries(t *testing.T) {
 func TestSetWatchdogCron_ReplacesOwnEntryIdempotently(t *testing.T) {
 	dir := t.TempDir()
 	cronFile := filepath.Join(dir, "root")
+	scriptPath := filepath.Join(dir, "watchdog.sh")
 
-	if err := SetWatchdogCron(cronFile, testInitScript, testWatchdogLog, true); err != nil {
+	if err := SetWatchdogCron(cronFile, scriptPath, testInitScript, testWatchdogLog, true); err != nil {
 		t.Fatalf("SetWatchdogCron (1st): %v", err)
 	}
-	if err := SetWatchdogCron(cronFile, testInitScript, testWatchdogLog, true); err != nil {
+	if err := SetWatchdogCron(cronFile, scriptPath, testInitScript, testWatchdogLog, true); err != nil {
 		t.Fatalf("SetWatchdogCron (2nd): %v", err)
 	}
 
@@ -101,15 +125,19 @@ func TestSetWatchdogCron_ReplacesOwnEntryIdempotently(t *testing.T) {
 func TestSetWatchdogCron_Disable(t *testing.T) {
 	dir := t.TempDir()
 	cronFile := filepath.Join(dir, "root")
+	scriptPath := filepath.Join(dir, "watchdog.sh")
 	other := "0 3 * * * /opt/bin/some-other-job # unrelated-marker\n"
 	if err := os.WriteFile(cronFile, []byte(other), 0o600); err != nil {
 		t.Fatalf("seeding cron file: %v", err)
 	}
 
-	if err := SetWatchdogCron(cronFile, testInitScript, testWatchdogLog, true); err != nil {
+	if err := SetWatchdogCron(cronFile, scriptPath, testInitScript, testWatchdogLog, true); err != nil {
 		t.Fatalf("SetWatchdogCron (enable): %v", err)
 	}
-	if err := SetWatchdogCron(cronFile, testInitScript, testWatchdogLog, false); err != nil {
+	if _, err := os.Stat(scriptPath); err != nil {
+		t.Fatalf("script should exist after enable: %v", err)
+	}
+	if err := SetWatchdogCron(cronFile, scriptPath, testInitScript, testWatchdogLog, false); err != nil {
 		t.Fatalf("SetWatchdogCron (disable): %v", err)
 	}
 
@@ -124,6 +152,9 @@ func TestSetWatchdogCron_Disable(t *testing.T) {
 	if !strings.Contains(got, "unrelated-marker") {
 		t.Errorf("cron file = %q, want the unrelated entry still preserved", got)
 	}
+	if _, err := os.Stat(scriptPath); !os.IsNotExist(err) {
+		t.Errorf("script should be gone after disable, stat err = %v", err)
+	}
 
 	enabled, err := WatchdogEnabled(cronFile)
 	if err != nil {
@@ -131,6 +162,17 @@ func TestSetWatchdogCron_Disable(t *testing.T) {
 	}
 	if enabled {
 		t.Error("WatchdogEnabled = true, want false after disable")
+	}
+}
+
+// TestSetWatchdogCron_DisableWithoutPriorScriptIsOK covers the plain
+// case where disable runs and no script was ever written (a fresh box,
+// or `watchdog disable` before any enable): removing a file that isn't
+// there must not be an error.
+func TestSetWatchdogCron_DisableWithoutPriorScriptIsOK(t *testing.T) {
+	dir := t.TempDir()
+	if err := SetWatchdogCron(filepath.Join(dir, "root"), filepath.Join(dir, "watchdog.sh"), testInitScript, testWatchdogLog, false); err != nil {
+		t.Fatalf("SetWatchdogCron (disable, nothing to remove): %v", err)
 	}
 }
 

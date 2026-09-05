@@ -158,7 +158,11 @@ func TestTelegramBot_PortsWizard(t *testing.T) {
 	fake.waitForReply(t, 3*time.Second)
 	msgID := fake.lastSent(t).MessageID
 
-	fake.pushCallback(1, msgID, "ports:r1")
+	// "⚙️ Порты и транспорт" opens a screen; "✏️ Порты SOCKS/HTTP" on it
+	// starts the actual wizard.
+	fake.pushCallback(1, msgID, "ptm:r1")
+	fake.waitForEditContaining(t, 3*time.Second, "Порты и транспорт")
+	fake.pushCallback(1, msgID, "ptwiz:r1")
 	waitSent(t, fake, 3*time.Second, "Смена портов")
 
 	// Malformed input (not two fields) is rejected without ending the dialog.
@@ -181,6 +185,58 @@ func TestTelegramBot_PortsWizard(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	waitSent(t, fake, 3*time.Second, "SOCKS: 1090, HTTP: 1091")
+}
+
+func TestTelegramBot_TransportScreen_ProtocolAndInterface(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	mustRegister(t, store, "r1")
+	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL, ResultTimeout: 2 * time.Second}
+	runBotInBackground(t, bot)
+
+	rec := &recorder{}
+	fakeAgent(t, store, "r1", func(action string) string {
+		rec.add(action)
+		return "ok"
+	})
+
+	fake.push(1, "/menu")
+	fake.waitForReply(t, 3*time.Second)
+	msgID := fake.lastSent(t).MessageID
+	fake.pushCallback(1, msgID, "ptm:r1")
+	fake.waitForEditContaining(t, 3*time.Second, "Порты и транспорт")
+
+	// HTTP protocol button -> proxy0_config with ["http", ""].
+	fake.pushCallback(1, msgID, "ptpr:r1:http")
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if cmd, _ := store.Dequeue("r1"); cmd != nil {
+			if cmd.Action != ActionProxy0Config || len(cmd.Args) != 2 || cmd.Args[0] != "http" || cmd.Args[1] != "" {
+				t.Errorf("dequeued = %q %v, want proxy0_config [http ]", cmd.Action, cmd.Args)
+			}
+			_ = store.RecordResult("r1", Result{CommandID: cmd.ID, Output: "proxy0: http"})
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// "✏️ Интерфейс Keenetic" -> one-step wizard -> proxy0_config with ["", "Proxy1"].
+	fake.pushCallback(1, msgID, "ptif:r1")
+	waitSent(t, fake, 3*time.Second, "Интерфейс Keenetic")
+	fake.push(1, "proxy 1") // not a valid single token
+	waitSent(t, fake, 3*time.Second, "Proxy0 / Proxy1")
+	fake.push(1, "Proxy1")
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if cmd, _ := store.Dequeue("r1"); cmd != nil {
+			if cmd.Action != ActionProxy0Config || len(cmd.Args) != 2 || cmd.Args[0] != "" || cmd.Args[1] != "Proxy1" {
+				t.Errorf("dequeued = %q %v, want proxy0_config [ Proxy1]", cmd.Action, cmd.Args)
+			}
+			_ = store.RecordResult("r1", Result{CommandID: cmd.ID, Output: "proxy0: socks5 через Proxy1"})
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 func contains(xs []string, want string) bool {

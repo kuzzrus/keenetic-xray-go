@@ -166,6 +166,35 @@ func TestConfigValidate_Proxy0Protocol(t *testing.T) {
 	}
 }
 
+func TestConfigValidate_Proxy0Interface(t *testing.T) {
+	c := Default()
+	for _, ok := range []string{"", "Proxy0", "Proxy1", "Proxy12"} {
+		c.Proxy0.Interface = ok
+		if err := c.Validate(); err != nil {
+			t.Errorf("proxy0.interface %q: unexpected error %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"proxy0", "Proxy", "Proxy 1", "Proxy0x", "eth0"} {
+		c.Proxy0.Interface = bad
+		if err := c.Validate(); err == nil {
+			t.Errorf("proxy0.interface %q: expected an error", bad)
+		}
+	}
+}
+
+func TestValidProxyIface(t *testing.T) {
+	for _, ok := range []string{"", "Proxy0", "Proxy7", "Proxy100"} {
+		if !ValidProxyIface(ok) {
+			t.Errorf("ValidProxyIface(%q) = false, want true", ok)
+		}
+	}
+	for _, bad := range []string{"proxy1", "Proxy", "Proxy1 ", " Proxy1", "Prox1"} {
+		if ValidProxyIface(bad) {
+			t.Errorf("ValidProxyIface(%q) = true, want false", bad)
+		}
+	}
+}
+
 func TestConfig_Proxy0Port(t *testing.T) {
 	c := Default() // SOCKSPort 1080, HTTPPort 1081 from DefaultFailoverConfig
 	if got := c.Proxy0Port(); got != c.Failover.SOCKSPort {

@@ -32,16 +32,21 @@ const (
 	ActionProxy0Show       = "proxy0_show"
 	ActionProxy0On         = "proxy0_on"
 	ActionProxy0Off        = "proxy0_off"
-	ActionDaemonRestart    = "daemon_restart"
-	ActionEnsureCore       = "ensure_core"
-	ActionSelfUpdate       = "self_update" // re-run install.sh on the router (whole keenetic-xray package)
-	ActionFailoverShow     = "failover_show"
-	ActionFailoverSet      = "failover_set" // args[0]=key, args[1]=value
-	ActionWatchdogShow     = "watchdog_show"
-	ActionWatchdogEnable   = "watchdog_enable" // ensures a cron daemon exists (installing it via opkg if needed) before writing the entry
-	ActionWatchdogDisable  = "watchdog_disable"
-	ActionWatchdogLog      = "watchdog_log" // restart events only, not routine ticks -- see internal/install.SetWatchdogCron
-	ActionSetPorts         = "set_ports"    // args[0]=SOCKS port, args[1]=HTTP port (both as decimal strings)
+	// ActionProxy0Config: args[0]=protocol ("socks5"|"http"|""=keep),
+	// args[1]=Keenetic interface ("Proxy0"|"Proxy1"|...|""=keep). Saves
+	// and, if Proxy0 is already on, re-points it (bringing the old
+	// interface down first when that changed).
+	ActionProxy0Config    = "proxy0_config"
+	ActionDaemonRestart   = "daemon_restart"
+	ActionEnsureCore      = "ensure_core"
+	ActionSelfUpdate      = "self_update" // re-run install.sh on the router (whole keenetic-xray package)
+	ActionFailoverShow    = "failover_show"
+	ActionFailoverSet     = "failover_set" // args[0]=key, args[1]=value
+	ActionWatchdogShow    = "watchdog_show"
+	ActionWatchdogEnable  = "watchdog_enable" // ensures a cron daemon exists (installing it via opkg if needed) before writing the entry
+	ActionWatchdogDisable = "watchdog_disable"
+	ActionWatchdogLog     = "watchdog_log" // restart events only, not routine ticks -- see internal/install.SetWatchdogCron
+	ActionSetPorts        = "set_ports"    // args[0]=SOCKS port, args[1]=HTTP port (both as decimal strings)
 )
 
 // Command is a single unit of work queued for a router by the control

@@ -280,6 +280,41 @@ func TestRouterHandler_Proxy0_WithoutNdmc(t *testing.T) {
 	}
 }
 
+func TestRouterHandler_Proxy0Config(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "c.json")
+	cfg := config.Default()
+	cfg.Proxy0.Enabled = false // disabled -> the change is only saved, no ndmc needed
+	h := &RouterHandler{Config: cfg, ConfigPath: cfgPath}
+
+	// Protocol only; interface slot left as "keep".
+	out, err := h.Handle(context.Background(), Command{Action: ActionProxy0Config, Args: []string{"http", ""}})
+	if err != nil {
+		t.Fatalf("proxy0_config http: %v", err)
+	}
+	if !strings.Contains(out, "http") || !strings.Contains(out, "сохранено") {
+		t.Errorf("out = %q, want it to confirm http and that it was saved", out)
+	}
+
+	// Interface only; protocol kept from the previous call.
+	if _, err := h.Handle(context.Background(), Command{Action: ActionProxy0Config, Args: []string{"", "Proxy2"}}); err != nil {
+		t.Fatalf("proxy0_config Proxy2: %v", err)
+	}
+	saved, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Proxy0.Protocol != "http" || saved.Proxy0.Interface != "Proxy2" {
+		t.Errorf("saved proxy0 = %+v, want protocol http / interface Proxy2", saved.Proxy0)
+	}
+
+	// Validation: bad protocol, bad interface, and nothing-to-do.
+	for _, args := range [][]string{{"ftp", ""}, {"", "eth0"}, {"", ""}} {
+		if _, err := h.Handle(context.Background(), Command{Action: ActionProxy0Config, Args: args}); err == nil {
+			t.Errorf("args %v: expected an error", args)
+		}
+	}
+}
+
 func TestRouterHandler_DaemonRestart(t *testing.T) {
 	h := &RouterHandler{Config: config.Default()}
 

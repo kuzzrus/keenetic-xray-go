@@ -497,6 +497,8 @@ const helpText = `/menu — меню с кнопками (проще всего)
 /set_primary_source <router> <vless://…|url> [селектор]
 /set_backup_source <router> <vless://…|url> [селектор]
 /proxy0 <router> [show|on|off]
+/proxy0 <router> protocol socks5|http — какой вход отдаёт Proxy-интерфейс
+/proxy0 <router> interface Proxy0|Proxy1|… — какой Proxy-интерфейс Keenetic вести
 /restart <router> — перезапустить демон
 /ensure_core <router> — доустановить ядро xray
 /update <router> — обновить агент (переустановить .ipk)
@@ -609,24 +611,34 @@ func (b *TelegramBot) dispatchWatchdog(ctx context.Context, args []string) strin
 	}
 }
 
-// dispatchProxy0 routes /proxy0 <router> [show|on|off]; default is show.
+// dispatchProxy0 routes /proxy0 <router> [show|on|off|protocol <socks5|http>|interface <ProxyN>];
+// default is show.
 func (b *TelegramBot) dispatchProxy0(ctx context.Context, args []string) string {
+	usage := "формат: /proxy0 <роутер> [show|on|off|protocol socks5|http|interface Proxy0]"
 	if len(args) < 1 {
-		return "формат: /proxy0 <роутер> [show|on|off]"
+		return usage
 	}
-	action := ActionProxy0Show
-	if len(args) >= 2 {
-		switch args[1] {
-		case "show":
-		case "on":
-			action = ActionProxy0On
-		case "off":
-			action = ActionProxy0Off
-		default:
-			return "формат: /proxy0 <роутер> [show|on|off]"
+	if len(args) < 2 || args[1] == "show" {
+		return b.runRouterCommand(ctx, args[:1], ActionProxy0Show, nil)
+	}
+	switch args[1] {
+	case "on":
+		return b.runRouterCommand(ctx, args[:1], ActionProxy0On, nil)
+	case "off":
+		return b.runRouterCommand(ctx, args[:1], ActionProxy0Off, nil)
+	case "protocol":
+		if len(args) != 3 {
+			return usage
 		}
+		return b.runRouterCommand(ctx, args[:1], ActionProxy0Config, []string{args[2], ""})
+	case "interface":
+		if len(args) != 3 {
+			return usage
+		}
+		return b.runRouterCommand(ctx, args[:1], ActionProxy0Config, []string{"", args[2]})
+	default:
+		return usage
 	}
-	return b.runRouterCommand(ctx, args[:1], action, nil)
 }
 
 // normalizeCommand strips the "@botname" suffix Telegram appends to

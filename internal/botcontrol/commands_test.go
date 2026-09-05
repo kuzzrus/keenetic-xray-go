@@ -521,6 +521,109 @@ func TestRouterHandler_FailoverSet_RejectsBadValue(t *testing.T) {
 	}
 }
 
+func TestRouterHandler_WatchdogShow_NotConfigured(t *testing.T) {
+	h := &RouterHandler{Config: config.Default()} // CronFile empty
+	if _, err := h.Handle(context.Background(), Command{Action: ActionWatchdogShow}); err == nil {
+		t.Error("expected an error when CronFile isn't wired for this agent")
+	}
+}
+
+func TestRouterHandler_WatchdogShow(t *testing.T) {
+	h := &RouterHandler{
+		Config:     config.Default(),
+		CronFile:   filepath.Join(t.TempDir(), "cron", "root"),
+		InitScript: "/opt/etc/init.d/S99keenetic-xray",
+	}
+	out, err := h.Handle(context.Background(), Command{Action: ActionWatchdogShow})
+	if err != nil {
+		t.Fatalf("watchdog_show: %v", err)
+	}
+	if !strings.Contains(out, "вотчдог: false") {
+		t.Errorf("out = %q, want it to report the entry as not yet present", out)
+	}
+	if !strings.Contains(out, "cron:") {
+		t.Errorf("out = %q, want it to also report cron daemon status", out)
+	}
+}
+
+// TestRouterHandler_WatchdogEnable_FailsCleanlyWithoutRealCron mirrors
+// the CLI-level test: this test environment has no real Entware cron or
+// opkg, so EnsureCron cannot succeed, and enable must fail rather than
+// pretend it worked -- critically, without writing the cron entry
+// first, since a written-but-inert entry is exactly the silent-failure
+// mode this feature exists to avoid.
+func TestRouterHandler_WatchdogEnable_FailsCleanlyWithoutRealCron(t *testing.T) {
+	cronFile := filepath.Join(t.TempDir(), "cron", "root")
+	h := &RouterHandler{
+		Config:     config.Default(),
+		CronFile:   cronFile,
+		InitScript: "/opt/etc/init.d/S99keenetic-xray",
+	}
+	if _, err := h.Handle(context.Background(), Command{Action: ActionWatchdogEnable}); err == nil {
+		t.Fatal("expected an error: no real cron/opkg is available in this environment")
+	}
+	if _, err := os.Stat(cronFile); !os.IsNotExist(err) {
+		t.Errorf("cron file should not have been written when EnsureCron failed first, stat err = %v", err)
+	}
+}
+
+func TestRouterHandler_WatchdogDisable(t *testing.T) {
+	cronFile := filepath.Join(t.TempDir(), "cron", "root")
+	if err := os.MkdirAll(filepath.Dir(cronFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	seed := "0 3 * * * /opt/bin/some-other-job # unrelated-marker\n" +
+		"*/2 * * * * /opt/etc/init.d/S99keenetic-xray status >/dev/null 2>&1 || /opt/etc/init.d/S99keenetic-xray start >/dev/null 2>&1 # keenetic-xray-watchdog\n"
+	if err := os.WriteFile(cronFile, []byte(seed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := &RouterHandler{Config: config.Default(), CronFile: cronFile, InitScript: "/opt/etc/init.d/S99keenetic-xray"}
+
+	out, err := h.Handle(context.Background(), Command{Action: ActionWatchdogDisable})
+	if err != nil {
+		t.Fatalf("watchdog_disable: %v", err)
+	}
+	if !strings.Contains(out, "выключен") {
+		t.Errorf("out = %q", out)
+	}
+	data, err := os.ReadFile(cronFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "keenetic-xray-watchdog") {
+		t.Errorf("cron file = %q, want the watchdog entry gone", data)
+	}
+	if !strings.Contains(string(data), "unrelated-marker") {
+		t.Errorf("cron file = %q, want the unrelated entry preserved", data)
+	}
+}
+
+func TestRouterHandler_WatchdogLog_EmptyWhenNoFile(t *testing.T) {
+	h := &RouterHandler{Config: config.Default(), WatchdogLog: filepath.Join(t.TempDir(), "watchdog.log")}
+	out, err := h.Handle(context.Background(), Command{Action: ActionWatchdogLog})
+	if err != nil {
+		t.Fatalf("watchdog_log: %v", err)
+	}
+	if out != "перезапусков не зафиксировано" {
+		t.Errorf("out = %q, want the no-restarts message for a missing file", out)
+	}
+}
+
+func TestRouterHandler_WatchdogLog_ReturnsContent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "watchdog.log")
+	if err := os.WriteFile(path, []byte("2026-09-05 09:04:00 restarting -- status check failed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := &RouterHandler{Config: config.Default(), WatchdogLog: path}
+	out, err := h.Handle(context.Background(), Command{Action: ActionWatchdogLog})
+	if err != nil {
+		t.Fatalf("watchdog_log: %v", err)
+	}
+	if !strings.Contains(out, "2026-09-05 09:04:00") {
+		t.Errorf("out = %q, want the seeded line", out)
+	}
+}
+
 func TestRouterHandler_SelfUpdate(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("no sh on PATH to exercise the update spawn")

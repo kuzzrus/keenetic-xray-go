@@ -132,6 +132,16 @@ eagerly. Keys: `check_interval_seconds`, `failures_required`,
 reload `config.json`, no restart needed (falls back to the old
 restart-to-apply guidance if the daemon isn't reachable).
 
+`watchdog show`/`enable`/`disable`/`log` control a cron entry that
+restarts the daemon if it's ever not running -- Entware's `rc.func`
+doesn't do this on its own, unlike the control-server's systemd unit
+(`Restart=on-failure`). Installed enabled by default. `enable` makes
+sure a cron daemon actually exists first, installing Entware's `cron`
+package via `opkg` if needed, rather than writing an entry nothing will
+read. `log` shows restart events only (not routine ticks), so an empty
+log means it's never had to step in -- also in the bot, `🐕 Вотчдог` on
+a router card.
+
 `menu` is a numbered control panel for running the router from an SSH
 session without the Telegram bot: status, `doctor`, profile list,
 refresh the subscription, re-run `setup` to change the source, toggle

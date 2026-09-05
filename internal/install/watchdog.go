@@ -3,6 +3,7 @@ package install
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -30,10 +31,20 @@ const WatchdogSchedule = "*/2 * * * *"
 // not `restart`: status already established nothing is running, so
 // there's nothing to stop first.
 //
+// The entry appends one timestamped line to logFile *only* when it
+// actually restarts the daemon (status failed) -- not on every routine
+// tick, which would just be noise. A non-empty log is then direct
+// evidence of how often the watchdog has actually had to intervene,
+// distinguishing "working as intended, rarely needed" from "firing
+// constantly" -- something a bare uptime/status snapshot can't show,
+// since a restarted process's own in-memory state (including its
+// failover.Daemon.Transitions history) starts fresh and carries no
+// trace of why.
+//
 // Any other line already in cronFile (from an unrelated cron user) is
 // preserved untouched; only the single line carrying WatchdogMarker is
 // added, replaced, or removed. Safe to call on every postinst run.
-func SetWatchdogCron(cronFile, initScript string, enabled bool) error {
+func SetWatchdogCron(cronFile, initScript, logFile string, enabled bool) error {
 	if err := os.MkdirAll(filepath.Dir(cronFile), 0o755); err != nil {
 		return fmt.Errorf("creating cron directory: %w", err)
 	}
@@ -51,8 +62,9 @@ func SetWatchdogCron(cronFile, initScript string, enabled bool) error {
 		kept = append(kept, line)
 	}
 	if enabled {
-		kept = append(kept, fmt.Sprintf("%s %s status >/dev/null 2>&1 || %s start >/dev/null 2>&1 # %s",
-			WatchdogSchedule, initScript, initScript, WatchdogMarker))
+		kept = append(kept, fmt.Sprintf(
+			`%s %s status >/dev/null 2>&1 || { echo "$(date '+%%Y-%%m-%%d %%H:%%M:%%S') restarting -- status check failed" >> %s; %s start >/dev/null 2>&1; } # %s`,
+			WatchdogSchedule, initScript, logFile, initScript, WatchdogMarker))
 	}
 
 	data := ""
@@ -81,4 +93,65 @@ func WatchdogEnabled(cronFile string) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// CronInitScript is Entware's cron init script -- rc.func provides
+// `status`/`enable`/`start` for free, the same mechanism the watchdog
+// cron entry above relies on to check the keenetic-xray daemon itself.
+const CronInitScript = "/opt/etc/init.d/S10cron"
+
+// The four points below are the only places CronRunning/EnsureCron
+// actually touch the system -- injectable vars (same convention as
+// internal/keenetic's lookNdmc/ndmcRun) so the *decision logic* here
+// (which order things are tried in, what happens on each failure) is
+// testable without a real Entware router: a minimal busybox image,
+// opkg, and rc.func aren't available in CI or on the Windows box this
+// is developed on.
+var (
+	cronInitStatus   = func() error { return exec.Command(CronInitScript, "status").Run() }
+	cronInitEnable   = func() error { return exec.Command(CronInitScript, "enable").Run() }
+	cronInitStart    = func() error { return exec.Command(CronInitScript, "start").Run() }
+	cronRunningViaPS = func() bool {
+		// ps+grep, not pgrep: a minimal busybox image isn't guaranteed
+		// to include the pgrep applet. Covers a bare `crond` invocation
+		// with no init script involved (e.g. hand-started, or a
+		// non-Entware cron package).
+		return exec.Command("sh", "-c", "ps | grep -v grep | grep -q crond").Run() == nil
+	}
+	cronOpkgInstall = func() error { return exec.Command("opkg", "install", "cron").Run() }
+)
+
+// CronRunning reports whether a cron daemon is currently active, so
+// SetWatchdogCron's entry actually has something reading it -- an
+// enabled entry with no cron daemon behind it is silently inert.
+func CronRunning() bool {
+	if cronInitStatus() == nil {
+		return true
+	}
+	return cronRunningViaPS()
+}
+
+// EnsureCron makes sure a cron daemon is installed and running,
+// installing the Entware `cron` package via opkg first if needed, then
+// enabling and starting it. A no-op if one's already running. This is
+// what the bot's watchdog-enable button and `keenetic-xray watchdog
+// enable` call before SetWatchdogCron, so "enable the watchdog" is a
+// single action rather than requiring cron to already be present.
+func EnsureCron() error {
+	if CronRunning() {
+		return nil
+	}
+	if err := cronOpkgInstall(); err != nil {
+		return fmt.Errorf("installing the cron package: %w", err)
+	}
+	if err := cronInitEnable(); err != nil {
+		return fmt.Errorf("enabling cron at boot: %w", err)
+	}
+	if err := cronInitStart(); err != nil {
+		return fmt.Errorf("starting cron: %w", err)
+	}
+	if !CronRunning() {
+		return fmt.Errorf("cron still isn't running after installing and starting it")
+	}
+	return nil
 }

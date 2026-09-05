@@ -9,25 +9,14 @@ set -e
 
 /opt/sbin/keenetic-xray internal postinst-setup
 
-# postinst-setup just wrote the watchdog's cron entry (restarts the
+# postinst-setup above already best-effort ensures a cron daemon is
+# installed/running and writes the watchdog's cron entry (restarts the
 # daemon if it's ever not running -- rc.func doesn't do this on its own,
-# unlike the control-server's systemd unit). Best-effort: make sure a
-# cron daemon actually exists to read it. Entware doesn't always ship one
-# enabled by default, and not fatal either way -- a router without cron
-# just doesn't get the watchdog, same as ensure-xray-core above.
-# S10cron start is a no-op if cron is already running (rc.func's own
-# is-it-already-up guard, same one S99keenetic-xray itself relies on).
-if [ -x /opt/etc/init.d/S10cron ]; then
-    /opt/etc/init.d/S10cron enable >/dev/null 2>&1 || true
-    /opt/etc/init.d/S10cron start >/dev/null 2>&1 || true
-elif command -v crond >/dev/null 2>&1; then
-    crond >/dev/null 2>&1 || true
-elif opkg install cron >/dev/null 2>&1 && [ -x /opt/etc/init.d/S10cron ]; then
-    /opt/etc/init.d/S10cron enable >/dev/null 2>&1 || true
-    /opt/etc/init.d/S10cron start >/dev/null 2>&1 || true
-else
-    echo "keenetic-xray: no cron daemon found/installable -- the watchdog cron entry is written but won't run until one exists"
-fi
+# unlike the control-server's systemd unit). That's all in Go
+# (internal/install.EnsureCron/SetWatchdogCron) rather than duplicated
+# here in shell, so it stays unit-testable; a router without an
+# installable cron just doesn't get the watchdog, same as
+# ensure-xray-core's own best-effort framing above.
 
 # If install.sh was given a link (--sub=/--vless=), do the whole first-run
 # configuration here so nothing else is needed. Best-effort: a failure

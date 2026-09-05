@@ -488,7 +488,8 @@ const helpText = `/menu — меню с кнопками (проще всего)
 /ensure_core <router> — доустановить ядро xray
 /update <router> — обновить агент (переустановить .ipk)
 /failover <router> show — текущие пороги health-check
-/failover <router> set <ключ> <значение> — подстроить их (перезапустит демон)`
+/failover <router> set <ключ> <значение> — подстроить их (перезапустит демон)
+/watchdog <router> show|enable|disable|log — cron, что перезапускает демон, если он упал`
 
 func (b *TelegramBot) dispatch(ctx context.Context, text string) string {
 	fields := strings.Fields(text)
@@ -541,6 +542,8 @@ func (b *TelegramBot) dispatch(ctx context.Context, text string) string {
 		return b.runRouterCommand(ctx, args, ActionSelfUpdate, nil)
 	case "/failover":
 		return b.dispatchFailover(ctx, args)
+	case "/watchdog":
+		return b.dispatchWatchdog(ctx, args)
 	default:
 		return "неизвестная команда. Откройте /menu или /help"
 	}
@@ -561,6 +564,27 @@ func (b *TelegramBot) dispatchFailover(ctx context.Context, args []string) strin
 			return usage
 		}
 		return b.runRouterCommand(ctx, routerID, ActionFailoverSet, []string{args[2], args[3]})
+	default:
+		return usage
+	}
+}
+
+// dispatchWatchdog routes /watchdog <router> show|enable|disable|log.
+func (b *TelegramBot) dispatchWatchdog(ctx context.Context, args []string) string {
+	usage := "формат: /watchdog <роутер> show|enable|disable|log"
+	if len(args) != 2 {
+		return usage
+	}
+	routerID := args[:1]
+	switch args[1] {
+	case "show":
+		return b.runRouterCommand(ctx, routerID, ActionWatchdogShow, nil)
+	case "enable":
+		return b.runRouterCommand(ctx, routerID, ActionWatchdogEnable, nil)
+	case "disable":
+		return b.runRouterCommand(ctx, routerID, ActionWatchdogDisable, nil)
+	case "log":
+		return b.runRouterCommand(ctx, routerID, ActionWatchdogLog, nil)
 	default:
 		return usage
 	}

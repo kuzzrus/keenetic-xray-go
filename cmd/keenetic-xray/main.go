@@ -90,7 +90,7 @@ commands:
   agent {configure <url> <router-id> <fingerprint> <token>|enable|disable|status}
   proxy0 {show|set [--lan-ip=192.168.x.1]|off}   point Keenetic's Proxy0 at the local inbound
   failover {show|set <key> <value>}              tune health-check thresholds (applies live)
-  watchdog {show|enable|disable}                  cron entry that restarts the daemon if it's not running`)
+  watchdog {show|enable|disable|log}              cron entry that restarts the daemon if it's not running`)
 }
 
 func cmdDaemon(args []string) error {
@@ -158,7 +158,9 @@ func cmdDaemon(args []string) error {
 		handler := &botcontrol.RouterHandler{
 			Daemon: d, Config: cfg, ConfigPath: configPath(),
 			XrayBinary: xrayBinaryPath(), OptPath: optPath(),
-			InitScript: initScript,
+			InitScript:  initScript,
+			CronFile:    cronFilePath(),
+			WatchdogLog: watchdogLogPath(),
 		}
 		opts.StatusFunc = func(ctx context.Context) string {
 			out, _ := handler.Handle(ctx, botcontrol.Command{Action: botcontrol.ActionStatus})

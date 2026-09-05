@@ -617,6 +617,66 @@ func TestTelegramBot_FailoverDispatchesShowAndSet(t *testing.T) {
 	waitSent(t, fake, 3*time.Second, "failures_required = 6")
 }
 
+func TestTelegramBot_WatchdogDispatchesShowEnableDisableLog(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	mustRegister(t, store, "router-1")
+	bot := &TelegramBot{
+		Token: "test-token", AllowedChats: map[int64]bool{1: true},
+		Store: store, APIBase: srv.URL, ResultTimeout: 2 * time.Second,
+	}
+	runBotInBackground(t, bot)
+
+	answer := func(action, output string) {
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			if cmd, _ := store.Dequeue("router-1"); cmd != nil {
+				if cmd.Action != action {
+					t.Errorf("dequeued action = %q, want %q", cmd.Action, action)
+				}
+				_ = store.RecordResult("router-1", Result{CommandID: cmd.ID, Output: output})
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		t.Error("no command was enqueued")
+	}
+
+	go answer(ActionWatchdogShow, "вотчдог: true (проверка каждые */2 * * * * через /opt/etc/init.d/S99keenetic-xray)\ncron: работает")
+	fake.push(1, "/watchdog router-1 show")
+	waitSent(t, fake, 3*time.Second, "вотчдог: true")
+
+	go answer(ActionWatchdogEnable, "вотчдог включён (cron подтверждён работающим)")
+	fake.push(1, "/watchdog router-1 enable")
+	waitSent(t, fake, 3*time.Second, "вотчдог включён")
+
+	go answer(ActionWatchdogDisable, "вотчдог выключен")
+	fake.push(1, "/watchdog router-1 disable")
+	waitSent(t, fake, 3*time.Second, "вотчдог выключен")
+
+	go answer(ActionWatchdogLog, "перезапусков не зафиксировано")
+	fake.push(1, "/watchdog router-1 log")
+	waitSent(t, fake, 3*time.Second, "перезапусков не зафиксировано")
+}
+
+func TestTelegramBot_WatchdogRejectsBadUsage(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	mustRegister(t, store, "router-1")
+	bot := &TelegramBot{
+		Token: "test-token", AllowedChats: map[int64]bool{1: true},
+		Store: store, APIBase: srv.URL, ResultTimeout: 2 * time.Second,
+	}
+	runBotInBackground(t, bot)
+
+	fake.push(1, "/watchdog router-1 bogus")
+	waitSent(t, fake, 3*time.Second, "формат: /watchdog")
+
+	if cmd, _ := store.Dequeue("router-1"); cmd != nil {
+		t.Errorf("expected no command enqueued for a bad watchdog action, got %+v", cmd)
+	}
+}
+
 func TestTelegramBot_FailoverSetRejectsWithoutEnqueue(t *testing.T) {
 	srv, fake := newFakeTelegram(t)
 	store := newBotStore(t)

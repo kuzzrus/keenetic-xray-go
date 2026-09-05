@@ -18,9 +18,14 @@ Current subcommands: `version`, `setup`, `daemon`, `profile`,
 `subscription`, `status`, `doctor`, `variant`, `agent` (configure/enable/
 disable/status for the control-server polling loop -- Full variant only,
 see `docs/bot-control-design.md`), `proxy0`, `failover`, `watchdog`
-(show/enable/disable the cron entry that restarts the daemon if it's not
-running -- rc.func doesn't do this on its own, unlike the
-control-server's systemd unit's `Restart=on-failure`), and the hidden
+(show/enable/disable/log the cron entry that restarts the daemon if it's
+not running -- rc.func doesn't do this on its own, unlike the
+control-server's systemd unit's `Restart=on-failure`; `enable` calls
+`internal/install.EnsureCron` first, installing Entware's `cron` package
+via opkg if it's missing, and the entry logs a line to
+`watchdogLogPath()` only when it actually restarts the daemon, not on
+every routine tick -- also reachable from the bot, see
+`docs/bot-control-design.md`), and the hidden
 `internal postinst-setup` / `internal prerm-cleanup` used only by the
 `.ipk`'s packaging scripts.
 

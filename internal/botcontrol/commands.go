@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 	"github.com/kuzzrus/keenetic-xray-go/internal/diskspace"
 	"github.com/kuzzrus/keenetic-xray-go/internal/failover"
+	"github.com/kuzzrus/keenetic-xray-go/internal/install"
 	"github.com/kuzzrus/keenetic-xray-go/internal/keenetic"
 	"github.com/kuzzrus/keenetic-xray-go/internal/subscription"
 	"github.com/kuzzrus/keenetic-xray-go/internal/version"
@@ -45,6 +47,13 @@ type RouterHandler struct {
 	// InstallURL is the install.sh the self_update action re-runs.
 	// Empty -> defaultInstallURL.
 	InstallURL string
+
+	// CronFile and WatchdogLog back the watchdog_* actions -- same path
+	// helpers cmd/keenetic-xray uses (cronFilePath/watchdogLogPath).
+	// Empty CronFile -> those actions return an error rather than
+	// operating on some surprising default path.
+	CronFile    string
+	WatchdogLog string
 }
 
 const defaultInstallURL = "https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/install.sh"
@@ -127,6 +136,14 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 		return h.Config.Failover.TunablesText(), nil
 	case ActionFailoverSet:
 		return h.setFailoverTunable(cmd.Args)
+	case ActionWatchdogShow:
+		return h.watchdogShow()
+	case ActionWatchdogEnable:
+		return h.watchdogEnable()
+	case ActionWatchdogDisable:
+		return h.watchdogDisable()
+	case ActionWatchdogLog:
+		return h.watchdogLog()
 	default:
 		return "", fmt.Errorf("unknown action %q", cmd.Action)
 	}
@@ -476,6 +493,79 @@ func (h *RouterHandler) setFailoverTunable(args []string) (string, error) {
 		msg += " Демон перезапускается (~2с), чтобы применить."
 	}
 	return msg, nil
+}
+
+// watchdogShow reports both halves of "is this actually working": the
+// cron entry (WatchdogEnabled) and a cron daemon actually being there to
+// run it (CronRunning) -- an enabled entry with no cron daemon behind it
+// is silently inert, which is exactly the gap this closes.
+func (h *RouterHandler) watchdogShow() (string, error) {
+	if h.CronFile == "" {
+		return "", fmt.Errorf("вотчдог не настроен для этого агента")
+	}
+	enabled, err := install.WatchdogEnabled(h.CronFile)
+	if err != nil {
+		return "", err
+	}
+	cron := "работает"
+	if !install.CronRunning() {
+		cron = "НЕ запущен — запись ниже не сработает, пока его нет"
+	}
+	return fmt.Sprintf("вотчдог: %v (проверка каждые %s через %s)\ncron: %s",
+		enabled, install.WatchdogSchedule, h.InitScript, cron), nil
+}
+
+// watchdogEnable makes sure a cron daemon exists first (installing the
+// Entware `cron` package via opkg if needed), then writes the entry --
+// "enable" is a single button-press action rather than requiring cron
+// to already be present, same sequence `keenetic-xray watchdog enable`
+// runs over SSH.
+func (h *RouterHandler) watchdogEnable() (string, error) {
+	if h.CronFile == "" || h.InitScript == "" {
+		return "", fmt.Errorf("вотчдог не настроен для этого агента")
+	}
+	if err := install.EnsureCron(); err != nil {
+		return "", fmt.Errorf("cron недоступен и не установился: %w", err)
+	}
+	if err := install.SetWatchdogCron(h.CronFile, h.InitScript, h.WatchdogLog, true); err != nil {
+		return "", err
+	}
+	return "вотчдог включён (cron подтверждён работающим)", nil
+}
+
+func (h *RouterHandler) watchdogDisable() (string, error) {
+	if h.CronFile == "" {
+		return "", fmt.Errorf("вотчдог не настроен для этого агента")
+	}
+	if err := install.SetWatchdogCron(h.CronFile, h.InitScript, h.WatchdogLog, false); err != nil {
+		return "", err
+	}
+	return "вотчдог выключен", nil
+}
+
+// watchdogLog returns the tail of WatchdogLog -- restart events only,
+// not routine ticks (see install.SetWatchdogCron), so an empty result
+// means the watchdog has never had to intervene.
+func (h *RouterHandler) watchdogLog() (string, error) {
+	const maxLines = 40
+	if h.WatchdogLog == "" {
+		return "", fmt.Errorf("вотчдог не настроен для этого агента")
+	}
+	data, err := os.ReadFile(h.WatchdogLog)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "перезапусков не зафиксировано", nil
+		}
+		return "", err
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	if len(lines) == 0 || (len(lines) == 1 && lines[0] == "") {
+		return "перезапусков не зафиксировано", nil
+	}
+	if len(lines) > maxLines {
+		lines = lines[len(lines)-maxLines:]
+	}
+	return strings.Join(lines, "\n"), nil
 }
 
 // selfUpdate re-runs install.sh (whole keenetic-xray package: new .ipk,

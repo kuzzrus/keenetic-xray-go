@@ -181,6 +181,19 @@ underlying commands are still text-only: `/profile_list <router>` to
 see indices, then `/sub_setprimary <router> <index>` / `/sub_setbackup
 <router> <index>`.
 
+`🐕 Вотчдог` (`wdm:`) opens a four-button screen -- `📊 Статус` /
+`✅ Включить` / `⛔ Выключить` / `📜 Лог` (`wd_show`/`wd_enable`/
+`wd_disable`/`wd_log`, all parameterless so they go through the same
+`act:` + `callbackAction` path as `📊 Статус`/`🩺 Doctor` above, not a
+dedicated dialog). Controls the cron entry that restarts the daemon if
+rc.func ever finds it not running (see `docs/architecture.md`);
+`✅ Включить` calls `internal/install.EnsureCron` first, so a router
+that's never had a cron package installed gets one via opkg rather than
+silently writing an entry nothing will read. `📜 Лог` shows
+`watchdogLogPath()`'s tail -- restart events only, not routine ticks, so
+an empty log means the watchdog has never had to step in. All four are
+also `/watchdog <router> show|enable|disable|log` as text commands.
+
 `➕ Добавить роутер` starts a two-step text dialog (`telegram_wizard.go`):
 id, then display name. `✏️ Переименовать` (or `/rename <id> <name>`) is
 one step over `Store.RenameRouter`. State is per-chat; any `/command`

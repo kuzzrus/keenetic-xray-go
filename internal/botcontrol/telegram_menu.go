@@ -48,7 +48,7 @@ func routerCardKB(id string) inlineKeyboard {
 	return inlineKeyboard{InlineKeyboard: [][]inlineButton{
 		{{Text: "📊 Статус", CallbackData: "act:status:" + id}, {Text: "🩺 Doctor", CallbackData: "act:doctor:" + id}},
 		{{Text: "⬆️ primary", CallbackData: "act:sw_pri:" + id}, {Text: "⬇️ backup", CallbackData: "act:sw_bak:" + id}},
-		{{Text: "🔗 Источники", CallbackData: "srcm:" + id}},
+		{{Text: "🔗 Источники", CallbackData: "srcm:" + id}, {Text: "🐕 Вотчдог", CallbackData: "wdm:" + id}},
 		{{Text: "🔄 Обновить подписку", CallbackData: "act:sub_refresh:" + id}},
 		{{Text: "♻️ Рестарт демона", CallbackData: "act:restart:" + id}, {Text: "🔁 Обновить агент", CallbackData: "upd:" + id}},
 		{{Text: "✏️ Переименовать", CallbackData: "rename:" + id}, {Text: "📦 Установка агента", CallbackData: "install:" + id}},
@@ -98,6 +98,20 @@ func sourcesScreenKB(id string) inlineKeyboard {
 	}}
 }
 
+func watchdogScreenText(id string) string {
+	return "🐕 Вотчдог " + id + "\n\n" +
+		"Раз в пару минут проверяет, что демон жив, и перезапускает его, если нет -- " +
+		"rc.func сам по себе упавший процесс не поднимает."
+}
+
+func watchdogScreenKB(id string) inlineKeyboard {
+	return inlineKeyboard{InlineKeyboard: [][]inlineButton{
+		{{Text: "📊 Статус", CallbackData: "act:wd_show:" + id}, {Text: "📜 Лог", CallbackData: "act:wd_log:" + id}},
+		{{Text: "✅ Включить", CallbackData: "act:wd_enable:" + id}, {Text: "⛔ Выключить", CallbackData: "act:wd_disable:" + id}},
+		{{Text: "⬅️ Назад", CallbackData: "router:" + id}},
+	}}
+}
+
 // callbackAction maps a router-card button name to a Store command
 // action. Only parameterless commands are on the keyboard; the ones that
 // need an argument (sub_seturl, sub_setprimary/backup) stay text-only.
@@ -117,6 +131,14 @@ func callbackAction(name string) string {
 		return ActionDaemonRestart
 	case "self_update":
 		return ActionSelfUpdate
+	case "wd_show":
+		return ActionWatchdogShow
+	case "wd_enable":
+		return ActionWatchdogEnable
+	case "wd_disable":
+		return ActionWatchdogDisable
+	case "wd_log":
+		return ActionWatchdogLog
 	}
 	return ""
 }
@@ -201,6 +223,13 @@ func (b *TelegramBot) handleCallback(ctx context.Context, cb tgCallbackQuery) {
 			return
 		}
 		b.editCB(ctx, cb, sourcesScreenText(id), sourcesScreenKB(id))
+	case strings.HasPrefix(data, "wdm:"):
+		id := strings.TrimPrefix(data, "wdm:")
+		if !b.Store.HasRouter(id) {
+			b.editCB(ctx, cb, "нет такого роутера: "+id, b.routersListKB())
+			return
+		}
+		b.editCB(ctx, cb, watchdogScreenText(id), watchdogScreenKB(id))
 	case strings.HasPrefix(data, "srcp:"):
 		b.startSlotSourceWizard(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "srcp:"), true)
 	case strings.HasPrefix(data, "srcb:"):

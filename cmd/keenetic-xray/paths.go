@@ -38,6 +38,14 @@ func logDir() string {
 	return envOr("KEENETIC_XRAY_LOG_DIR", defaultLogDir)
 }
 
+// watchdogLogPath is where the watchdog cron entry appends a line each
+// time it actually restarts the daemon (not on every routine check) --
+// see install.SetWatchdogCron. Under logDir so `menu`'s existing log
+// tail already picks it up alongside anything else logged there.
+func watchdogLogPath() string {
+	return envOr("KEENETIC_XRAY_WATCHDOG_LOG", logDir()+"/watchdog.log")
+}
+
 const defaultRunDir = "/opt/var/run"
 
 func runDir() string {

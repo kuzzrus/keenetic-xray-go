@@ -37,6 +37,10 @@ const (
 	ActionSelfUpdate       = "self_update" // re-run install.sh on the router (whole keenetic-xray package)
 	ActionFailoverShow     = "failover_show"
 	ActionFailoverSet      = "failover_set" // args[0]=key, args[1]=value
+	ActionWatchdogShow     = "watchdog_show"
+	ActionWatchdogEnable   = "watchdog_enable" // ensures a cron daemon exists (installing it via opkg if needed) before writing the entry
+	ActionWatchdogDisable  = "watchdog_disable"
+	ActionWatchdogLog      = "watchdog_log" // restart events only, not routine ticks -- see internal/install.SetWatchdogCron
 )
 
 // Command is a single unit of work queued for a router by the control

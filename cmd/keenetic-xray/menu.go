@@ -59,7 +59,6 @@ func runMenu(stdin io.Reader, out io.Writer) error {
 			runAndReport(out, func() error { return cmdProfile([]string{"list"}) })
 		case "4":
 			runAndReport(out, func() error { return cmdSubscription([]string{"refresh"}) })
-			menuRestartHint(out)
 		case "5":
 			runAndReport(out, func() error { return cmdSetup(nil) })
 		case "6":
@@ -91,23 +90,23 @@ func menuProxy0(in *bufio.Reader, out io.Writer) {
 		runAndReport(out, func() error { return cmdProxy0([]string{"show"}) })
 	case "b", "on", "set":
 		runAndReport(out, func() error { return cmdProxy0([]string{"set"}) })
-		menuRestartHint(out)
 	case "c", "off":
 		runAndReport(out, func() error { return cmdProxy0([]string{"off"}) })
-		menuRestartHint(out)
 	default:
 		fmt.Fprintln(out, "неизвестный пункт")
 	}
 }
 
-func menuRestartHint(out io.Writer) {
-	fmt.Fprintln(out, "  (применится после «7) Перезапустить демон»)")
-}
-
-// menuRestartDaemon restarts the daemon without the extra Y/n that
-// offerDaemonRestart asks -- picking the menu item is the confirmation.
-// initScript is defined in daemonctl.go.
+// menuRestartDaemon applies any pending config change: signalDaemonReload
+// first (live, no restart -- see applyDaemonChange in daemonctl.go), and
+// only falls back to a full init.d restart if that's not possible.
+// Skips the Y/n offerDaemonRestart asks -- picking this menu item is the
+// confirmation. initScript is defined in daemonctl.go.
 func menuRestartDaemon(out io.Writer) {
+	if signalDaemonReload() {
+		fmt.Fprintln(out, "применено на лету (без перезапуска)")
+		return
+	}
 	if fi, err := os.Stat(initScript); err != nil || fi.IsDir() {
 		fmt.Fprintln(out, "init-скрипт не найден -- запусти демон вручную: keenetic-xray daemon")
 		return

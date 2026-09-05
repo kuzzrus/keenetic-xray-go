@@ -77,6 +77,7 @@ func subscriptionRefresh() error {
 		return err
 	}
 	fmt.Printf("refreshed: %d profiles\n", len(cfg.Profiles))
+	applyDaemonChange(nil, false)
 	return nil
 }
 
@@ -129,6 +130,7 @@ func subscriptionSetRole(args []string, primary bool) error {
 		return err
 	}
 	fmt.Printf("%s set to profile %d (%s)\n", roleWord(primary), idx, cfg.Profiles[idx].Remark)
+	applyDaemonChange(nil, false)
 	return nil
 }
 

@@ -50,6 +50,25 @@ func defaultAgentTokenPath() string {
 	return envOr("KEENETIC_XRAY_AGENT_TOKEN_FILE", defaultAgentTokenFile)
 }
 
+// defaultCronFile is Entware's per-user crontab (dcron/vixie-cron
+// convention -- confirmed against the reference project's own scheduled
+// recovery entries, internal/install.SetWatchdogCron).
+const defaultCronFile = "/opt/var/spool/cron/crontabs/root"
+
+func cronFilePath() string {
+	return envOr("KEENETIC_XRAY_CRON_FILE", defaultCronFile)
+}
+
+// pidFilePath is where `keenetic-xray daemon` records its own PID, so a
+// CLI command run afterward (setup, subscription, proxy0, failover set)
+// can find it and signal a live config reload -- see signalDaemonReload
+// in daemonctl.go. Deliberately project-controlled rather than reusing
+// whatever pidfile rc.func manages internally: that path/format isn't
+// part of any documented contract here.
+func pidFilePath() string {
+	return envOr("KEENETIC_XRAY_PID_FILE", runDir()+"/keenetic-xray.pid")
+}
+
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v

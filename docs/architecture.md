@@ -17,9 +17,12 @@ split.
 Current subcommands: `version`, `setup`, `daemon`, `profile`,
 `subscription`, `status`, `doctor`, `variant`, `agent` (configure/enable/
 disable/status for the control-server polling loop -- Full variant only,
-see `docs/bot-control-design.md`), and the hidden `internal
-postinst-setup` / `internal prerm-cleanup` used only by the `.ipk`'s
-packaging scripts.
+see `docs/bot-control-design.md`), `proxy0`, `failover`, `watchdog`
+(show/enable/disable the cron entry that restarts the daemon if it's not
+running -- rc.func doesn't do this on its own, unlike the
+control-server's systemd unit's `Restart=on-failure`), and the hidden
+`internal postinst-setup` / `internal prerm-cleanup` used only by the
+`.ipk`'s packaging scripts.
 
 ## Package layout
 
@@ -96,11 +99,18 @@ flapping primary every 30 seconds.
   all LAN traffic through the local proxy port is Keenetic's own
   Policy-Based Routing feature, configured separately in the router's
   web UI -- this project never touches `iptables`/TPROXY.
-- **No CLI↔daemon IPC yet.** `status`/`doctor` read `config.json`
-  directly; they report saved configuration, not live daemon state. The
-  bot-control agent doesn't need this either -- it runs *inside* `daemon`
-  as a goroutine (see `docs/bot-control-design.md`), sharing the same
-  in-memory `*failover.Daemon` rather than talking to it over IPC. A
-  future version could still add a Unix-socket protocol for the CLI's
-  benefit, but it wasn't needed to make the CLI/wizard genuinely useful,
-  so it wasn't built speculatively.
+- **No query IPC.** `status`/`doctor` read `config.json` directly; they
+  report saved configuration, not live daemon state (uptime, current
+  role, transition history). The bot-control agent doesn't need this
+  either -- it runs *inside* `daemon` as a goroutine (see
+  `docs/bot-control-design.md`), sharing the same in-memory
+  `*failover.Daemon` rather than talking to it over IPC. There *is* a
+  minimal one-way channel for the opposite direction, applying a change
+  rather than reading state: `setup`/`subscription`/`proxy0`/`failover
+  set` all signal a running daemon's pidfile with SIGHUP after saving,
+  which reloads config.json and re-applies the current live role
+  (`failover.Daemon.ReloadConfig`) -- restarting only the supervised
+  xray-core child, not the daemon process. A future version could still
+  add a full request/response protocol (a Unix socket) for the query
+  direction, but it wasn't needed to make the CLI/wizard genuinely
+  useful, so it wasn't built speculatively.

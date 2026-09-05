@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
+	"github.com/kuzzrus/keenetic-xray-go/internal/install"
 )
 
 func TestCmdInternal_PostinstSetupThenPrermCleanup(t *testing.T) {
@@ -16,6 +17,7 @@ func TestCmdInternal_PostinstSetupThenPrermCleanup(t *testing.T) {
 	t.Setenv("KEENETIC_XRAY_LOG_DIR", filepath.Join(dir, "log"))
 	t.Setenv("KEENETIC_XRAY_RUN_DIR", filepath.Join(dir, "run"))
 	t.Setenv("KEENETIC_XRAY_OPT", dir)
+	t.Setenv("KEENETIC_XRAY_CRON_FILE", filepath.Join(dir, "cron", "root"))
 
 	if err := run([]string{"internal", "postinst-setup"}); err != nil {
 		t.Fatalf("postinst-setup: %v", err)
@@ -30,6 +32,9 @@ func TestCmdInternal_PostinstSetupThenPrermCleanup(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Dir(configFile)); err != nil {
 		t.Errorf("config dir should exist: %v", err)
+	}
+	if enabled, err := install.WatchdogEnabled(cronFilePath()); err != nil || !enabled {
+		t.Errorf("watchdog should be enabled after postinst-setup: enabled=%v err=%v", enabled, err)
 	}
 
 	// A second postinst-setup run (upgrade case) must not touch an

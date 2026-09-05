@@ -57,6 +57,8 @@ func run(args []string) error {
 		return cmdProxy0(rest)
 	case "failover":
 		return cmdFailover(rest)
+	case "watchdog":
+		return cmdWatchdog(rest)
 	case "internal":
 		return cmdInternal(rest)
 	default:
@@ -87,7 +89,8 @@ commands:
   variant {show|set mini|set full}
   agent {configure <url> <router-id> <fingerprint> <token>|enable|disable|status}
   proxy0 {show|set [--lan-ip=192.168.x.1]|off}   point Keenetic's Proxy0 at the local inbound
-  failover {show|set <key> <value>}              tune health-check thresholds (restart to apply)`)
+  failover {show|set <key> <value>}              tune health-check thresholds (applies live)
+  watchdog {show|enable|disable}                  cron entry that restarts the daemon if it's not running`)
 }
 
 func cmdDaemon(args []string) error {
@@ -111,6 +114,33 @@ func cmdDaemon(args []string) error {
 		<-sig
 		fmt.Println("shutting down...")
 		cancel()
+	}()
+
+	// Best-effort: a CLI command (setup, subscription, proxy0, failover
+	// set) that just saved a config change signals this pidfile's owner
+	// with SIGHUP to apply it live (see ReloadConfig below) instead of
+	// needing a full daemon restart. Not writing it just means those
+	// commands fall back to the old "restart to apply" guidance.
+	if cleanup, err := writeDaemonPIDFile(); err != nil {
+		fmt.Fprintln(os.Stderr, "warning: could not write pidfile, live config reload from the CLI won't be available:", err)
+	} else {
+		defer cleanup()
+	}
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	go func() {
+		for range hup {
+			fresh, err := config.Load(configPath())
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "reload: loading config:", err)
+				continue
+			}
+			if d.ReloadConfig(ctx, fresh) {
+				fmt.Println("reload: applied")
+			} else {
+				fmt.Fprintln(os.Stderr, "reload: daemon not ready yet")
+			}
+		}
 	}()
 
 	if p, b := cfg.Primary(), cfg.Backup(); p != nil && b != nil {

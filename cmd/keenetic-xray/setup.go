@@ -163,7 +163,7 @@ func runSetupNonInteractive(cfg *config.Config, o setupOpts) error {
 	if o.Proxy0 == "yes" || (o.Proxy0 != "no" && keenetic.Available()) {
 		doSetupProxy0(cfg)
 	}
-	fmt.Println("apply with: /opt/etc/init.d/S99keenetic-xray restart")
+	applyDaemonChange(nil, false)
 	return nil
 }
 
@@ -213,7 +213,7 @@ func runSetupInteractive(reader *bufio.Reader, cfg *config.Config, o setupOpts) 
 		maybeSetupProxy0(reader, cfg)
 	}
 
-	offerDaemonRestart(reader)
+	applyDaemonChange(reader, true)
 	return nil
 }
 

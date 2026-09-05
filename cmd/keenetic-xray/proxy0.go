@@ -112,7 +112,7 @@ func proxy0Set(cfg *config.Config, args []string) error {
 		return err
 	}
 	fmt.Printf("%s -> %s:%d\n", proxy0IfaceName(cfg.Proxy0.Interface), ip, port)
-	offerDaemonRestart(bufio.NewReader(os.Stdin))
+	applyDaemonChange(bufio.NewReader(os.Stdin), true)
 	return nil
 }
 
@@ -128,7 +128,8 @@ func proxy0Off(cfg *config.Config) error {
 	if err := cfg.Save(configPath()); err != nil {
 		return err
 	}
-	fmt.Println("proxy0 disabled (the interface was brought down; Xray rebinds to loopback on the next daemon restart)")
+	fmt.Println("proxy0 disabled (the interface was brought down; xray rebinds to loopback once applied)")
+	applyDaemonChange(bufio.NewReader(os.Stdin), true)
 	return nil
 }
 

@@ -85,6 +85,15 @@ func cmdPostinstSetup() error {
 	if len(cfg.Profiles) == 0 {
 		fmt.Println("run `keenetic-xray setup` to configure your VLESS profiles")
 	}
+
+	// Best-effort, on by default: rc.func doesn't respawn a crashed
+	// daemon on its own (unlike the control-server's systemd unit,
+	// Restart=on-failure). A cron dependency missing/unstartable just
+	// means no watchdog, same as ensure-xray-core's own best-effort
+	// framing above -- not fatal to the install.
+	if err := install.SetWatchdogCron(cronFilePath(), initScript, true); err != nil {
+		fmt.Println("warning: could not install the watchdog cron entry:", err)
+	}
 	return nil
 }
 

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -160,6 +161,97 @@ func TestDaemon_ForceSwitchAndState_NotRunning(t *testing.T) {
 	defer cancel2()
 	if _, ran := d.State(ctx2); ran {
 		t.Error("expected State to report not-running when Run is not active")
+	}
+}
+
+func TestDaemon_ReloadConfig_NotRunning(t *testing.T) {
+	cfg := config.Default()
+	d := NewDaemon(Paths{}, cfg)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if d.ReloadConfig(ctx, config.Default()) {
+		t.Error("expected ReloadConfig to report not-running when Run is not active")
+	}
+}
+
+// TestDaemon_ReloadConfig is the regression test for a documented, known
+// gap (daemon.go's own Run doc comment): a CLI command like `keenetic-
+// xray setup` runs as its own process, saves config.json, and exits --
+// the *running* daemon process never notices unless it's fully
+// restarted. This proves ReloadConfig actually applies a config saved
+// by someone else: the daemon's shared *config.Config (same pointer the
+// test's own cfg variable holds -- ReloadConfig doesn't hand back a new
+// one, it mutates in place) reflects the reloaded backup profile, the
+// SOCKS port realActions caches at startup gets refreshed, and -- since
+// this test forces itself onto backup first -- the supervised xray-core
+// process actually gets regenerated and restarted against the *new*
+// backup profile, not silently left running the stale one.
+func TestDaemon_ReloadConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.Profiles = []config.Profile{
+		{UUID: "p", Address: "primary.invalid", Port: 443, Network: "tcp", Security: "none", Encryption: "none", Remark: "primary"},
+		{UUID: "b1", Address: "backup1.invalid", Port: 443, Network: "tcp", Security: "none", Encryption: "none", Remark: "backup1"},
+	}
+	cfg.PrimaryIndex = 0
+	cfg.BackupIndex = 1
+	cfg.Failover.CheckIntervalSeconds = 60  // quiet: no automatic ticks during the test
+	cfg.Failover.FailuresRequired = 1 << 30 // and never fail over on its own anyway
+
+	prodPath := filepath.Join(dir, "production.json")
+	paths := Paths{
+		XrayBinary:       os.Args[0],
+		ProductionConfig: prodPath,
+		PretestConfig:    filepath.Join(dir, "pretest.json"),
+		Env:              []string{"FAILOVER_TEST_HELPER=1"},
+	}
+	d := NewDaemon(paths, cfg)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runErr := make(chan error, 1)
+	go func() { runErr <- d.Run(ctx) }()
+
+	// Force onto backup1 first, so the reload below has to actually
+	// regenerate xray-production.json for the change to show up there.
+	if err := d.ForceSwitch(ctx, RoleBackup); err != nil {
+		t.Fatalf("ForceSwitch(backup): %v", err)
+	}
+
+	fresh := config.Default()
+	fresh.Profiles = []config.Profile{
+		cfg.Profiles[0],
+		{UUID: "b2", Address: "backup2.invalid", Port: 443, Network: "tcp", Security: "none", Encryption: "none", Remark: "backup2"},
+	}
+	fresh.PrimaryIndex, fresh.BackupIndex = 0, 1
+	fresh.Failover = cfg.Failover
+	fresh.Failover.SOCKSPort = 19191 // distinct from Default's 1080 -- proves the derived field refreshes too
+
+	if !d.ReloadConfig(ctx, fresh) {
+		t.Fatal("ReloadConfig reported the daemon not running")
+	}
+
+	if b := cfg.Backup(); b == nil || b.Remark != "backup2" {
+		t.Errorf("cfg.Backup() after reload = %+v, want backup2 -- ReloadConfig mutates the shared *Config in place", b)
+	}
+	if got := d.actions.socks; got != "127.0.0.1:19191" {
+		t.Errorf("actions.socks = %q, want it refreshed to the reloaded SOCKS port", got)
+	}
+
+	data, err := os.ReadFile(prodPath)
+	if err != nil {
+		t.Fatalf("reading production config: %v", err)
+	}
+	if !strings.Contains(string(data), "backup2.invalid") {
+		t.Errorf("production config = %s, want it regenerated for the reloaded backup profile (backup2.invalid)", data)
+	}
+
+	cancel()
+	select {
+	case <-runErr:
+	case <-time.After(20 * time.Second):
+		t.Fatal("Run did not return after ctx cancellation")
 	}
 }
 

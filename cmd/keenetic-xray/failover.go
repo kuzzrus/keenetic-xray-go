@@ -46,6 +46,7 @@ func failoverSet(args []string) error {
 	if err := cfg.Save(configPath()); err != nil {
 		return err
 	}
-	fmt.Printf("%s = %s\nRestart the daemon to apply: %s restart\n", args[0], args[1], initScript)
+	fmt.Printf("%s = %s\n", args[0], args[1])
+	applyDaemonChange(nil, false)
 	return nil
 }

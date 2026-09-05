@@ -357,6 +357,41 @@ func (d *Daemon) ForceSwitch(ctx context.Context, role Role) error {
 	return switchErr
 }
 
+// ReloadConfig copies fresh's fields into the daemon's live config in
+// place -- the *same pointer* every consumer already holds (Daemon,
+// realActions, and, when the bot-control agent is enabled, RouterHandler
+// all share one *config.Config, wired once in cmd/keenetic-xray's
+// cmdDaemon), so nothing needs telling separately. Two derived fields
+// that are otherwise only computed at startup get refreshed too:
+// realActions.socks (the SOCKS address ProbeLive/ProbeIsolated dial,
+// cached from Failover.SOCKSPort) and Machine's own copy of the tunable
+// failure/recovery counts. Then, if both slots are still configured,
+// re-applies the current live role -- restarting only the supervised
+// xray-core child (SwitchLiveTo), not this daemon process -- so a
+// changed primary/backup profile or a changed port actually takes
+// effect. Runs on Run's own goroutine via do, serialized with Tick
+// exactly like ForceSwitch, so it can never race a health-check probe
+// mid-flight. Safe to call concurrently with Run; the return value is
+// false if Run isn't currently active to answer (e.g. a reload signal
+// arrived before Run started, or after it returned).
+//
+// Not handled: a pretest instance already running (StateTestingRecovery
+// or later) keeps probing the pre-reload primary until the state
+// machine's own next cycle rebuilds it (StartIsolatedPretest runs fresh
+// on every tickActiveBackup/tickTestingRecovery) -- bounded, minor
+// staleness rather than a correctness problem, not worth the extra
+// complexity of reaching into an in-progress pretest here too.
+func (d *Daemon) ReloadConfig(ctx context.Context, fresh *config.Config) bool {
+	return d.do(ctx, func(ctx context.Context) {
+		*d.cfg = *fresh
+		d.actions.socks = fmt.Sprintf("127.0.0.1:%d", d.cfg.Failover.SOCKSPort)
+		d.machine.cfg = failoverConfig(d.cfg.Failover)
+		if d.cfg.Primary() != nil && d.cfg.Backup() != nil {
+			_ = d.actions.SwitchLiveTo(ctx, d.actions.liveRole)
+		}
+	})
+}
+
 // Run starts the production xray-core process on primary and then drives
 // the state machine's Tick once per CheckIntervalSeconds, and any
 // commands submitted via do (ForceSwitch/State), until ctx is cancelled.
@@ -368,11 +403,12 @@ func (d *Daemon) ForceSwitch(ctx context.Context, role Role) error {
 // setup`; erroring out here made that startup exit almost instantly,
 // which made the init script's post-start "is it still running" check
 // report failure and the whole opkg installation register as failed --
-// confirmed on real hardware. There's no live config-reload here (the
-// project has no CLI<->daemon IPC yet, a known, separately-documented
-// gap): after running `setup`, the daemon needs a manual restart
-// (`/opt/etc/init.d/S99keenetic-xray restart`) to pick up the new
-// profiles.
+// confirmed on real hardware. A first-time `setup` still needs a manual
+// restart to actually start serving (Run never got called with a
+// primary/backup to idle-check in the first place); a *later* config
+// change from a CLI command applies live instead, via ReloadConfig --
+// see cmd/keenetic-xray's signalDaemonReload/applyDaemonChange, which
+// SIGHUPs this process's pidfile after saving.
 func (d *Daemon) Run(ctx context.Context) error {
 	if d.cfg.Primary() == nil || d.cfg.Backup() == nil {
 		fmt.Println("failover: no primary/backup profiles configured yet -- run `keenetic-xray setup`, then restart this daemon")

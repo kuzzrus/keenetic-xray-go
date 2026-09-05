@@ -128,8 +128,9 @@ when primary is a single flaky server and the defaults switch too
 eagerly. Keys: `check_interval_seconds`, `failures_required`,
 `recovery_successes_required`, `cooldown_cycles`,
 `rollback_backoff_seconds`, `check_retries`, `check_retry_delay_seconds`,
-`health_check_url`. `set` takes effect after a daemon restart (no live
-config reload yet).
+`health_check_url`. `set` applies live -- it signals a running daemon to
+reload `config.json`, no restart needed (falls back to the old
+restart-to-apply guidance if the daemon isn't reachable).
 
 `menu` is a numbered control panel for running the router from an SSH
 session without the Telegram bot: status, `doctor`, profile list,
@@ -138,8 +139,11 @@ refresh the subscription, re-run `setup` to change the source, toggle
 subcommand above -- the menu is just the discoverable front door.
 
 `status`/`doctor` currently report saved configuration only (`config.json`),
-not live daemon state -- there's no CLI↔daemon IPC layer yet. `agent enable`
-requires the Full variant; see `docs/bot-control-design.md`.
+not live daemon state (uptime, current role, transition history) -- reading
+that still has no CLI↔daemon channel. Applying a change is different:
+`setup`/`subscription`/`proxy0`/`failover set` all signal a running daemon
+to reload live (see above). `agent enable` requires the Full variant; see
+`docs/bot-control-design.md`.
 
 ## Remote control (Telegram bot)
 

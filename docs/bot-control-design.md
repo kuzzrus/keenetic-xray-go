@@ -325,11 +325,16 @@ ever "queued", never "done". `notifyIfUpdated`
 (`cmd/keenetic-xray-control-server/versioncheck.go`) is how completion
 gets reported instead: on every startup, the *new* process compares its
 own `version.String()` against what a small file next to the queue
-recorded last run, and DMs every allowed chat ("✅ Сервер обновлён: vX →
-vY") only when they differ -- silent on a first-ever install (nothing to
-compare against) and on an unchanged version (a plain restart -- a
-reboot, `systemctl restart` for some unrelated reason -- is not an
-update and must not be reported as one).
+recorded last run, and DMs every allowed chat -- "✅ Сервер обновлён: vX
+→ vY" when they differ, "✅ Сервер запущен: vX" when there's no prior
+version recorded (missing or empty file: not just a genuinely fresh
+install, but also -- confirmed live -- what an *existing* server's very
+first run of this feature looks like, since nothing wrote the file
+before it existed; staying silent there instead, the original behavior,
+was the actual bug: it meant nobody saw a confirmation on exactly the
+update that mattered most). Silent only on an unchanged version -- a
+plain restart (a reboot, `systemctl restart` for some unrelated reason)
+is not an update and must not be reported as one.
 
 ### The `setup` wizard
 

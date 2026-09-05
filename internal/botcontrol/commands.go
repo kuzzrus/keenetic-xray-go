@@ -48,12 +48,17 @@ type RouterHandler struct {
 	// Empty -> defaultInstallURL.
 	InstallURL string
 
-	// CronFile and WatchdogLog back the watchdog_* actions -- same path
-	// helpers cmd/keenetic-xray uses (cronFilePath/watchdogLogPath).
-	// Empty CronFile -> those actions return an error rather than
-	// operating on some surprising default path.
-	CronFile    string
-	WatchdogLog string
+	// CronFile, WatchdogScript and WatchdogLog back the watchdog_*
+	// actions -- same path helpers cmd/keenetic-xray uses
+	// (cronFilePath/watchdogScriptPath/watchdogLogPath). WatchdogScript
+	// is where install.SetWatchdogCron writes the tiny script the cron
+	// entry runs (kept out of the crontab line itself so busybox crond
+	// doesn't echo it to syslog every tick). Empty CronFile or
+	// WatchdogScript -> the enable/disable actions return an error
+	// rather than operating on some surprising default path.
+	CronFile       string
+	WatchdogScript string
+	WatchdogLog    string
 }
 
 const defaultInstallURL = "https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/install.sh"
@@ -529,23 +534,23 @@ func (h *RouterHandler) watchdogShow() (string, error) {
 // to already be present, same sequence `keenetic-xray watchdog enable`
 // runs over SSH.
 func (h *RouterHandler) watchdogEnable() (string, error) {
-	if h.CronFile == "" || h.InitScript == "" {
+	if h.CronFile == "" || h.WatchdogScript == "" || h.InitScript == "" {
 		return "", fmt.Errorf("вотчдог не настроен для этого агента")
 	}
 	if err := install.EnsureCron(); err != nil {
 		return "", fmt.Errorf("cron недоступен и не установился: %w", err)
 	}
-	if err := install.SetWatchdogCron(h.CronFile, h.InitScript, h.WatchdogLog, true); err != nil {
+	if err := install.SetWatchdogCron(h.CronFile, h.WatchdogScript, h.InitScript, h.WatchdogLog, true); err != nil {
 		return "", err
 	}
 	return "вотчдог включён (cron подтверждён работающим)", nil
 }
 
 func (h *RouterHandler) watchdogDisable() (string, error) {
-	if h.CronFile == "" {
+	if h.CronFile == "" || h.WatchdogScript == "" {
 		return "", fmt.Errorf("вотчдог не настроен для этого агента")
 	}
-	if err := install.SetWatchdogCron(h.CronFile, h.InitScript, h.WatchdogLog, false); err != nil {
+	if err := install.SetWatchdogCron(h.CronFile, h.WatchdogScript, h.InitScript, h.WatchdogLog, false); err != nil {
 		return "", err
 	}
 	return "вотчдог выключен", nil

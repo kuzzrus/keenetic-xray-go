@@ -158,9 +158,10 @@ func cmdDaemon(args []string) error {
 		handler := &botcontrol.RouterHandler{
 			Daemon: d, Config: cfg, ConfigPath: configPath(),
 			XrayBinary: xrayBinaryPath(), OptPath: optPath(),
-			InitScript:  initScript,
-			CronFile:    cronFilePath(),
-			WatchdogLog: watchdogLogPath(),
+			InitScript:     initScript,
+			CronFile:       cronFilePath(),
+			WatchdogScript: watchdogScriptPath(),
+			WatchdogLog:    watchdogLogPath(),
 		}
 		opts.StatusFunc = func(ctx context.Context) string {
 			out, _ := handler.Handle(ctx, botcontrol.Command{Action: botcontrol.ActionStatus})

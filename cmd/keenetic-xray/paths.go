@@ -1,6 +1,9 @@
 package main
 
-import "os"
+import (
+	"os"
+	"path/filepath"
+)
 
 const defaultConfigPath = "/opt/etc/keenetic-xray/config.json"
 
@@ -44,6 +47,17 @@ func logDir() string {
 // tail already picks it up alongside anything else logged there.
 func watchdogLogPath() string {
 	return envOr("KEENETIC_XRAY_WATCHDOG_LOG", logDir()+"/watchdog.log")
+}
+
+// watchdogScriptPath is the small shell script the watchdog cron entry
+// runs. It's a file rather than an inline crontab command because
+// busybox crond echoes the whole command of every job to syslog on each
+// tick -- an inline snippet would litter the router log every couple of
+// minutes (see install.SetWatchdogCron). Kept next to config.json so a
+// package purge (install.PrermCleanup) removes it along with everything
+// else under the config dir.
+func watchdogScriptPath() string {
+	return envOr("KEENETIC_XRAY_WATCHDOG_SCRIPT", filepath.Dir(configPath())+"/watchdog.sh")
 }
 
 const defaultRunDir = "/opt/var/run"

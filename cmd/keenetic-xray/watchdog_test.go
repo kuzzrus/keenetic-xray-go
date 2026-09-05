@@ -10,7 +10,9 @@ import (
 )
 
 func TestCmdWatchdog_Disable(t *testing.T) {
-	t.Setenv("KEENETIC_XRAY_CRON_FILE", filepath.Join(t.TempDir(), "cron", "root"))
+	dir := t.TempDir()
+	t.Setenv("KEENETIC_XRAY_CRON_FILE", filepath.Join(dir, "cron", "root"))
+	t.Setenv("KEENETIC_XRAY_WATCHDOG_SCRIPT", filepath.Join(dir, "watchdog.sh"))
 
 	if err := cmdWatchdog([]string{"disable"}); err != nil {
 		t.Fatalf("watchdog disable: %v", err)
@@ -43,14 +45,20 @@ func TestCmdWatchdog_Show_DoesNotError(t *testing.T) {
 // daemon to run it) is exactly the silent-failure mode this whole
 // feature exists to avoid.
 func TestCmdWatchdog_Enable_FailsCleanlyWithoutRealCron(t *testing.T) {
-	cronFile := filepath.Join(t.TempDir(), "cron", "root")
+	dir := t.TempDir()
+	cronFile := filepath.Join(dir, "cron", "root")
+	scriptPath := filepath.Join(dir, "watchdog.sh")
 	t.Setenv("KEENETIC_XRAY_CRON_FILE", cronFile)
+	t.Setenv("KEENETIC_XRAY_WATCHDOG_SCRIPT", scriptPath)
 
 	if err := cmdWatchdog([]string{"enable"}); err == nil {
 		t.Fatal("expected an error: no real cron/opkg is available in this environment")
 	}
 	if _, err := os.Stat(cronFile); !os.IsNotExist(err) {
 		t.Errorf("cron file should not have been written when EnsureCron failed first, stat err = %v", err)
+	}
+	if _, err := os.Stat(scriptPath); !os.IsNotExist(err) {
+		t.Errorf("script should not have been written when EnsureCron failed first, stat err = %v", err)
 	}
 }
 

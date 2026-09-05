@@ -45,51 +45,113 @@ func TestFailoverEvents_RendersAndCloses(t *testing.T) {
 
 func TestRenderFailoverEvent_Kinds(t *testing.T) {
 	cases := []struct {
-		name     string
-		in       failover.Event
-		wantKind string
+		name        string
+		in          failover.Event
+		wantForward bool
+		wantKind    string // only checked when wantForward
 	}{
-		{"daemon start", failover.Event{Kind: failover.EventDaemonStart}, "daemon_start"},
-		{"settle onto primary", failover.Event{Kind: failover.EventFailover, From: failover.StateCooldown, To: failover.StateActivePrimary}, "recovered"},
-		{"confirmed recovery", failover.Event{Kind: failover.EventFailover, From: failover.StateConfirmingRecovery, To: failover.StateCooldown}, "recovered"},
-		{"fail away from primary", failover.Event{Kind: failover.EventFailover, From: failover.StateActivePrimary, To: failover.StateCooldown}, "failover"},
-		{"rollback", failover.Event{Kind: failover.EventFailover, From: failover.StateConfirmingRecovery, To: failover.StateActiveBackup}, "failover"},
+		{"daemon start", failover.Event{Kind: failover.EventDaemonStart}, true, "daemon_start"},
+		{"fail away from primary", failover.Event{Kind: failover.EventFailover, From: failover.StateActivePrimary, To: failover.StateCooldown}, true, "failover"},
+		{"confirmed recovery", failover.Event{Kind: failover.EventFailover, From: failover.StateConfirmingRecovery, To: failover.StateCooldown}, true, "recovered"},
+		{"rollback", failover.Event{Kind: failover.EventFailover, From: failover.StateConfirmingRecovery, To: failover.StateActiveBackup}, true, "failover"},
+		// Internal churn -- coalesced away, not notified.
+		{"settle onto primary", failover.Event{Kind: failover.EventFailover, From: failover.StateCooldown, To: failover.StateActivePrimary}, false, ""},
+		{"enter recovery testing", failover.Event{Kind: failover.EventFailover, From: failover.StateCooldown, To: failover.StateTestingRecovery}, false, ""},
+		{"switch back, confirming", failover.Event{Kind: failover.EventFailover, From: failover.StateTestingRecovery, To: failover.StateConfirmingRecovery}, false, ""},
 	}
 	for _, c := range cases {
-		if got := renderFailoverEvent(c.in).Kind; got != c.wantKind {
-			t.Errorf("%s: Kind = %q, want %q", c.name, got, c.wantKind)
+		var leftAt time.Time
+		ev, forward := renderFailoverEvent(c.in, &leftAt)
+		if forward != c.wantForward {
+			t.Errorf("%s: forward = %v, want %v", c.name, forward, c.wantForward)
+			continue
+		}
+		if forward && ev.Kind != c.wantKind {
+			t.Errorf("%s: Kind = %q, want %q", c.name, ev.Kind, c.wantKind)
 		}
 	}
 }
 
-func TestTelegramBot_NotifyEvent_MutesFlapButNotRecovery(t *testing.T) {
+func TestRenderFailoverEvent_CoalescesAndTimesRecovery(t *testing.T) {
+	var leftAt time.Time
+	t0 := time.Now()
+
+	// Leave primary.
+	ev, fwd := renderFailoverEvent(failover.Event{
+		Kind: failover.EventFailover, From: failover.StateActivePrimary, To: failover.StateCooldown, At: t0,
+	}, &leftAt)
+	if !fwd || ev.Kind != "failover" {
+		t.Fatalf("leave-primary: fwd=%v kind=%q", fwd, ev.Kind)
+	}
+
+	// Internal churn -- all dropped.
+	for _, tr := range [][2]failover.State{
+		{failover.StateCooldown, failover.StateTestingRecovery},
+		{failover.StateTestingRecovery, failover.StateConfirmingRecovery},
+	} {
+		if _, fwd := renderFailoverEvent(failover.Event{
+			Kind: failover.EventFailover, From: tr[0], To: tr[1], At: t0.Add(time.Minute),
+		}, &leftAt); fwd {
+			t.Errorf("%v->%v should be dropped", tr[0], tr[1])
+		}
+	}
+
+	// Recovery confirmed 4 minutes later -- one message, with the elapsed note.
+	ev, fwd = renderFailoverEvent(failover.Event{
+		Kind: failover.EventFailover, From: failover.StateConfirmingRecovery, To: failover.StateCooldown, At: t0.Add(4 * time.Minute),
+	}, &leftAt)
+	if !fwd || ev.Kind != "recovered" {
+		t.Fatalf("recovery: fwd=%v kind=%q", fwd, ev.Kind)
+	}
+	if !strings.Contains(ev.Text, "был на backup 4m") {
+		t.Errorf("recovery text = %q, want the 'был на backup 4m' note", ev.Text)
+	}
+	if !leftAt.IsZero() {
+		t.Error("leftPrimaryAt should be cleared after a recovery")
+	}
+}
+
+func TestTelegramBot_NotifyEvent_MuteHoldsThroughRecovery(t *testing.T) {
 	srv, fake := newFakeTelegram(t)
 	store := newBotStore(t)
 	mustRegister(t, store, "r1")
 	b := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL}
 
+	// Drive it past the flap threshold, interleaving recoveries the way a
+	// real recover-then-fail-again storm does.
 	for i := 0; i < flapThreshold+3; i++ {
 		b.NotifyEvent("r1", Event{Kind: "failover", Text: "⚡ flap"})
+		b.NotifyEvent("r1", Event{Kind: "recovered", Text: "✅ primary восстановился"})
 	}
-	b.NotifyEvent("r1", Event{Kind: "recovered", Text: "⚡ primary восстановился"})
-	b.NotifyEvent("r1", Event{Kind: "failover", Text: "⚡ flap again"})
 
 	texts := fake.sentTexts()
-	rawFlaps := 0
+	rawFlaps, recoveries := 0, 0
 	for _, tx := range texts {
 		if strings.Contains(tx, "⚡ flap") {
 			rawFlaps++
 		}
+		if strings.Contains(tx, "восстановился") {
+			recoveries++
+		}
 	}
-	// (flapThreshold-1) before the mute + 1 more after "recovered" clears it.
-	if rawFlaps > flapThreshold {
-		t.Errorf("too many raw flap messages got through: %d\n%v", rawFlaps, texts)
+	if rawFlaps >= flapThreshold {
+		t.Errorf("raw flap messages not muted: %d\n%v", rawFlaps, texts)
+	}
+	if recoveries >= flapThreshold {
+		t.Errorf("recovery messages should also be muted during a flap storm: %d\n%v", recoveries, texts)
 	}
 	if !anyContains(texts, "приглушены") {
 		t.Errorf("expected a mute notice, got %v", texts)
 	}
-	if !anyContains(texts, "восстановился") {
-		t.Errorf("a 'recovered' event must always be delivered, got %v", texts)
+
+	// daemon_start clears the mute and is always delivered.
+	b.NotifyEvent("r1", Event{Kind: "daemon_start", Text: "▶️ демон запущен"})
+	if !anyContains(fake.sentTexts(), "демон запущен") {
+		t.Error("daemon_start must be delivered and clear the mute")
+	}
+	b.NotifyEvent("r1", Event{Kind: "failover", Text: "⚡ post-restart flap"})
+	if !anyContains(fake.sentTexts(), "post-restart flap") {
+		t.Error("after daemon_start cleared the mute, a fresh failover should get through")
 	}
 }
 

@@ -57,8 +57,10 @@ type TelegramBot struct {
 }
 
 // Flap-mute thresholds: if a router produces flapThreshold "failover"
-// events within flapWindowDur, further ones are held for flapMuteDur.
-// "recovered"/"daemon_start" events always get through and clear the mute.
+// events within flapWindowDur, further failover *and* recovery
+// notifications are held for flapMuteDur. Only "daemon_start" (a fresh
+// process) clears the mute early -- a "recovered" event does not, since
+// recover-then-fail-again is exactly the pattern being muted.
 const (
 	flapWindowDur = 15 * time.Minute
 	flapThreshold = 4
@@ -203,16 +205,21 @@ func (b *TelegramBot) NotifyServer(body string) {
 
 // NotifyEvent DMs every allowed chat about an unsolicited router event
 // (a failover switch, the daemon starting). Called from the control
-// server's /agent/event handler. "failover" events are rate-limited per
-// router so a flapping primary can't bury the chat; "recovered" and
-// "daemon_start" always get through and reset that limiter.
+// server's /agent/event handler. Once a router is judged to be flapping,
+// both failover and recovery notifications are held for flapMuteDur so
+// the chat isn't buried; "daemon_start" always gets through and clears
+// the mute.
 func (b *TelegramBot) NotifyEvent(routerID string, ev Event) {
-	if ev.Kind == "recovered" || ev.Kind == "daemon_start" {
+	switch ev.Kind {
+	case "daemon_start":
 		b.clearFlap(routerID)
 		b.notify(routerID, ev.Text)
-		return
-	}
-	if ev.Kind == "failover" {
+	case "recovered":
+		if b.flapMuted(routerID) {
+			return // still in a flap storm -- the operator's been told
+		}
+		b.notify(routerID, ev.Text)
+	case "failover":
 		drop, notice := b.flapCheck(routerID)
 		switch {
 		case drop:
@@ -222,9 +229,18 @@ func (b *TelegramBot) NotifyEvent(routerID string, ev Event) {
 		default:
 			b.notify(routerID, ev.Text)
 		}
-		return
+	default:
+		b.notify(routerID, ev.Text)
 	}
-	b.notify(routerID, ev.Text)
+}
+
+// flapMuted reports whether routerID's failover notifications are
+// currently held.
+func (b *TelegramBot) flapMuted(routerID string) bool {
+	b.flapMu.Lock()
+	defer b.flapMu.Unlock()
+	w := b.flap[routerID]
+	return w != nil && time.Now().Before(w.mutedUntil)
 }
 
 // flapCheck records a failover event for routerID and decides what to do
@@ -256,9 +272,12 @@ func (b *TelegramBot) flapCheck(routerID string) (drop bool, notice string) {
 	w.events = append(kept, now)
 
 	if len(w.events) >= flapThreshold {
+		n := len(w.events)
 		w.mutedUntil = now.Add(flapMuteDur)
 		w.events = nil
-		return false, "⚠️ нестабильно — частые переключения primary↔backup. Уведомления о failover приглушены на " + shortDur(flapMuteDur) + "."
+		return false, fmt.Sprintf(
+			"⚠️ primary флапает: %d переключений за %s. Уведомления о failover приглушены на %s.",
+			n, shortDur(flapWindowDur), shortDur(flapMuteDur))
 	}
 	return false, ""
 }

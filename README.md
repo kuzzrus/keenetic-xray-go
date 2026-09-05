@@ -140,6 +140,14 @@ eagerly. Keys: `check_interval_seconds`, `failures_required`,
 reload `config.json`, no restart needed (falls back to the old
 restart-to-apply guidance if the daemon isn't reachable).
 
+A flapping primary doesn't bury the chat: one drop-and-recover cycle is
+two messages (not five), and once a router crosses ~4 switches in 15
+minutes the bot posts one "⚠️ primary флапает" notice and holds further
+failover/recovery messages for 30 minutes. `/status` shows the switch
+count for the last hour; `/doctor` shows the recent health-check history
+(ok/fail split, failures by class — timeout / refused / DNS / HTTP 5xx —
+and latency) so you can see *why* it's flapping.
+
 `watchdog show`/`enable`/`disable`/`log` control a cron entry that
 restarts the daemon if it's ever not running -- Entware's `rc.func`
 doesn't do this on its own, unlike the control-server's systemd unit

@@ -189,6 +189,9 @@ func (h *RouterHandler) status(ctx context.Context) string {
 			fmt.Fprintf(&b, "последнее переключение: %s назад — %s\n",
 				shortDur(time.Since(last.At)), describeTransition(last))
 		}
+		if drops := countPrimaryDrops(snap.Transitions, time.Now().Add(-time.Hour)); drops >= 2 {
+			fmt.Fprintf(&b, "⚠️ primary нестабилен: %d переключений за час\n", drops)
+		}
 	}
 
 	if p := h.Config.Primary(); p != nil {
@@ -285,6 +288,14 @@ func (h *RouterHandler) doctor(ctx context.Context) string {
 		}
 	}
 
+	if h.Daemon != nil {
+		if snap, ok := h.Daemon.Snapshot(ctx); ok {
+			if s := probeSummary(snap.Probes, time.Now()); s != "" {
+				fmt.Fprintf(&b, "ℹ️ %s\n", s)
+			}
+		}
+	}
+
 	if fail == 0 {
 		b.WriteString("\nвсе проверки пройдены")
 	} else {
@@ -340,6 +351,72 @@ func shortDur(d time.Duration) string {
 		}
 		return strconv.Itoa(days) + "d"
 	}
+}
+
+// probeSummary condenses the recent health-check history into a few
+// lines for `doctor`: the ok/fail split, failures grouped by class with
+// how long ago the last of each was, and the latency of successful
+// checks. Empty string when there's no history yet.
+func probeSummary(probes []failover.ProbeResult, now time.Time) string {
+	if len(probes) == 0 {
+		return ""
+	}
+	ok := 0
+	var reasons []string           // insertion order
+	cnt := map[string]int{}        // reason -> count
+	last := map[string]time.Time{} // reason -> most recent At
+	var latSum time.Duration
+	var latMax time.Duration
+	latN := 0
+	for _, p := range probes {
+		if p.OK {
+			ok++
+			latSum += p.Latency
+			latN++
+			if p.Latency > latMax {
+				latMax = p.Latency
+			}
+			continue
+		}
+		r := p.Reason
+		if r == "" {
+			r = "ошибка"
+		}
+		if _, seen := cnt[r]; !seen {
+			reasons = append(reasons, r)
+		}
+		cnt[r]++
+		if p.At.After(last[r]) {
+			last[r] = p.At
+		}
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "health-check (%d посл.): %d ✅ / %d ❌", len(probes), ok, len(probes)-ok)
+	if len(reasons) > 0 {
+		parts := make([]string, 0, len(reasons))
+		for _, r := range reasons {
+			parts = append(parts, fmt.Sprintf("%s ×%d (посл. %s назад)", r, cnt[r], shortDur(now.Sub(last[r]))))
+		}
+		fmt.Fprintf(&b, "\n  ❌ %s", strings.Join(parts, ", "))
+	}
+	if latN > 0 {
+		fmt.Fprintf(&b, "\n  ⏱ %dмс средн / %dмс макс", latSum.Milliseconds()/int64(latN), latMax.Milliseconds())
+	}
+	return b.String()
+}
+
+// countPrimaryDrops counts how many times the daemon left primary
+// (ActivePrimary -> Cooldown) within the given window -- the "how often
+// is it flapping" number for `status`.
+func countPrimaryDrops(transitions []failover.Transition, since time.Time) int {
+	n := 0
+	for _, t := range transitions {
+		if t.At.After(since) && t.From == failover.StateActivePrimary && t.To == failover.StateCooldown {
+			n++
+		}
+	}
+	return n
 }
 
 // describeTransition glosses a state change in one Russian phrase.

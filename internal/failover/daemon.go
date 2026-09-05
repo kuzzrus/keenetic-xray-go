@@ -2,8 +2,10 @@ package failover
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
@@ -31,6 +33,12 @@ type realActions struct {
 	pretest *xrayctl.Supervisor
 
 	liveRole Role // the role production was last successfully switched to
+
+	// probes is the recent health-check history, appended by ProbeLive /
+	// ProbeIsolated. Only ever touched on the Run goroutine (Tick calls
+	// the probes; Snapshot copies this) so it needs no lock, same as
+	// Daemon.transitions.
+	probes []ProbeResult
 }
 
 func newRealActions(paths Paths, cfg *config.Config) *realActions {
@@ -63,13 +71,68 @@ func newRealActions(paths Paths, cfg *config.Config) *realActions {
 func (a *realActions) ProbeLive(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, a.probeTimeout())
 	defer cancel()
-	return xrayctl.Probe(ctx, a.probeOptions(a.socks))
+	start := time.Now()
+	err := xrayctl.Probe(ctx, a.probeOptions(a.socks))
+	a.recordProbe(true, start, err)
+	return err
 }
 
 func (a *realActions) ProbeIsolated(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, a.probeTimeout())
 	defer cancel()
-	return xrayctl.Probe(ctx, a.probeOptions(fmt.Sprintf("127.0.0.1:%d", a.cfg.Failover.PretestPort)))
+	start := time.Now()
+	err := xrayctl.Probe(ctx, a.probeOptions(fmt.Sprintf("127.0.0.1:%d", a.cfg.Failover.PretestPort)))
+	a.recordProbe(false, start, err)
+	return err
+}
+
+func (a *realActions) recordProbe(live bool, start time.Time, err error) {
+	a.probes = append(a.probes, ProbeResult{
+		At:      start,
+		Live:    live,
+		OK:      err == nil,
+		Latency: time.Since(start),
+		Reason:  classifyProbeErr(err),
+	})
+	if len(a.probes) > maxProbes {
+		a.probes = a.probes[len(a.probes)-maxProbes:]
+	}
+}
+
+// classifyProbeErr reduces a probe error to a short Russian class for the
+// doctor summary. It matches on the error text because xrayctl.Probe
+// wraps net/http and SOCKS errors as strings rather than typed values.
+func classifyProbeErr(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "таймаут"
+	}
+	s := err.Error()
+	switch {
+	// SOCKS first: "connecting to SOCKS5 proxy ...: connection refused"
+	// means xray's own local inbound is down, a distinct (and more
+	// actionable) fault from the upstream refusing.
+	case strings.Contains(s, "SOCKS5"), strings.Contains(s, "SOCKS proxy"):
+		return "SOCKS"
+	case strings.Contains(s, "context deadline exceeded"), strings.Contains(s, "Client.Timeout"), strings.Contains(s, "i/o timeout"):
+		return "таймаут"
+	case strings.Contains(s, "connection refused"):
+		return "отказ соединения"
+	case strings.Contains(s, "no such host"), strings.Contains(s, "server misbehaving"):
+		return "DNS"
+	case strings.Contains(s, "connection reset"):
+		return "сброс соединения"
+	}
+	if i := strings.Index(s, "returned status "); i >= 0 {
+		rest := s[i+len("returned status "):]
+		if code, _, _ := strings.Cut(rest, " "); code != "" {
+			return "HTTP " + code
+		}
+		return "HTTP"
+	}
+	return "ошибка"
 }
 
 // probeOptions builds the shared probe configuration (URL + fallbacks +
@@ -221,6 +284,21 @@ type Event struct {
 // and push notifications, it is not an audit log.
 const maxTransitions = 20
 
+// maxProbes bounds the recent health-check history kept for `doctor`, so
+// an operator can see *why* primary was judged down (timeout vs refused
+// vs HTTP 5xx) after the fact. Purely in-memory, wiped on restart, like
+// the transition history.
+const maxProbes = 30
+
+// ProbeResult is one recorded health check, newest last.
+type ProbeResult struct {
+	At      time.Time
+	Live    bool          // true = against the live production proxy; false = the isolated recovery pretest
+	OK      bool          // the probe succeeded
+	Latency time.Duration // how long the probe call took
+	Reason  string        // "" when OK; a short class otherwise ("таймаут", "отказ соединения", "DNS", "HTTP 503", ...)
+}
+
 // eventBuffer is how many unconsumed events are held before new ones are
 // dropped -- if nothing is draining Events() there is nobody to notify.
 const eventBuffer = 16
@@ -279,11 +357,13 @@ type Snapshot struct {
 	LiveRole    Role      // which profile production is pointed at (last successful SwitchLiveTo)
 	StartedAt   time.Time // time.Since(StartedAt) is uptime
 	Transitions []Transition
+	Probes      []ProbeResult // recent health-check history, newest last
 }
 
-// Snapshot reads State, LiveRole, StartedAt and the transition history in
-// one hop on the Run goroutine, so the fields can't disagree with each
-// other. Like State, the bool is false if Run isn't active to answer.
+// Snapshot reads State, LiveRole, StartedAt, the transition history and
+// the recent probe history in one hop on the Run goroutine, so the
+// fields can't disagree with each other. Like State, the bool is false if
+// Run isn't active to answer.
 func (d *Daemon) Snapshot(ctx context.Context) (Snapshot, bool) {
 	var s Snapshot
 	ran := d.do(ctx, func(context.Context) {
@@ -292,6 +372,8 @@ func (d *Daemon) Snapshot(ctx context.Context) (Snapshot, bool) {
 		s.StartedAt = d.startedAt
 		s.Transitions = make([]Transition, len(d.transitions))
 		copy(s.Transitions, d.transitions)
+		s.Probes = make([]ProbeResult, len(d.actions.probes))
+		copy(s.Probes, d.actions.probes)
 	})
 	return s, ran
 }

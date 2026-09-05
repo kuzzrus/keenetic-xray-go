@@ -398,6 +398,41 @@ func TestRouterHandler_UpdateCore_DownloadFailureKeepsPin(t *testing.T) {
 	}
 }
 
+func TestProbeSummary(t *testing.T) {
+	now := time.Date(2026, 9, 6, 21, 45, 0, 0, time.UTC)
+	if probeSummary(nil, now) != "" {
+		t.Error("empty history should render nothing")
+	}
+
+	probes := []failover.ProbeResult{
+		{At: now.Add(-3 * time.Minute), Live: true, OK: true, Latency: 150 * time.Millisecond},
+		{At: now.Add(-2 * time.Minute), Live: true, OK: false, Reason: "таймаут"},
+		{At: now.Add(-90 * time.Second), Live: true, OK: true, Latency: 450 * time.Millisecond},
+		{At: now.Add(-60 * time.Second), Live: true, OK: false, Reason: "таймаут"},
+		{At: now.Add(-30 * time.Second), Live: true, OK: false, Reason: "HTTP 503"},
+	}
+	got := probeSummary(probes, now)
+	for _, want := range []string{"5 посл.", "2 ✅ / 3 ❌", "таймаут ×2", "HTTP 503 ×1", "300мс средн", "450мс макс"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("probeSummary missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestCountPrimaryDrops(t *testing.T) {
+	now := time.Now()
+	trs := []failover.Transition{
+		{At: now.Add(-90 * time.Minute), From: failover.StateActivePrimary, To: failover.StateCooldown}, // too old
+		{At: now.Add(-40 * time.Minute), From: failover.StateActivePrimary, To: failover.StateCooldown},
+		{At: now.Add(-30 * time.Minute), From: failover.StateCooldown, To: failover.StateActivePrimary}, // not a drop
+		{At: now.Add(-20 * time.Minute), From: failover.StateActivePrimary, To: failover.StateCooldown},
+		{At: now.Add(-5 * time.Minute), From: failover.StateConfirmingRecovery, To: failover.StateActiveBackup}, // rollback, not a drop
+	}
+	if n := countPrimaryDrops(trs, now.Add(-time.Hour)); n != 2 {
+		t.Errorf("countPrimaryDrops = %d, want 2 (only ActivePrimary->Cooldown within the window)", n)
+	}
+}
+
 func TestRouterHandler_DaemonRestart(t *testing.T) {
 	h := &RouterHandler{Config: config.Default()}
 

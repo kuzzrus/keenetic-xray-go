@@ -23,6 +23,7 @@ const (
 	wizRouterName
 	wizRenameName
 	wizSlotSource
+	wizPorts
 )
 
 func (b *TelegramBot) startAddRouterWizard(ctx context.Context, chatID int64) {
@@ -63,6 +64,26 @@ func (b *TelegramBot) startSlotSourceWizard(ctx context.Context, chatID int64, r
 	b.sendMessage(ctx, chatID,
 		"Источник для "+slot+" ("+routerID+"):\nвставь vless:// ссылку или http(s):// URL подписки.\n"+
 			"Для подписки можно добавить селектор через пробел — номер профиля или часть названия.\nОтмена: /cancel")
+}
+
+// startPortsWizard prompts for new SOCKS/HTTP inbound port numbers.
+// Unlike the CLI wizard, the control server has no direct view of the
+// router's current config (a separate process, possibly a separate
+// machine entirely) to show as defaults -- /status <router> or the
+// card's own 📊 Статус ("xray: слушает :N") has that. Applied via
+// set_ports, which validates both, saves, rebinds xray, and (if Proxy0
+// is on) re-points its upstream to match.
+func (b *TelegramBot) startPortsWizard(ctx context.Context, chatID int64, routerID string) {
+	if !b.Store.HasRouter(routerID) {
+		b.sendMessage(ctx, chatID, fmt.Sprintf("нет такого роутера %q. Список: /routers", routerID))
+		return
+	}
+	b.wizardMu.Lock()
+	b.wizards[chatID] = &wizState{step: wizPorts, routerID: routerID}
+	b.wizardMu.Unlock()
+	b.sendMessage(ctx, chatID,
+		"Смена портов ("+routerID+").\nПришли два новых номера через пробел: SOCKS HTTP (например: 1080 1081).\n"+
+			"Текущие видно в 📊 Статус.\nОтмена: /cancel")
 }
 
 func (b *TelegramBot) wizardClear(chatID int64) {
@@ -138,6 +159,10 @@ func (b *TelegramBot) handleWizardText(ctx context.Context, chatID int64, text s
 	case wizSlotSource:
 		b.wizardSetSlotSource(ctx, chatID, st, strings.TrimSpace(text))
 		return true
+
+	case wizPorts:
+		b.wizardSetPorts(ctx, chatID, st, strings.TrimSpace(text))
+		return true
 	}
 
 	b.wizardClear(chatID)
@@ -166,6 +191,18 @@ func (b *TelegramBot) wizardSetSlotSource(ctx context.Context, chatID int64, st 
 		action = ActionSetPrimarySource
 	}
 	out, answered, errText := b.enqueueAndWait(ctx, st.routerID, action, args)
+	b.sendMessage(ctx, chatID, b.stepResult(st.routerID, answered, errText, "✅ "+strings.TrimSpace(out)))
+}
+
+func (b *TelegramBot) wizardSetPorts(ctx context.Context, chatID int64, st *wizState, line string) {
+	fields := strings.Fields(line)
+	if len(fields) != 2 {
+		b.sendMessage(ctx, chatID, "нужно два числа через пробел: SOCKS HTTP. Ещё раз или /cancel") // stays armed
+		return
+	}
+
+	b.wizardClear(chatID)
+	out, answered, errText := b.enqueueAndWait(ctx, st.routerID, ActionSetPorts, fields)
 	b.sendMessage(ctx, chatID, b.stepResult(st.routerID, answered, errText, "✅ "+strings.TrimSpace(out)))
 }
 

@@ -49,6 +49,7 @@ func routerCardKB(id string) inlineKeyboard {
 		{{Text: "📊 Статус", CallbackData: "act:status:" + id}, {Text: "🩺 Doctor", CallbackData: "act:doctor:" + id}},
 		{{Text: "⬆️ primary", CallbackData: "act:sw_pri:" + id}, {Text: "⬇️ backup", CallbackData: "act:sw_bak:" + id}},
 		{{Text: "🔗 Источники", CallbackData: "srcm:" + id}, {Text: "🐕 Вотчдог", CallbackData: "wdm:" + id}},
+		{{Text: "⚙️ Порты", CallbackData: "ports:" + id}},
 		{{Text: "🔄 Обновить подписку", CallbackData: "act:sub_refresh:" + id}},
 		{{Text: "♻️ Рестарт демона", CallbackData: "act:restart:" + id}, {Text: "🔁 Обновить агент", CallbackData: "upd:" + id}},
 		{{Text: "✏️ Переименовать", CallbackData: "rename:" + id}, {Text: "📦 Установка агента", CallbackData: "install:" + id}},
@@ -230,6 +231,8 @@ func (b *TelegramBot) handleCallback(ctx context.Context, cb tgCallbackQuery) {
 			return
 		}
 		b.editCB(ctx, cb, watchdogScreenText(id), watchdogScreenKB(id))
+	case strings.HasPrefix(data, "ports:"):
+		b.startPortsWizard(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "ports:"))
 	case strings.HasPrefix(data, "srcp:"):
 		b.startSlotSourceWizard(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "srcp:"), true)
 	case strings.HasPrefix(data, "srcb:"):

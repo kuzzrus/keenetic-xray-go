@@ -142,6 +142,12 @@ read. `log` shows restart events only (not routine ticks), so an empty
 log means it's never had to step in -- also in the bot, `🐕 Вотчдог` on
 a router card.
 
+Changing the SOCKS/HTTP inbound ports later (not just at `setup` time)
+is a bot action too -- `⚙️ Порты` on a router card (or `/ports <router>
+<socks> <http>`) -- applied live, and if Proxy0 is already on, its
+upstream binding is re-pointed to match so LAN traffic doesn't keep
+hitting the old port.
+
 `menu` is a numbered control panel for running the router from an SSH
 session without the Telegram bot: status, `doctor`, profile list,
 refresh the subscription, re-run `setup` to change the source, toggle
@@ -179,7 +185,12 @@ setup` again and `systemctl restart keenetic-xray-control-server`.
 
 To **update** later, re-run the same `curl … | sudo sh` — or use the
 bot's **⬆️ Обновить сервер** menu button, which does it through a
-systemd path-unit + root helper the installer also sets up.
+systemd path-unit + root helper the installer also sets up. The button's
+own reply is just "queued" (the process doing the replying gets killed
+mid-restart); the new process DMs every allowed chat "✅ Сервер
+обновлён: vX → vY" once it's actually up, by comparing its own version
+against what the last run recorded -- silent on a plain restart that
+isn't an update.
 
 Routers are then managed from the Telegram chat itself — no restart, no
 config edit. `/menu` opens a button UI (main menu → router list →

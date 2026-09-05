@@ -194,6 +194,13 @@ silently writing an entry nothing will read. `📜 Лог` shows
 an empty log means the watchdog has never had to step in. All four are
 also `/watchdog <router> show|enable|disable|log` as text commands.
 
+`⚙️ Порты` (`ports:`) starts a one-step text wizard (`wizPorts`, same
+shape as the 🔗 Источники dialogs): paste two numbers separated by a
+space, `SOCKS HTTP`. Unlike the CLI setup wizard, the control server has
+no direct view of a router's current config to show as defaults --
+`📊 Статус` has that ("xray: слушает :N"). Applied via `set_ports`; also
+`/ports <router> <socks> <http>` as a text command.
+
 `➕ Добавить роутер` starts a two-step text dialog (`telegram_wizard.go`):
 id, then display name. `✏️ Переименовать` (or `/rename <id> <name>`) is
 one step over `Store.RenameRouter`. State is per-chat; any `/command`
@@ -238,19 +245,32 @@ ones are text-only:
 `restart` and `update` are also router-card buttons (`update` behind a confirm).
 
 `sub_refresh`, `sub_setprimary`, `sub_setbackup`, `set_primary_source`,
-`set_backup_source` and `proxy0 on`/`off` call `RouterHandler.rebindXray`
-after saving. If the daemon is already in its Run loop, that re-forces
-the current live role, so it regenerates `xray-production.json` and
-restarts the supervised xray process -- **without a full daemon restart
-and without touching the Proxy0 interface**. If the daemon is still
-idling (it starts idle until *both* primary and backup are set) and the
-config now has both, `rebindXray` instead kicks a detached `init.d
-restart` so a setup done entirely from the bot actually starts serving,
-with no SSH step.
+`set_backup_source`, `proxy0 on`/`off`, `failover_set` and `set_ports`
+all call `RouterHandler.rebindXray` after saving. If the daemon is
+already in its Run loop, that calls `failover.Daemon.ReloadConfig`
+-- since `h.Config` is the exact `*config.Config` the Daemon already
+holds (wired once in `cmdDaemon`), this refreshes the two fields only
+computed at startup (`realActions.socks`, `Machine`'s own copy of the
+tunable failure/recovery counts) in addition to re-applying the current
+live role, so it regenerates `xray-production.json` and restarts the
+supervised xray process -- **without a full daemon restart and without
+touching the Proxy0 interface**. `failover_set` used to skip straight to
+a full detached restart instead (the state machine's tunables were fixed
+at construction, so nothing shorter would've picked up a changed
+threshold); `set_ports` is why that got fixed -- a changed SOCKS port
+needs `realActions.socks` refreshed too, or health-check probes would
+keep dialing the old one. If the daemon is still idling (it starts idle
+until *both* primary and backup are set) and the config now has both,
+`rebindXray` instead kicks a detached `init.d restart` so a setup done
+entirely from the bot actually starts serving, with no SSH step.
 
-`failover set` (and any other config-only change with no live-reload
-path) always restarts the daemon the same detached way -- the state
-machine's tunables are fixed at construction.
+`set_ports` (`/ports <router> <socks> <http>`, or `⚙️ Порты` on a card,
+a one-step text wizard) additionally re-points Proxy0's own upstream
+binding via `proxy0Set` if Proxy0 is currently enabled -- otherwise LAN
+traffic routed through it would keep hitting the port it was last
+pointed at. That step is best-effort: reported alongside the port
+change's own success, not as an overall failure, since the port change
+itself already took effect either way.
 
 A text command enqueues and then blocks up to `ResultTimeout` for the
 router to answer before replying (an online router, default poll interval
@@ -297,6 +317,19 @@ root `oneshot` running `control-server-self-update.sh`). The bot touches
 the trigger file (`TelegramBot.SelfUpdatePath`); the `.path` unit fires
 the root oneshot; the oneshot clears the trigger and pipes
 `server-install.sh` into `sh`.
+
+The *old* process is killed mid-flight by that restart, so it can never
+announce its own successful replacement -- the message the button's own
+reply gives ("переустановка и рестарт через несколько секунд") is only
+ever "queued", never "done". `notifyIfUpdated`
+(`cmd/keenetic-xray-control-server/versioncheck.go`) is how completion
+gets reported instead: on every startup, the *new* process compares its
+own `version.String()` against what a small file next to the queue
+recorded last run, and DMs every allowed chat ("✅ Сервер обновлён: vX →
+vY") only when they differ -- silent on a first-ever install (nothing to
+compare against) and on an unchanged version (a plain restart -- a
+reboot, `systemctl restart` for some unrelated reason -- is not an
+update and must not be reported as one).
 
 ### The `setup` wizard
 

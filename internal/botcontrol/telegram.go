@@ -188,6 +188,19 @@ func (b *TelegramBot) notify(routerID, body string) {
 	}
 }
 
+// NotifyServer DMs every allowed chat with body, unprefixed -- for
+// announcements about the control-server itself (e.g. a completed
+// self-update) rather than about any one router. Best-effort, same as
+// notify.
+func (b *TelegramBot) NotifyServer(body string) {
+	b.initClient()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	for chatID := range b.AllowedChats {
+		b.sendMessage(ctx, chatID, body)
+	}
+}
+
 // NotifyEvent DMs every allowed chat about an unsolicited router event
 // (a failover switch, the daemon starting). Called from the control
 // server's /agent/event handler. "failover" events are rate-limited per
@@ -489,7 +502,8 @@ const helpText = `/menu — меню с кнопками (проще всего)
 /update <router> — обновить агент (переустановить .ipk)
 /failover <router> show — текущие пороги health-check
 /failover <router> set <ключ> <значение> — подстроить их (перезапустит демон)
-/watchdog <router> show|enable|disable|log — cron, что перезапускает демон, если он упал`
+/watchdog <router> show|enable|disable|log — cron, что перезапускает демон, если он упал
+/ports <router> <socks-port> <http-port> — сменить локальные порты (применяется на лету)`
 
 func (b *TelegramBot) dispatch(ctx context.Context, text string) string {
 	fields := strings.Fields(text)
@@ -544,6 +558,11 @@ func (b *TelegramBot) dispatch(ctx context.Context, text string) string {
 		return b.dispatchFailover(ctx, args)
 	case "/watchdog":
 		return b.dispatchWatchdog(ctx, args)
+	case "/ports":
+		if len(args) != 3 {
+			return "формат: /ports <роутер> <socks-порт> <http-порт>"
+		}
+		return b.runRouterCommand(ctx, args[:1], ActionSetPorts, args[1:])
 	default:
 		return "неизвестная команда. Откройте /menu или /help"
 	}

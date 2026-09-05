@@ -41,6 +41,7 @@ const (
 	ActionWatchdogEnable   = "watchdog_enable" // ensures a cron daemon exists (installing it via opkg if needed) before writing the entry
 	ActionWatchdogDisable  = "watchdog_disable"
 	ActionWatchdogLog      = "watchdog_log" // restart events only, not routine ticks -- see internal/install.SetWatchdogCron
+	ActionSetPorts         = "set_ports"    // args[0]=SOCKS port, args[1]=HTTP port (both as decimal strings)
 )
 
 // Command is a single unit of work queued for a router by the control

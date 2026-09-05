@@ -27,6 +27,13 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Pin the tag goreleaser builds for. `fetch-depth: 0` pulls every
+          # tag, and the vendored-core buckets (xray-core/<upstream-tag>,
+          # created by xray-core.yml against main's HEAD) can share a commit
+          # with a v* release tag -- goreleaser's own tag detection then
+          # picks "xray-core/v26.7.28" and dies parsing it as semver. This
+          # is the release trigger's tag, so use it directly.
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
 
       # goreleaser's nfpm integration wasn't used for the .ipk itself (see
       # packaging/build-ipk.sh for why) -- build it here from the binaries

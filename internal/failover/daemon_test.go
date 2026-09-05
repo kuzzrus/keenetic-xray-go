@@ -2,6 +2,7 @@ package failover
 
 import (
 	"context"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -141,6 +142,46 @@ func TestRealActions_ProbeLive_BoundedByCheckInterval(t *testing.T) {
 	}
 	if elapsed > 5*time.Second {
 		t.Errorf("ProbeLive took %v, want it bounded by ~CheckIntervalSeconds (1s), not by Retries*RetryDelay*len(URLs) (30s+)", elapsed)
+	}
+
+	// The failed probe was recorded for the doctor history.
+	if len(actions.probes) != 1 {
+		t.Fatalf("probes recorded = %d, want 1", len(actions.probes))
+	}
+	if p := actions.probes[0]; p.OK || !p.Live || p.Reason == "" {
+		t.Errorf("recorded probe = %+v, want OK=false Live=true and a non-empty Reason", p)
+	}
+}
+
+func TestClassifyProbeErr(t *testing.T) {
+	cases := []struct {
+		err  error
+		want string
+	}{
+		{nil, ""},
+		{context.DeadlineExceeded, "таймаут"},
+		{errors.New("probe request failed: dial tcp: i/o timeout"), "таймаут"},
+		{errors.New("probe request failed: connect: connection refused"), "отказ соединения"},
+		{errors.New("probe request failed: dial tcp: lookup x: no such host"), "DNS"},
+		{errors.New("connecting to SOCKS5 proxy 127.0.0.1:1080: connection refused"), "SOCKS"},
+		{errors.New("probe returned status 503 Service Unavailable"), "HTTP 503"},
+		{errors.New("read: connection reset by peer"), "сброс соединения"},
+		{errors.New("something else entirely"), "ошибка"},
+	}
+	for _, c := range cases {
+		if got := classifyProbeErr(c.err); got != c.want {
+			t.Errorf("classifyProbeErr(%v) = %q, want %q", c.err, got, c.want)
+		}
+	}
+}
+
+func TestRecordProbe_BoundsHistory(t *testing.T) {
+	a := &realActions{}
+	for i := 0; i < maxProbes+15; i++ {
+		a.recordProbe(true, time.Now(), nil)
+	}
+	if len(a.probes) != maxProbes {
+		t.Errorf("probes len = %d, want it capped at %d", len(a.probes), maxProbes)
 	}
 }
 

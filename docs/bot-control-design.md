@@ -77,6 +77,26 @@ hook feeds both the `status` history ring and `Daemon.Events()`;
 `botcontrol.FailoverEvents` renders each to an `Event` and the agent's
 `Run` loop forwards it.
 
+`FailoverEvents` **coalesces**: one primary-drop-and-recover cycle is
+five state transitions (leave primary → cooldown → test recovery →
+switch back → confirm → cooldown), but only two are forwarded --
+`⚡ primary недоступен — уход на backup` and `✅ primary восстановился
+(был на backup N)`. The churn in between is dropped; the goroutine keeps
+the drop time to compute that "N". A failed recovery forwards
+`⚡ откат на backup — primary не удержался` instead of the recovery
+line.
+
+On the server side `NotifyEvent` then **rate-limits a flapping router**:
+`flapThreshold` (4) `failover` events inside `flapWindowDur` (15 min) →
+one `⚠️ primary флапает: N переключений за 15 мин` notice, then both
+failover *and* recovery lines are held for `flapMuteDur` (30 min). Only
+`daemon_start` clears the mute early -- a `recovered` event does not,
+because recover-then-fail-again is the exact pattern being muted (the
+earlier design cleared on every recovery, so a fast self-healing flap
+never tripped the threshold). `status` also carries a
+`⚠️ primary нестабилен: N переключений за час` line off the same
+transition history.
+
 Offline detection is server-side and needs no agent cooperation:
 `OfflineWatcher` (a goroutine in the control server) scans the registry
 every 30s and calls `bot.NotifyOffline` when a router that had been
@@ -256,7 +276,7 @@ ones are text-only:
 /routers                   list registered routers with a status dot
 /status                    overview of all routers (dot, last poll, queue depth)
 /status <router>           rich snapshot: failover state + live profile, uptime, last switch, listening ports, proxy0, subscription age
-/doctor <router>           pass/fail health checks (profiles, config, xray-core runnable, proxy0 upstream, free disk)
+/doctor <router>           pass/fail health checks (profiles, config, xray-core runnable, proxy0 upstream, free disk) + recent health-check history (ok/fail split, failures by class, latency)
 /switch <router> primary|backup
 /profile_list <router>
 /sub_seturl <router> <url>

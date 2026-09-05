@@ -36,6 +36,15 @@ func fakeRelease(t *testing.T, tag, payload string) (baseURL, assetName string) 
 	return srv.URL, assetName
 }
 
+func TestTags_Sane(t *testing.T) {
+	if DefaultTag == "" {
+		t.Fatal("DefaultTag must not be empty")
+	}
+	if PrereleaseTag != "" && PrereleaseTag == DefaultTag {
+		t.Error("PrereleaseTag should be a *different* tag from DefaultTag, or empty")
+	}
+}
+
 func TestDefaultTag_MatchesPackagingPin(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", "packaging", "xray-core", "version"))
 	if err != nil {
@@ -58,6 +67,54 @@ func TestEnsure_ExistingBinaryShortCircuits(t *testing.T) {
 	})
 	if err != nil || src != "existing" {
 		t.Fatalf("Ensure = (%q, %v), want (existing, nil)", src, err)
+	}
+}
+
+func TestEnsure_ForceReinstallsOverRunningBinary(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "xray")
+	if err := os.WriteFile(dest, []byte("OLD-CORE"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	base, _ := fakeRelease(t, "v9.9.9", "NEW-CORE")
+
+	src, err := Ensure(context.Background(), Options{
+		Dest:    dest,
+		Tag:     "v9.9.9",
+		BaseURL: base,
+		Force:   true,
+		Prefer:  "vendored",
+		smoke:   func(string) error { return nil }, // the old binary "runs" -- Force must ignore that
+		opkg:    func(context.Context) error { t.Fatal("opkg must not be called"); return nil },
+	})
+	if err != nil || src != "vendored" {
+		t.Fatalf("Ensure = (%q, %v), want (vendored, nil) -- Force should skip the existing-binary short-circuit", src, err)
+	}
+	if got, _ := os.ReadFile(dest); string(got) != "NEW-CORE" {
+		t.Errorf("dest = %q, want the freshly downloaded NEW-CORE", got)
+	}
+}
+
+func TestEnsure_ForceKeepsWorkingCoreWhenDownloadFails(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "xray")
+	if err := os.WriteFile(dest, []byte("STILL-GOOD"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Ensure(context.Background(), Options{
+		Dest:    dest,
+		Tag:     "v9.9.9",
+		BaseURL: "http://127.0.0.1:0", // unreachable
+		Force:   true,
+		Prefer:  "vendored", // no opkg substitution for an explicit upgrade
+		smoke:   func(string) error { return nil },
+		opkg:    func(context.Context) error { t.Fatal("opkg must not be called with Prefer=vendored"); return nil },
+	})
+	if err == nil {
+		t.Fatal("expected an error when the forced upgrade can't be downloaded")
+	}
+	if got, _ := os.ReadFile(dest); string(got) != "STILL-GOOD" {
+		t.Errorf("dest = %q, want the original binary untouched after a failed forced upgrade", got)
 	}
 }
 

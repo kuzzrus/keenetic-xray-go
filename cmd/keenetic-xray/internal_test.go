@@ -95,3 +95,32 @@ func TestCmdInternal_PostinstSetupThenPrermCleanup(t *testing.T) {
 		t.Errorf("config dir should be removed after --purge, stat err = %v", err)
 	}
 }
+
+func TestCmdEnsureXrayCore_TagPersistsBeforeDownload(t *testing.T) {
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "etc", "keenetic-xray", "config.json")
+	t.Setenv("KEENETIC_XRAY_CONFIG", configFile)
+	t.Setenv("KEENETIC_XRAY_BINARY", filepath.Join(dir, "xray"))
+	t.Setenv("KEENETIC_XRAY_CORE", "vendored")
+	// Point the download at a dead local address so the fetch fails
+	// instantly -- we only care that the tag is validated and saved first.
+	t.Setenv("KEENETIC_XRAY_CORE_BASE_URL", "http://127.0.0.1:0")
+
+	// An explicit --tag is recorded to config even though the fetch that
+	// follows can't succeed in a test.
+	_ = run([]string{"internal", "ensure-xray-core", "--tag=v26.7.28"})
+	if cfg, err := config.Load(configFile); err != nil || cfg.XrayCoreTag != "v26.7.28" {
+		t.Fatalf("XrayCoreTag = %q (err %v), want v26.7.28 persisted", cfg.XrayCoreTag, err)
+	}
+
+	// "stable" clears it again.
+	_ = run([]string{"internal", "ensure-xray-core", "--tag=stable"})
+	if cfg, _ := config.Load(configFile); cfg.XrayCoreTag != "" {
+		t.Errorf("XrayCoreTag = %q, want cleared by --tag=stable", cfg.XrayCoreTag)
+	}
+
+	// A malformed tag is rejected and nothing is written.
+	if err := run([]string{"internal", "ensure-xray-core", "--tag=nightly"}); err == nil {
+		t.Error("expected an error for --tag=nightly")
+	}
+}

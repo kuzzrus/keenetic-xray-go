@@ -14,6 +14,7 @@ import (
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 	"github.com/kuzzrus/keenetic-xray-go/internal/failover"
+	"github.com/kuzzrus/keenetic-xray-go/internal/xraycore"
 )
 
 // TestMain lets `go test` re-exec the test binary itself as a stand-in
@@ -312,6 +313,88 @@ func TestRouterHandler_Proxy0Config(t *testing.T) {
 		if _, err := h.Handle(context.Background(), Command{Action: ActionProxy0Config, Args: args}); err == nil {
 			t.Errorf("args %v: expected an error", args)
 		}
+	}
+}
+
+func TestRouterHandler_UpdateCore(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "c.json")
+	xrayBin := filepath.Join(dir, "xray")
+
+	var gotOpts xraycore.Options
+	h := &RouterHandler{
+		Config:     config.Default(),
+		ConfigPath: cfgPath,
+		XrayBinary: xrayBin,
+		ensureCoreFn: func(_ context.Context, o xraycore.Options) (string, error) {
+			gotOpts = o
+			if err := os.WriteFile(o.Dest, []byte("core-"+o.Tag), 0o755); err != nil {
+				return "", err
+			}
+			return "vendored", nil
+		},
+	}
+
+	// Switch onto a specific tag -> fetched with Force, and the pin persists.
+	out, err := h.Handle(context.Background(), Command{Action: ActionUpdateCore, Args: []string{"v26.7.28"}})
+	if err != nil {
+		t.Fatalf("update_core v26.7.28: %v", err)
+	}
+	if !strings.Contains(out, "v26.7.28") {
+		t.Errorf("out = %q, want it to name the new pin", out)
+	}
+	if gotOpts.Tag != "v26.7.28" || !gotOpts.Force || gotOpts.Prefer != "vendored" {
+		t.Errorf("Ensure opts = %+v, want Tag=v26.7.28 Force=true Prefer=vendored", gotOpts)
+	}
+	if saved, _ := config.Load(cfgPath); saved.XrayCoreTag != "v26.7.28" {
+		t.Errorf("saved XrayCoreTag = %q, want v26.7.28", saved.XrayCoreTag)
+	}
+
+	// "stable" clears the pin back to the default.
+	if _, err := h.Handle(context.Background(), Command{Action: ActionUpdateCore, Args: []string{"stable"}}); err != nil {
+		t.Fatalf("update_core stable: %v", err)
+	}
+	if gotOpts.Tag != "" {
+		t.Errorf("Ensure Tag = %q, want empty for stable", gotOpts.Tag)
+	}
+	if saved, _ := config.Load(cfgPath); saved.XrayCoreTag != "" {
+		t.Errorf("saved XrayCoreTag = %q, want empty after stable", saved.XrayCoreTag)
+	}
+
+	// A junk tag errors, never calls Ensure, and leaves the pin as-is.
+	h.Config.XrayCoreTag = "v26.7.28"
+	gotOpts = xraycore.Options{}
+	if _, err := h.Handle(context.Background(), Command{Action: ActionUpdateCore, Args: []string{"nightly"}}); err == nil {
+		t.Error("update_core nightly: expected an error for a malformed tag")
+	}
+	if gotOpts.Dest != "" {
+		t.Error("Ensure was called despite a malformed tag")
+	}
+	if h.Config.XrayCoreTag != "v26.7.28" {
+		t.Errorf("XrayCoreTag = %q, want it unchanged after a rejected tag", h.Config.XrayCoreTag)
+	}
+}
+
+func TestRouterHandler_UpdateCore_DownloadFailureKeepsPin(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "c.json")
+	cfg := config.Default()
+	cfg.XrayCoreTag = "v1.0.0"
+	h := &RouterHandler{
+		Config:     cfg,
+		ConfigPath: cfgPath,
+		XrayBinary: filepath.Join(t.TempDir(), "xray"),
+		ensureCoreFn: func(context.Context, xraycore.Options) (string, error) {
+			return "", fmt.Errorf("asset not published yet")
+		},
+	}
+	if _, err := h.Handle(context.Background(), Command{Action: ActionUpdateCore, Args: []string{"v2.0.0"}}); err == nil {
+		t.Fatal("expected an error when the core can't be fetched")
+	}
+	if h.Config.XrayCoreTag != "v1.0.0" {
+		t.Errorf("XrayCoreTag = %q, want the switch NOT recorded after a failed download", h.Config.XrayCoreTag)
+	}
+	if _, err := os.Stat(cfgPath); err == nil {
+		t.Error("config.json was written despite the failed switch")
 	}
 }
 

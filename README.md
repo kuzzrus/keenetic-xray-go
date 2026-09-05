@@ -22,6 +22,9 @@ fits together, `docs/full-vs-mini.md` for the Mini/Full variant split, and
   releases and pinned to an upstream tag (see `packaging/xray-core/`),
   with `opkg install xray-core` from the Entware feed as the fallback.
   `install.sh --xray-core=entware` forces the feed;
+  `--xray-core-tag=vX.Y.Z` opts one router onto a specific (e.g. newer,
+  pre-release) build; later, `keenetic-xray internal ensure-xray-core
+  --tag=…` or the bot's `🧩 Ядро xray` do the same and persist it.
   `keenetic-xray doctor` reports which core is active. Ships no
   geoip/geosite routing data — routing which traffic goes through the
   proxy is Keenetic's own Policy-Based Routing. `keenetic-xray proxy0`
@@ -58,7 +61,8 @@ curl -fsSL https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/insta
 can't fetch `https://` at all (`not an http or ftp url`). If `curl` is
 missing, `opkg update && opkg install curl` first. Add `--no-proxy0` to
 skip the automatic `Proxy0` wiring, `--xray-core=entware` to use the
-Entware feed for the core.
+Entware feed for the core, or `--xray-core-tag=vX.Y.Z` to pin a specific
+vendored core build.
 
 ### Manual install
 
@@ -152,6 +156,14 @@ is a bot action too -- `⚙️ Порты и транспорт` on a router car
 already on, its upstream binding is re-pointed to match so LAN traffic
 doesn't keep hitting the old port. That same screen switches the Proxy
 protocol (SOCKS5/HTTP) and interface (`Proxy0`, `Proxy1`, …).
+
+`🧩 Ядро xray` on a card (or `/update_core <router> [vX.Y.Z|stable]`)
+reinstalls the Xray core and restarts xray onto it -- the "upgrade a
+working-but-old core" path, distinct from `/ensure_core` which only
+fills a gap. It fetches from our own `xray-core/<tag>` releases and
+verifies the download in a temp file before swapping it in, so a bad
+fetch leaves the running core alone; a chosen tag persists in
+`config.json` (`xray_core_tag`).
 
 `menu` is a numbered control panel for running the router from an SSH
 session without the Telegram bot: status, `doctor`, profile list,

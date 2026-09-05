@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/kuzzrus/keenetic-xray-go/internal/xraycore"
 )
 
 // This file is the inline-keyboard UX: a main menu, a router list, and a
@@ -49,7 +51,7 @@ func routerCardKB(id string) inlineKeyboard {
 		{{Text: "📊 Статус", CallbackData: "act:status:" + id}, {Text: "🩺 Doctor", CallbackData: "act:doctor:" + id}},
 		{{Text: "⬆️ primary", CallbackData: "act:sw_pri:" + id}, {Text: "⬇️ backup", CallbackData: "act:sw_bak:" + id}},
 		{{Text: "🔗 Источники", CallbackData: "srcm:" + id}, {Text: "🐕 Вотчдог", CallbackData: "wdm:" + id}},
-		{{Text: "⚙️ Порты и транспорт", CallbackData: "ptm:" + id}},
+		{{Text: "⚙️ Порты и транспорт", CallbackData: "ptm:" + id}, {Text: "🧩 Ядро xray", CallbackData: "corem:" + id}},
 		{{Text: "🔄 Обновить подписку", CallbackData: "act:sub_refresh:" + id}},
 		{{Text: "♻️ Рестарт демона", CallbackData: "act:restart:" + id}, {Text: "🔁 Обновить агент", CallbackData: "upd:" + id}},
 		{{Text: "✏️ Переименовать", CallbackData: "rename:" + id}, {Text: "📦 Установка агента", CallbackData: "install:" + id}},
@@ -130,6 +132,31 @@ func portsTransportScreenKB(id string) inlineKeyboard {
 		{{Text: "✏️ Интерфейс Keenetic", CallbackData: "ptif:" + id}},
 		{{Text: "📊 Показать", CallbackData: "act:proxy0_show:" + id}, {Text: "⬅️ Назад", CallbackData: "router:" + id}},
 	}}
+}
+
+func coreScreenText(id string) string {
+	s := "🧩 Ядро xray " + id + "\n\n" +
+		"Обновляет бинарь xray-core на роутере из наших сборок и перезапускает xray. " +
+		"Скачивается во временный файл и проверяется до подмены — рабочее ядро битой закачкой не затрётся.\n\n" +
+		"Стабильное ядро (" + xraycore.DefaultTag + ") — по умолчанию. Текущий пин виден в 📊 Статус."
+	if xraycore.PrereleaseTag != "" {
+		s += "\n" + xraycore.PrereleaseTag + " — пререлиз upstream: новее, но менее обкатан."
+	}
+	return s
+}
+
+func coreScreenKB(id string) inlineKeyboard {
+	rows := [][]inlineButton{
+		{{Text: "⬆️ Переустановить текущий пин", CallbackData: "coreup:" + id}},
+	}
+	if xraycore.PrereleaseTag != "" {
+		rows = append(rows, []inlineButton{{Text: "🧪 Пререлиз " + xraycore.PrereleaseTag, CallbackData: "corepre:" + id}})
+	}
+	rows = append(rows,
+		[]inlineButton{{Text: "✅ Стабильное " + xraycore.DefaultTag, CallbackData: "corestable:" + id}},
+		[]inlineButton{{Text: "⬅️ Назад", CallbackData: "router:" + id}},
+	)
+	return inlineKeyboard{InlineKeyboard: rows}
 }
 
 // callbackAction maps a router-card button name to a Store command
@@ -271,6 +298,19 @@ func (b *TelegramBot) handleCallback(ctx context.Context, cb tgCallbackQuery) {
 			return
 		}
 		b.enqueueCardArgs(ctx, cb, id, ActionProxy0Config, []string{proto, ""})
+	case strings.HasPrefix(data, "corem:"):
+		id := strings.TrimPrefix(data, "corem:")
+		if !b.Store.HasRouter(id) {
+			b.editCB(ctx, cb, "нет такого роутера: "+id, b.routersListKB())
+			return
+		}
+		b.editCB(ctx, cb, coreScreenText(id), coreScreenKB(id))
+	case strings.HasPrefix(data, "coreup:"):
+		b.enqueueCardArgs(ctx, cb, strings.TrimPrefix(data, "coreup:"), ActionUpdateCore, nil)
+	case strings.HasPrefix(data, "corepre:"):
+		b.enqueueCardArgs(ctx, cb, strings.TrimPrefix(data, "corepre:"), ActionUpdateCore, []string{xraycore.PrereleaseTag})
+	case strings.HasPrefix(data, "corestable:"):
+		b.enqueueCardArgs(ctx, cb, strings.TrimPrefix(data, "corestable:"), ActionUpdateCore, []string{"stable"})
 	case strings.HasPrefix(data, "srcp:"):
 		b.startSlotSourceWizard(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "srcp:"), true)
 	case strings.HasPrefix(data, "srcb:"):

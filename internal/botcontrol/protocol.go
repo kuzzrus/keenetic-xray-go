@@ -36,9 +36,14 @@ const (
 	// args[1]=Keenetic interface ("Proxy0"|"Proxy1"|...|""=keep). Saves
 	// and, if Proxy0 is already on, re-points it (bringing the old
 	// interface down first when that changed).
-	ActionProxy0Config    = "proxy0_config"
-	ActionDaemonRestart   = "daemon_restart"
-	ActionEnsureCore      = "ensure_core"
+	ActionProxy0Config  = "proxy0_config"
+	ActionDaemonRestart = "daemon_restart"
+	ActionEnsureCore    = "ensure_core"
+	// ActionUpdateCore: args[0] = "" (reinstall the pinned tag), a
+	// "vN.N.N" tag to switch this router onto, or "stable" to clear the
+	// pin. Unlike ensure_core it force-replaces a working-but-older core
+	// and then rebinds xray onto the new binary.
+	ActionUpdateCore      = "update_core"
 	ActionSelfUpdate      = "self_update" // re-run install.sh on the router (whole keenetic-xray package)
 	ActionFailoverShow    = "failover_show"
 	ActionFailoverSet     = "failover_set" // args[0]=key, args[1]=value

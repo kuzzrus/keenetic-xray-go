@@ -500,7 +500,8 @@ const helpText = `/menu — меню с кнопками (проще всего)
 /proxy0 <router> protocol socks5|http — какой вход отдаёт Proxy-интерфейс
 /proxy0 <router> interface Proxy0|Proxy1|… — какой Proxy-интерфейс Keenetic вести
 /restart <router> — перезапустить демон
-/ensure_core <router> — доустановить ядро xray
+/ensure_core <router> — доустановить ядро xray, если его нет
+/update_core <router> [vX.Y.Z|stable] — обновить/переключить ядро xray (перезапустит xray)
 /update <router> — обновить агент (переустановить .ipk)
 /failover <router> show — текущие пороги health-check
 /failover <router> set <ключ> <значение> — подстроить их (перезапустит демон)
@@ -554,6 +555,11 @@ func (b *TelegramBot) dispatch(ctx context.Context, text string) string {
 		return b.runRouterCommand(ctx, args, ActionDaemonRestart, nil)
 	case "/ensure_core":
 		return b.runRouterCommand(ctx, args, ActionEnsureCore, nil)
+	case "/update_core":
+		if len(args) < 1 {
+			return "формат: /update_core <роутер> [vX.Y.Z|stable]"
+		}
+		return b.runRouterCommand(ctx, args[:1], ActionUpdateCore, args[1:])
 	case "/update":
 		return b.runRouterCommand(ctx, args, ActionSelfUpdate, nil)
 	case "/failover":

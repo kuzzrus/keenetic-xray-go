@@ -7,23 +7,41 @@ can be too large. So the installer can instead fetch a size-optimised
 `xray` binary built from a pinned upstream tag and published to this
 repo's releases.
 
-## The pin
+## The pin, and the opt-in
 
-`version` in this directory holds the XTLS/Xray-core tag the installer
-fetches — currently:
+`version` in this directory holds the **default** XTLS/Xray-core tag the
+installer fetches — currently:
 
 ```
 v26.3.27
 ```
 
-It's the last non-prerelease upstream release at the time of writing.
-Bump it together with a `keenetic-xray` release, then run the build (see
-below) for the new tag.
+It's the last non-prerelease upstream release at the time of writing, and
+it must match `xraycore.DefaultTag` (a test enforces this). Bump it
+together with a `keenetic-xray` release, then run the build (below) for
+the new tag.
+
+A **second**, newer tag can be built and offered as an explicit opt-in
+without becoming the default — `xraycore.PrereleaseTag` (currently
+`v26.7.28`, an upstream *pre-release*). A router runs it only if asked:
+
+- at install: `curl … | sh -s -- --xray-core-tag=v26.7.28`
+- later, over SSH: `keenetic-xray internal ensure-xray-core --tag=v26.7.28`
+- from the bot: `🧩 Ядро xray` on the router card, or `/update_core
+  <router> v26.7.28`
+
+The choice is stored in `config.json` as `xray_core_tag`, so a package
+self-update keeps it. `--tag=stable` (or the bot's *Стабильное* button)
+clears it back to the default pin. Both tags must have a published
+`xray-core/<tag>` release before they're referenced, or the fetch 404s
+(the running core is left untouched — `ensure-xray-core` smoke-tests the
+download in a temp file before swapping it in).
 
 ## Building
 
 The `Xray-core build` GitHub Actions workflow (`workflow_dispatch`,
-input: the tag) checks out `XTLS/Xray-core` at that tag and, per arch
+input: the tag — run it once per tag you want available, default or
+opt-in) checks out `XTLS/Xray-core` at that tag and, per arch
 (`arm64`, `mipsle` softfloat):
 
 ```

@@ -23,9 +23,19 @@ import (
 )
 
 // DefaultTag is the pinned XTLS/Xray-core release the vendored builds
-// track. Keep it in sync with packaging/xray-core/version (enforced by a
-// test).
+// track by default -- the last non-prerelease upstream tag we've built
+// and smoke-tested. Keep it in sync with packaging/xray-core/version
+// (enforced by a test).
 const DefaultTag = "v26.3.27"
+
+// PrereleaseTag is a newer upstream tag -- an upstream *pre-release* --
+// that we've also built for the router arches and offer as an explicit
+// opt-in (install.sh --xray-core-tag=, `internal ensure-xray-core
+// --tag=`, the bot's update_core action). It is never the default; a
+// router only runs it if someone asked for it, and the choice is
+// persisted in config.XrayCoreTag so a later self-update keeps it.
+// Empty -> no prerelease is currently offered.
+const PrereleaseTag = "v26.7.28"
 
 const defaultBaseURL = "https://github.com/kuzzrus/keenetic-xray-go/releases/download/xray-core"
 
@@ -43,6 +53,14 @@ type Options struct {
 	BaseURL string // "" -> defaultBaseURL
 	HTTP    *http.Client
 
+	// Force re-installs even when a runnable binary is already at Dest --
+	// the "upgrade the core to Tag" path, as opposed to the default
+	// "make sure something runs". Still safe: installVendored downloads
+	// to a temp file and smoke-tests it there, and only renames over
+	// Dest once that passes, so a broken download never replaces a
+	// working core. Ignored for the opkg path (opkg decides itself).
+	Force bool
+
 	// Test hooks; nil selects the real implementation.
 	smoke func(bin string) error          // "<bin> version" must exit 0
 	opkg  func(ctx context.Context) error // install xray-core through opkg
@@ -50,7 +68,8 @@ type Options struct {
 
 // Ensure guarantees a runnable xray binary at opts.Dest and reports where
 // it came from: "existing", "vendored", or "entware". It never removes a
-// binary that already runs.
+// binary that already runs -- and with opts.Force it still won't, since a
+// replacement is only swapped in after it smoke-tests in a temp file.
 func Ensure(ctx context.Context, opts Options) (string, error) {
 	dest := opts.Dest
 	if dest == "" {
@@ -65,7 +84,7 @@ func Ensure(ctx context.Context, opts Options) (string, error) {
 		opkg = realOpkgInstall
 	}
 
-	if smoke(dest) == nil {
+	if !opts.Force && smoke(dest) == nil {
 		return "existing", nil
 	}
 

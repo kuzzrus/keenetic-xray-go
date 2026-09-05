@@ -220,6 +220,19 @@ current config to show as defaults -- `📊 Показать` on the screen (a
 <http>`, `/proxy0 <router> protocol socks5|http`, `/proxy0 <router>
 interface Proxy1`.
 
+`🧩 Ядро xray` (`corem:`) opens a screen with `⬆️ Переустановить текущий
+пин` (`coreup:`), `✅ Стабильное <DefaultTag>` (`corestable:`), and --
+only when `xraycore.PrereleaseTag` is non-empty -- `🧪 Пререлиз <tag>`
+(`corepre:`). Each enqueues `update_core` with `""` / `"stable"` / the
+tag. `update_core` force-replaces the core binary (from our
+`xray-core/<tag>` releases, `Prefer: vendored` so a missing asset errors
+rather than substituting an Entware build), persists the chosen tag to
+`config.xray_core_tag` *after* a successful fetch, then `rebindXray`s so
+the supervised xray restarts onto the new binary. `ensure_core` stays
+the separate "there's no working core, repair it" path. The button
+labels carry the tag strings because `xraycore` is already a botcontrol
+dependency (status/doctor use `xraycore.Version`).
+
 `➕ Добавить роутер` starts a two-step text dialog (`telegram_wizard.go`):
 id, then display name. `✏️ Переименовать` (or `/rename <id> <name>`) is
 one step over `Store.RenameRouter`. State is per-chat; any `/command`
@@ -258,7 +271,8 @@ ones are text-only:
 /proxy0 <router> interface Proxy0|Proxy1|…       which Keenetic Proxy interface to drive
 /ports  <router> <socks> <http>                 change the local SOCKS/HTTP inbound ports (live)
 /restart <router>               restart the failover daemon (detached; the replacement emits daemon_start)
-/ensure_core <router>           (re)install the xray-core binary -- vendored build, opkg fallback
+/ensure_core <router>           (re)install the xray-core binary if it's missing/broken -- vendored build, opkg fallback
+/update_core <router> [vX.Y.Z|stable]   force-replace the xray-core binary and rebind xray; a tag persists in config.xray_core_tag, "stable" clears it
 /update <router>                re-run install.sh (whole keenetic-xray package)
 /failover <router> show                        current health-check thresholds
 /failover <router> set <key> <value>           tune one (restarts the daemon to apply)

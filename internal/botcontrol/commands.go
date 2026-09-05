@@ -40,6 +40,10 @@ type RouterHandler struct {
 	XrayBinary string
 	OptPath    string
 
+	// ensureCoreFn is the xray-core installer, injectable so tests don't
+	// need a real binary to smoke-test. nil -> xraycore.Ensure.
+	ensureCoreFn func(context.Context, xraycore.Options) (string, error)
+
 	// InitScript is the daemon's init.d script, exec'd by the
 	// daemon_restart action. Empty -> that action returns an error.
 	InitScript string
@@ -137,6 +141,8 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 		return h.daemonRestart()
 	case ActionEnsureCore:
 		return h.ensureCore(ctx)
+	case ActionUpdateCore:
+		return h.updateCore(ctx, cmd.Args)
 	case ActionSelfUpdate:
 		return h.selfUpdate()
 	case ActionFailoverShow:
@@ -704,11 +710,15 @@ func (h *RouterHandler) selfUpdate() (string, error) {
 
 // ensureCore retries the xray-core install (vendored build, opkg
 // fallback). Bounded at 5 min; it holds the agent's poll loop while it
-// runs, acceptable for a personal single-router setup.
+// runs, acceptable for a personal single-router setup. This is the
+// "there's no working core" repair path -- it leaves an already-runnable
+// binary alone; updateCore is the "replace a working one" path.
 func (h *RouterHandler) ensureCore(ctx context.Context) (string, error) {
 	cctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	src, err := xraycore.Ensure(cctx, xraycore.Options{Dest: h.XrayBinary})
+	src, err := h.ensureCore0(cctx, xraycore.Options{
+		Dest: h.XrayBinary, Tag: h.Config.XrayCoreTag,
+	})
 	if err != nil {
 		return "", err
 	}
@@ -716,6 +726,71 @@ func (h *RouterHandler) ensureCore(ctx context.Context) (string, error) {
 		return fmt.Sprintf("xray-core готов (%s): %s", src, v), nil
 	}
 	return fmt.Sprintf("xray-core установлен (%s)", src), nil
+}
+
+// ensureCore0 is xraycore.Ensure unless a test has swapped ensureCoreFn.
+func (h *RouterHandler) ensureCore0(ctx context.Context, opts xraycore.Options) (string, error) {
+	if h.ensureCoreFn != nil {
+		return h.ensureCoreFn(ctx, opts)
+	}
+	return xraycore.Ensure(ctx, opts)
+}
+
+// xrayCoreTag resolves the effective vendored tag for this router.
+func (h *RouterHandler) xrayCoreTag() string {
+	if h.Config.XrayCoreTag != "" {
+		return h.Config.XrayCoreTag
+	}
+	return xraycore.DefaultTag
+}
+
+// updateCore force-replaces the xray-core binary and rebinds xray onto
+// it. args[0]: "" reinstalls the currently pinned tag; "stable" clears
+// the pin back to xraycore.DefaultTag; a "vN.N.N" tag switches this
+// router onto it (persisted in config.XrayCoreTag so a later
+// self_update keeps it). Vendored-only -- a missing asset errors rather
+// than silently substituting whatever xray-core the Entware feed has;
+// and because xraycore.Ensure smoke-tests the download in a temp file
+// before swapping it in, a bad fetch leaves the running core untouched.
+func (h *RouterHandler) updateCore(ctx context.Context, args []string) (string, error) {
+	if h.XrayBinary == "" {
+		return "", fmt.Errorf("путь к xray не задан для этого агента")
+	}
+	want := h.Config.XrayCoreTag
+	if len(args) > 0 && args[0] != "" {
+		switch a := strings.TrimSpace(args[0]); a {
+		case "stable", xraycore.DefaultTag:
+			want = ""
+		default:
+			if !config.ValidXrayCoreTag(a) {
+				return "", fmt.Errorf("тег %q: нужен вид v26.7.28 или \"stable\"", args[0])
+			}
+			want = a
+		}
+	}
+
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	src, err := h.ensureCore0(cctx, xraycore.Options{
+		Dest: h.XrayBinary, Tag: want, Force: true, Prefer: "vendored",
+	})
+	if err != nil {
+		return "", err // config untouched -- don't record a switch that didn't happen
+	}
+
+	if want != h.Config.XrayCoreTag {
+		h.Config.XrayCoreTag = want
+		if err := h.Config.Save(h.ConfigPath); err != nil {
+			return "", err
+		}
+	}
+	h.rebindXray(ctx) // the supervised xray is still the old binary until this
+
+	shown := h.xrayCoreTag()
+	if v, verr := xraycore.Version(h.XrayBinary); verr == nil {
+		return fmt.Sprintf("xray-core обновлён (%s, пин %s): %s", src, shown, v), nil
+	}
+	return fmt.Sprintf("xray-core обновлён (%s, пин %s)", src, shown), nil
 }
 
 func (h *RouterHandler) profileList() string {

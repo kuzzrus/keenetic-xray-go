@@ -18,23 +18,36 @@ import (
 // replacement, so the *new* process announces itself here on startup
 // instead, the same way any self-update actually completes.
 //
-// Silent on a first-ever run (versionFile doesn't exist yet -- nothing
-// to compare against, and announcing "updated" on a fresh install would
-// be wrong) and on an unchanged version (a plain restart -- a reboot, a
+// Also notifies (with different wording, since there's no "from"
+// version to name) when versionFile doesn't exist yet -- which in
+// practice almost never means a genuinely brand new install (by the
+// time the service first starts, `setup` has already run and
+// AllowedChatIDs is already populated, so there's always someone to
+// tell) and instead usually means an *existing* server was just
+// upgraded from a build that predates this file ever being written --
+// exactly what happened the first time this feature itself shipped:
+// silently doing nothing there was the actual bug, not a safeguard.
+// Silent only on an unchanged version (a plain restart -- a reboot, a
 // crash, `systemctl restart` for some unrelated reason -- is not an
 // update and must not be reported as one).
 func notifyIfUpdated(versionFile string, notify func(string)) error {
 	current := version.String()
-	prev, err := os.ReadFile(versionFile)
-	switch {
-	case err == nil:
-		if p := strings.TrimSpace(string(prev)); p != "" && p != current {
-			notify(fmt.Sprintf("✅ Сервер обновлён: %s → %s", p, current))
-		}
-	case os.IsNotExist(err):
-		// fresh install -- nothing to compare against, stay quiet.
-	default:
+	data, err := os.ReadFile(versionFile)
+	prev := ""
+	if err == nil {
+		prev = strings.TrimSpace(string(data))
+	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("reading %s: %w", versionFile, err)
+	}
+
+	switch {
+	case prev == "":
+		// Missing or empty file -- no "from" version worth naming,
+		// whether that's this feature's own first rollout or a
+		// genuinely fresh install.
+		notify(fmt.Sprintf("✅ Сервер запущен: %s", current))
+	case prev != current:
+		notify(fmt.Sprintf("✅ Сервер обновлён: %s → %s", prev, current))
 	}
 	return os.WriteFile(versionFile, []byte(current), 0o644)
 }

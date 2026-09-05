@@ -26,6 +26,9 @@
 #   --no-proxy0            turn OFF the Keenetic Proxy0 wiring (on by default)
 #   --xray-core=vendored   force this project's size-optimised xray-core build
 #   --xray-core=entware    force `opkg install xray-core` instead
+#   --xray-core-tag=vX.Y.Z opt this router onto a specific vendored core tag
+#                          (e.g. a vetted pre-release); persisted, so a later
+#                          self-update keeps it. "stable" clears it.
 #   (default: try vendored, fall back to Entware; Proxy0 on for a Keenetic)
 set -eu
 
@@ -42,6 +45,7 @@ trap 'rm -f "$TMP_IPK"' EXIT
 for arg in "$@"; do
     case "$arg" in
         --xray-core=*)       export KEENETIC_XRAY_CORE="${arg#--xray-core=}" ;;
+        --xray-core-tag=*)   export KEENETIC_XRAY_CORE_TAG="${arg#--xray-core-tag=}" ;;
         --sub=* | --from=*)  export KEENETIC_XRAY_SETUP_FROM="${arg#*=}" ;;
         --vless=*)           export KEENETIC_XRAY_SETUP_FROM="${arg#--vless=}" ;;
         vless://* | http://* | https://*) export KEENETIC_XRAY_SETUP_FROM="$arg" ;;

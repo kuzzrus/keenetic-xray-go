@@ -195,6 +195,42 @@ func TestValidProxyIface(t *testing.T) {
 	}
 }
 
+func TestValidXrayCoreTag(t *testing.T) {
+	for _, ok := range []string{"", "v26.3.27", "v26.7.28", "v1.0.0"} {
+		if !ValidXrayCoreTag(ok) {
+			t.Errorf("ValidXrayCoreTag(%q) = false, want true", ok)
+		}
+	}
+	for _, bad := range []string{"26.3.27", "v26.3", "v26.3.27-rc1", "latest", "v26.3.27 "} {
+		if ValidXrayCoreTag(bad) {
+			t.Errorf("ValidXrayCoreTag(%q) = true, want false", bad)
+		}
+	}
+}
+
+func TestConfigValidate_XrayCoreTag(t *testing.T) {
+	c := Default()
+	c.XrayCoreTag = "v26.7.28"
+	if err := c.Validate(); err != nil {
+		t.Errorf("xray_core_tag v26.7.28: unexpected error %v", err)
+	}
+	c.XrayCoreTag = "nightly"
+	if err := c.Validate(); err == nil {
+		t.Error("xray_core_tag \"nightly\": expected an error")
+	}
+}
+
+func TestConfigSave_CreatesConfigDir(t *testing.T) {
+	// Save on a fresh box, before postinst-setup has made the dir.
+	path := filepath.Join(t.TempDir(), "etc", "keenetic-xray", "config.json")
+	if err := Default().Save(path); err != nil {
+		t.Fatalf("Save into a missing dir: %v", err)
+	}
+	if _, err := Load(path); err != nil {
+		t.Fatalf("Load back: %v", err)
+	}
+}
+
 func TestConfig_Proxy0Port(t *testing.T) {
 	c := Default() // SOCKSPort 1080, HTTPPort 1081 from DefaultFailoverConfig
 	if got := c.Proxy0Port(); got != c.Failover.SOCKSPort {

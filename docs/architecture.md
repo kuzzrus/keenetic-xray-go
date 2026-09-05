@@ -62,8 +62,13 @@ ensure-xray-core`, which installs a size-optimised (UPX-packed) build
 from this repo's own `xray-core/<tag>` releases -- verified against its
 published sha256 and smoke-tested with `xray version` before it's put in
 place -- and falls back to `opkg install xray-core` if that can't be
-fetched or won't run. The pinned upstream tag and the build workflow live
-in `packaging/xray-core/` and `.github/workflows/xray-core.yml`.
+fetched or won't run. The default tag is pinned in
+`packaging/xray-core/version` (== `xraycore.DefaultTag`); a router can be
+opted onto a different one (`--xray-core-tag=`, `ensure-xray-core
+--tag=`, or the bot's `update_core`), stored as `config.xray_core_tag`
+and applied with `Force` -- the temp-file smoke test means a bad fetch
+never replaces a working core. The build workflow is
+`.github/workflows/xray-core.yml`.
 
 `packaging/build-ipk.sh` builds the `.ipk` by hand: a single
 gzip-compressed tar containing `./debian-binary`, `./data.tar.gz`, and

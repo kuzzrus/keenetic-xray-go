@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"time"
 )
@@ -216,6 +217,27 @@ type Config struct {
 	Failover      FailoverConfig `json:"failover"`
 	Agent         AgentConfig    `json:"agent"`
 	Proxy0        Proxy0Config   `json:"proxy0"`
+
+	// XrayCoreTag pins which vendored Xray-core release this router
+	// tracks. Empty -> xraycore.DefaultTag (the stable pin). Set to an
+	// upstream tag (e.g. a vetted pre-release) to opt that one router
+	// onto it; persisted here so a package self-update keeps the choice
+	// instead of reverting to the default. internal/config can't name
+	// xraycore.DefaultTag without an import cycle, so the ""-resolution
+	// happens at the call sites (cmd, botcontrol) that already use it.
+	XrayCoreTag string `json:"xray_core_tag,omitempty"`
+}
+
+// xrayTagRe is the shape of an XTLS/Xray-core release tag: vMAJOR.MINOR
+// .PATCH (upstream uses calendar-ish v26.7.28). Kept loose on the
+// numbers; it only needs to reject obvious junk before it reaches a
+// download URL.
+var xrayTagRe = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
+
+// ValidXrayCoreTag reports whether s is an acceptable XrayCoreTag: empty
+// (the default pin) or a "vN.N.N" release tag.
+func ValidXrayCoreTag(s string) bool {
+	return s == "" || xrayTagRe.MatchString(s)
 }
 
 // Default returns a fresh Config with no profiles configured yet, ready to
@@ -266,6 +288,11 @@ func (c *Config) Save(path string) error {
 		return fmt.Errorf("encoding config: %w", err)
 	}
 	data = append(data, '\n')
+	if dir := filepath.Dir(path); dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("creating config directory: %w", err)
+		}
+	}
 	return os.WriteFile(path, data, 0o600)
 }
 
@@ -295,6 +322,9 @@ func (c *Config) Validate() error {
 	}
 	if !ValidProxyIface(c.Proxy0.Interface) {
 		return fmt.Errorf("proxy0.interface %q: want a name like Proxy0 or Proxy1", c.Proxy0.Interface)
+	}
+	if !ValidXrayCoreTag(c.XrayCoreTag) {
+		return fmt.Errorf("xray_core_tag %q: want a release tag like v26.7.28", c.XrayCoreTag)
 	}
 	return nil
 }

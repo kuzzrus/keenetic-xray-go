@@ -34,24 +34,67 @@ func cmdInternal(args []string) error {
 // cmdEnsureXrayCore installs a runnable xray-core binary if one isn't
 // already present: the vendored, size-optimised build from this project's
 // releases by default, or `opkg install xray-core` as the fallback.
-// `--prefer=` (or the KEENETIC_XRAY_CORE env var that install.sh forwards)
-// takes "vendored" or "entware" to force one path.
+//
+//	--prefer=vendored|entware   force one install path (also KEENETIC_XRAY_CORE)
+//	--tag=vX.Y.Z | stable       switch this router onto a specific vendored
+//	                            tag (also KEENETIC_XRAY_CORE_TAG). "stable"
+//	                            (or the current DefaultTag) clears the pin.
+//	                            An explicit --tag persists to config and
+//	                            forces a reinstall even if a core already
+//	                            runs; without it this only fills a gap.
 func cmdEnsureXrayCore(args []string) error {
 	prefer := os.Getenv("KEENETIC_XRAY_CORE")
+	tagArg := os.Getenv("KEENETIC_XRAY_CORE_TAG")
 	for _, a := range args {
-		if v, ok := strings.CutPrefix(a, "--prefer="); ok {
-			prefer = v
+		switch {
+		case strings.HasPrefix(a, "--prefer="):
+			prefer = strings.TrimPrefix(a, "--prefer=")
+		case strings.HasPrefix(a, "--tag="):
+			tagArg = strings.TrimPrefix(a, "--tag=")
+		}
+	}
+
+	cfg, err := config.Load(configPath())
+	if err != nil {
+		return err
+	}
+
+	tag := cfg.XrayCoreTag
+	explicit := tagArg != ""
+	if explicit {
+		tag = strings.TrimSpace(tagArg)
+		if tag == "stable" || tag == xraycore.DefaultTag {
+			tag = "" // clear the pin, back to the default
+		}
+		if !config.ValidXrayCoreTag(tag) {
+			return fmt.Errorf("--tag %q: want a release tag like %s, or \"stable\"", tagArg, xraycore.PrereleaseTag)
+		}
+		if tag != cfg.XrayCoreTag {
+			cfg.XrayCoreTag = tag
+			if err := cfg.Save(configPath()); err != nil {
+				return fmt.Errorf("saving the xray-core tag: %w", err)
+			}
 		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
 
-	src, err := xraycore.Ensure(ctx, xraycore.Options{Dest: xrayBinaryPath(), Prefer: prefer})
+	src, err := xraycore.Ensure(ctx, xraycore.Options{
+		Dest:    xrayBinaryPath(),
+		Prefer:  prefer,
+		Tag:     tag,
+		Force:   explicit,
+		BaseURL: os.Getenv("KEENETIC_XRAY_CORE_BASE_URL"), // "" -> the real release URL; overridable for a fork or tests
+	})
 	if err != nil {
 		return fmt.Errorf("ensuring xray-core: %w", err)
 	}
-	fmt.Printf("xray-core ready (%s) at %s\n", src, xrayBinaryPath())
+	shown := tag
+	if shown == "" {
+		shown = xraycore.DefaultTag
+	}
+	fmt.Printf("xray-core ready (%s, %s) at %s\n", src, shown, xrayBinaryPath())
 	return nil
 }
 

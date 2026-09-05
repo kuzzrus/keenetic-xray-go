@@ -5,6 +5,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/kuzzrus/keenetic-xray-go/internal/xraycore"
 )
 
 // recorder is a concurrency-safe list of the actions a fakeAgent saw.
@@ -233,6 +235,48 @@ func TestTelegramBot_TransportScreen_ProtocolAndInterface(t *testing.T) {
 				t.Errorf("dequeued = %q %v, want proxy0_config [ Proxy1]", cmd.Action, cmd.Args)
 			}
 			_ = store.RecordResult("r1", Result{CommandID: cmd.ID, Output: "proxy0: socks5 через Proxy1"})
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestTelegramBot_CoreScreen(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	mustRegister(t, store, "r1")
+	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL, ResultTimeout: 2 * time.Second}
+	runBotInBackground(t, bot)
+
+	fake.push(1, "/menu")
+	fake.waitForReply(t, 3*time.Second)
+	msgID := fake.lastSent(t).MessageID
+
+	fake.pushCallback(1, msgID, "corem:r1")
+	fake.waitForEditContaining(t, 3*time.Second, "Ядро xray")
+
+	// "Пререлиз" button -> update_core carrying the prerelease tag.
+	fake.pushCallback(1, msgID, "corepre:r1")
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if cmd, _ := store.Dequeue("r1"); cmd != nil {
+			if cmd.Action != ActionUpdateCore || len(cmd.Args) != 1 || cmd.Args[0] != xraycore.PrereleaseTag {
+				t.Errorf("dequeued = %q %v, want update_core [%s]", cmd.Action, cmd.Args, xraycore.PrereleaseTag)
+			}
+			_ = store.RecordResult("r1", Result{CommandID: cmd.ID, Output: "xray-core обновлён"})
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// "Стабильное" button -> update_core stable.
+	fake.pushCallback(1, msgID, "corestable:r1")
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if cmd, _ := store.Dequeue("r1"); cmd != nil {
+			if cmd.Action != ActionUpdateCore || len(cmd.Args) != 1 || cmd.Args[0] != "stable" {
+				t.Errorf("dequeued = %q %v, want update_core [stable]", cmd.Action, cmd.Args)
+			}
 			break
 		}
 		time.Sleep(20 * time.Millisecond)

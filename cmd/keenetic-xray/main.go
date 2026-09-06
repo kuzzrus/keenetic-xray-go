@@ -161,6 +161,7 @@ func cmdDaemon(args []string) error {
 	applyWGTransportAtStartup(cfg, logf)
 	applyMSSClamp(cfg, logf)
 	go routerReconcileLoop(ctx, logf)
+	watchReconcileSignal(ctx, func() { reconcileOnce(ctx, logf) }) // SIGUSR1 from the netfilter.d hook
 
 	if cfg.Agent.Enabled {
 		opts, err := loadAgentOptions(cfg)

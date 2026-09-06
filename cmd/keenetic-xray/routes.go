@@ -271,7 +271,26 @@ func routesApply(cfg *config.Config, okMsg string) error {
 	}
 	fmt.Printf("%s. на роутере: +%d/-%d записей, групп +%d/-%d\n",
 		okMsg, rep.EntriesAdded, rep.EntriesRemoved, len(rep.GroupsCreated), len(rep.GroupsRemoved))
+	flushConntrackAfterRoutes(ctx, rep)
 	return nil
+}
+
+// flushConntrackAfterRoutes drops the conntrack table when a route set
+// actually changed, so connections already open to a now-matched IP
+// re-evaluate their route on the next packet instead of staying direct
+// until they close. No-op unless `conntrack` is installed.
+func flushConntrackAfterRoutes(ctx context.Context, rep keenetic.RouteReport) {
+	if rep.EntriesAdded+rep.EntriesRemoved+len(rep.GroupsCreated)+len(rep.GroupsRemoved)+len(rep.RoutesSet)+len(rep.RoutesCleared) == 0 {
+		return
+	}
+	if !keenetic.ConntrackPresent() {
+		return
+	}
+	if err := keenetic.FlushConntrack(ctx); err != nil {
+		fmt.Printf("conntrack -F: %v\n", err)
+		return
+	}
+	fmt.Println("conntrack сброшен — открытые соединения переедут в туннель на следующем пакете")
 }
 
 // desiredRoutes resolves config route lists into keenetic.DesiredRoute

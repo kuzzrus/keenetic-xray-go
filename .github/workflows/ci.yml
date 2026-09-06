@@ -45,6 +45,7 @@ jobs:
             packaging/ipk/postinst \
             packaging/ipk/prerm \
             packaging/init.d/S99keenetic-xray \
+            packaging/ndm/netfilter.d/50-keenetic-xray.sh \
             packaging/server/control-server-self-update.sh
 
   build:

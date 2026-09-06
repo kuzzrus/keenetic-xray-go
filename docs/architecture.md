@@ -4,12 +4,17 @@
 
 `cmd/keenetic-xray` is the only binary this project ships *for the
 router*. There is no separate CLI/daemon/agent binary split on that side:
-a stdlib-only Go binary is roughly the same size (~5-6MB stripped,
-measured directly) regardless of which features are compiled in, since Go
-statically links its runtime either way -- splitting into multiple
-binaries would buy little and would reintroduce, at the binary level, the
-"many near-duplicate artifacts" problem this project deliberately avoids
-at the installer level (see below). `cmd/keenetic-xray-control-server` is
+a stdlib-only Go binary is roughly the same size (~6.6MB arm64 / ~7.9MB
+mipsle, stripped -- `-s -w -trimpath`, `CGO_ENABLED=0`, zero external
+deps) regardless of which features are compiled in, since Go statically
+links its runtime either way -- splitting into multiple binaries would
+buy little and would reintroduce, at the binary level, the "many
+near-duplicate artifacts" problem this project deliberately avoids at
+the installer level (see below). The `.ipk` ships this binary
+**UPX-packed** (`release.yml`: ~2.5MB arm64 LZMA / ~4MB mipsle NRV, and
+qemu-smoke-tested there) -- same treatment as the vendored xray-core;
+the standalone `keenetic-xray-linux-<arch>` release assets stay unpacked
+as a recovery fallback. `cmd/keenetic-xray-control-server` is
 a genuinely separate binary, but deliberately so -- see
 `docs/bot-control-design.md` for why the VPS side isn't part of this
 split.

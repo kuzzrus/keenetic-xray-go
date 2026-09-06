@@ -160,7 +160,7 @@ func cmdDaemon(args []string) error {
 	applyRoutesAtStartup(cfg, logf)
 	applyWGTransportAtStartup(cfg, logf)
 	applyMSSClamp(cfg, logf)
-	go mssKeepalive(ctx, logf)
+	go routerReconcileLoop(ctx, logf)
 
 	if cfg.Agent.Enabled {
 		opts, err := loadAgentOptions(cfg)

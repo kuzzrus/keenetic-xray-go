@@ -35,6 +35,32 @@ jobs:
           # is the release trigger's tag, so use it directly.
           GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
 
+      # Shrink the router binary in place with UPX before it goes into the
+      # .ipk: ~6.6MB -> ~2.5MB (arm64, LZMA) / ~7.9MB -> ~4MB (mipsle,
+      # NRV -- UPX's LZMA path doesn't cover mips ELF, same as xray-core).
+      # goreleaser has already uploaded the standalone
+      # keenetic-xray-linux-<arch> assets by now; those stay UNPACKED as a
+      # recovery fallback for a router whose kernel won't run the UPX stub
+      # (xray-core already runs UPX-packed on the target hardware, so this
+      # is a proven path). The smoke test decompresses + runs each packed
+      # binary under qemu; a failure here stops the release before the
+      # .ipk is built.
+      - name: UPX-pack the router binaries
+        run: |
+          set -eu
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq upx-ucl qemu-user-static
+          arm64="dist/keenetic-xray-arm64_linux_arm64_v8.0/keenetic-xray"
+          mips="dist/keenetic-xray-mipsle_linux_mipsle_softfloat/keenetic-xray"
+          b_arm64=$(stat -c%s "$arm64"); b_mips=$(stat -c%s "$mips")
+          upx -9 --lzma "$arm64"
+          upx -9 "$mips"
+          upx -t "$arm64" "$mips"
+          qemu-aarch64-static "$arm64" version
+          qemu-mipsel-static "$mips" version
+          echo "arm64:  $b_arm64 -> $(stat -c%s "$arm64")"
+          echo "mipsle: $b_mips -> $(stat -c%s "$mips")"
+
       # goreleaser's nfpm integration wasn't used for the .ipk itself (see
       # packaging/build-ipk.sh for why) -- build it here from the binaries
       # goreleaser just produced, and attach it to the same release.

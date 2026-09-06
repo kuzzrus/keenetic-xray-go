@@ -165,45 +165,6 @@ func applyMSSClamp(cfg *config.Config, logf func(string, ...any)) {
 	logf("mss-clamp: forwarded TCP MSS -> %d", mss)
 }
 
-// mssKeepalive re-asserts the MSS-clamp rule when the router firmware has
-// flushed it. ndm rewrites the firewall on all sorts of events (an
-// interface flap, a policy edit, a schedule firing) and silently drops
-// rules it didn't add -- so the clamp works right after `proxy0 on` and
-// then stops "some time later", which looks exactly like the video
-// stalls coming back. One `iptables -S` read every 2 min; only logs when
-// it actually had to put the rule back. Reloads config each tick so a
-// `proxy0 off` (applied over SIGHUP) stops it re-adding a stale clamp.
-func mssKeepalive(ctx context.Context, logf func(string, ...any)) {
-	if !keenetic.Available() {
-		return
-	}
-	t := time.NewTicker(2 * time.Minute)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-		}
-		cfg, err := config.Load(configPath())
-		if err != nil {
-			continue
-		}
-		mss := cfg.Proxy0.MSSClampValue()
-		if !cfg.Proxy0.Enabled || mss <= 0 || !keenetic.IptablesPresent() {
-			continue
-		}
-		if keenetic.MSSClampInPlace(ctx, mss) {
-			continue
-		}
-		if err := keenetic.SetMSSClamp(ctx, mss); err != nil {
-			logf("mss-clamp: re-assert failed: %v", err)
-			continue
-		}
-		logf("mss-clamp: re-asserted MSS %d (firmware had dropped the rule)", mss)
-	}
-}
-
 func proxy0Off(cfg *config.Config) error {
 	if keenetic.Available() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

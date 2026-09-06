@@ -20,6 +20,11 @@
 # even matched a real `dpkg-deb --build` reference archive) and every
 # one was still rejected, because the container format itself was wrong.
 #
+# The release workflow UPX-packs <binary-path> in place before calling
+# this script, so the shipped .ipk carries a ~2.5-4MB binary. Running
+# this by hand on an unpacked binary just yields a larger .ipk -- still
+# valid, opkg doesn't care.
+#
 # Usage: build-ipk.sh <version> <arch> <binary-path> <output.ipk>
 # Example:
 #   build-ipk.sh 0.1.0-1 aarch64-3.10 dist/keenetic-xray-linux-arm64 \

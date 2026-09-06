@@ -103,6 +103,10 @@ func TestConfigSaveLoad_RoundTrip(t *testing.T) {
 	c.PrimaryIndex = 0
 	c.BackupIndex = 1
 	c.Subscription = &Subscription{URL: "https://sub.example.com/feed"}
+	c.Routing.Lists = []RouteList{
+		{Name: "youtube", Entries: []string{"youtube.com"}, Preset: "youtube", PresetRev: "abc123def456"},
+		{Name: "hand", Entries: []string{"example.org"}},
+	}
 
 	if err := c.Save(path); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -111,6 +115,16 @@ func TestConfigSaveLoad_RoundTrip(t *testing.T) {
 	loaded, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
+	}
+
+	if len(loaded.Routing.Lists) != 2 {
+		t.Fatalf("len(Routing.Lists) = %d, want 2", len(loaded.Routing.Lists))
+	}
+	if loaded.Routing.Lists[0].Preset != "youtube" || loaded.Routing.Lists[0].PresetRev != "abc123def456" {
+		t.Errorf("preset binding lost: %+v", loaded.Routing.Lists[0])
+	}
+	if loaded.Routing.Lists[1].Preset != "" {
+		t.Errorf("hand-made list gained a Preset: %+v", loaded.Routing.Lists[1])
 	}
 
 	if loaded.Variant != c.Variant {

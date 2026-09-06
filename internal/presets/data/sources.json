@@ -10,6 +10,19 @@
   "drift_gate_low": 0.5,
   "drift_gate_high": 2.0,
 
+  "category_order": [
+    "Мессенджеры",
+    "Видео",
+    "Соцсети",
+    "Музыка",
+    "Искусственный интеллект",
+    "Игры",
+    "Работа и инструменты",
+    "Разработка",
+    "CDN и инфраструктура",
+    "Финансы и крипта"
+  ],
+
   "presets": [
     { "name": "telegram",    "title": "Telegram",             "category": "Мессенджеры", "ga_tags": ["telegram"], "cidr_providers": ["telegram"], "cidr_extra": ["https://core.telegram.org/resources/cidr.txt"] },
     { "name": "whatsapp",    "title": "WhatsApp",             "category": "Мессенджеры", "ga_tags": ["whatsapp"], "cidr_providers": ["facebook"] },

@@ -55,6 +55,9 @@ type TelegramBot struct {
 	routeMenuMu sync.Mutex
 	routeMenus  map[int64]routeMenu // per-chat 📍 Маршруты state: the list snapshot the buttons index into
 
+	presetMenuMu sync.Mutex
+	presetMenus  map[int64]presetMenu // per-chat 📦 Готовые списки state: the preset snapshot the buttons index into
+
 	flapMu sync.Mutex
 	flap   map[string]*flapWindow // per-router failover-notification rate state
 }
@@ -134,6 +137,7 @@ func (b *TelegramBot) Run(ctx context.Context) error {
 	b.initClient()
 	b.wizards = make(map[int64]*wizState)
 	b.routeMenus = make(map[int64]routeMenu)
+	b.presetMenus = make(map[int64]presetMenu)
 	if err := b.setMyCommands(ctx); err != nil && ctx.Err() == nil {
 		b.logger().Printf("telegram: setMyCommands: %s", b.scrubToken(err))
 	}
@@ -548,7 +552,8 @@ const helpText = `/menu — меню с кнопками (проще всего)
 /watchdog <router> show|enable|disable|log — cron, что перезапускает демон, если он упал
 /logs <router> [N] — последние N строк лога демона (по умолч. 200)
 /ports <router> <socks-port> <http-port> — сменить локальные порты (применяется на лету)
-/routes <router> list|show|new <имя> <домены…>|add|del|rm|on|off|iface <имя> <ProxyN|WireguardN> — списки доменов в туннель (KeeneticOS 5.0+)`
+/routes <router> list|show|new <имя> <домены…>|add|del|rm|on|off|iface <имя> <ProxyN|WireguardN> — списки доменов в туннель (KeeneticOS 5.0+)
+/routes <router> preset add <имя> [ip]|sync [<имя>|all] — готовые списки по сервисам (или кнопка 📦 Готовые списки)`
 
 func (b *TelegramBot) dispatch(ctx context.Context, text string) string {
 	fields := strings.Fields(text)
@@ -648,7 +653,7 @@ func (b *TelegramBot) dispatchFailover(ctx context.Context, args []string) strin
 // dispatchRoutes routes /routes <router> {list|show [name]|new <name> <entries…>|
 // add <name> <entries…>|del <name> <entries…>|rm <name>|on <name>|off <name>}.
 func (b *TelegramBot) dispatchRoutes(ctx context.Context, args []string) string {
-	usage := "формат: /routes <роутер> {list | show [имя] | new <имя> <записи…> | add <имя> <записи…> | del <имя> <записи…> | rm <имя> | on <имя> | off <имя> | iface <имя> <ProxyN|WireguardN>}"
+	usage := "формат: /routes <роутер> {list | show [имя] | new <имя> <записи…> | add <имя> <записи…> | del <имя> <записи…> | rm <имя> | on <имя> | off <имя> | iface <имя> <ProxyN|WireguardN> | preset add <имя> [ip] | preset sync [<имя>|all]}"
 	if len(args) < 2 {
 		if len(args) == 1 {
 			return b.runRouterCommand(ctx, args[:1], ActionRoutesList, nil)
@@ -659,6 +664,25 @@ func (b *TelegramBot) dispatchRoutes(ctx context.Context, args []string) string 
 	switch args[1] {
 	case "list":
 		return b.runRouterCommand(ctx, rid, ActionRoutesList, nil)
+	case "preset":
+		if len(args) < 3 {
+			return "готовые списки удобнее через кнопку 📦 Готовые списки в 📍 Маршруты.\n" + usage
+		}
+		switch args[2] {
+		case "add":
+			if len(args) < 4 {
+				return usage
+			}
+			return b.runRouterCommand(ctx, rid, ActionRoutesPresetAdd, args[3:])
+		case "sync":
+			target := "all"
+			if len(args) >= 4 {
+				target = args[3]
+			}
+			return b.runRouterCommand(ctx, rid, ActionRoutesPresetSync, []string{target})
+		default:
+			return "готовые списки удобнее через кнопку 📦 Готовые списки в 📍 Маршруты.\n" + usage
+		}
 	case "show":
 		return b.runRouterCommand(ctx, rid, ActionRoutesShow, args[2:])
 	case "new", "add":

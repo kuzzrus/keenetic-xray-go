@@ -535,6 +535,19 @@ func TestRouterHandler_Routes(t *testing.T) {
 		t.Error("list should be Disabled after off")
 	}
 
+	// Point the list at a WireGuard interface.
+	if _, err := h.Handle(ctx, Command{Action: ActionRoutesSetIface, Args: []string{"media", "Wireguard4"}}); err != nil {
+		t.Fatalf("routes_setiface: %v", err)
+	}
+	if h.Config.Routing.Lists[0].Interface != "Wireguard4" {
+		t.Errorf("interface = %q, want Wireguard4", h.Config.Routing.Lists[0].Interface)
+	}
+	for _, bad := range [][]string{{"media", "wg0"}, {"media", ""}, {"nope", "Proxy0"}} {
+		if _, err := h.Handle(ctx, Command{Action: ActionRoutesSetIface, Args: bad}); err == nil {
+			t.Errorf("routes_setiface %v: expected an error", bad)
+		}
+	}
+
 	// List text.
 	txt, _ := h.Handle(ctx, Command{Action: ActionRoutesList})
 	if !strings.Contains(txt, "📁 media") || !strings.Contains(txt, "⛔") {

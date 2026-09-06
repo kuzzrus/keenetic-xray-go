@@ -528,7 +528,7 @@ const helpText = `/menu — меню с кнопками (проще всего)
 /failover <router> set <ключ> <значение> — подстроить их (перезапустит демон)
 /watchdog <router> show|enable|disable|log — cron, что перезапускает демон, если он упал
 /ports <router> <socks-port> <http-port> — сменить локальные порты (применяется на лету)
-/routes <router> list|show|new <имя> <домены…>|add|del|rm|on|off — списки доменов в туннель через Proxy0 (KeeneticOS 5.0+)`
+/routes <router> list|show|new <имя> <домены…>|add|del|rm|on|off|iface <имя> <ProxyN|WireguardN> — списки доменов в туннель (KeeneticOS 5.0+)`
 
 func (b *TelegramBot) dispatch(ctx context.Context, text string) string {
 	fields := strings.Fields(text)
@@ -623,7 +623,7 @@ func (b *TelegramBot) dispatchFailover(ctx context.Context, args []string) strin
 // dispatchRoutes routes /routes <router> {list|show [name]|new <name> <entries…>|
 // add <name> <entries…>|del <name> <entries…>|rm <name>|on <name>|off <name>}.
 func (b *TelegramBot) dispatchRoutes(ctx context.Context, args []string) string {
-	usage := "формат: /routes <роутер> {list | show [имя] | new <имя> <записи…> | add <имя> <записи…> | del <имя> <записи…> | rm <имя> | on <имя> | off <имя>}"
+	usage := "формат: /routes <роутер> {list | show [имя] | new <имя> <записи…> | add <имя> <записи…> | del <имя> <записи…> | rm <имя> | on <имя> | off <имя> | iface <имя> <ProxyN|WireguardN>}"
 	if len(args) < 2 {
 		if len(args) == 1 {
 			return b.runRouterCommand(ctx, args[:1], ActionRoutesList, nil)
@@ -656,6 +656,11 @@ func (b *TelegramBot) dispatchRoutes(ctx context.Context, args []string) string 
 			return usage
 		}
 		return b.runRouterCommand(ctx, rid, ActionRoutesToggle, []string{args[2], args[1]})
+	case "iface":
+		if len(args) != 4 {
+			return usage
+		}
+		return b.runRouterCommand(ctx, rid, ActionRoutesSetIface, []string{args[2], args[3]})
 	default:
 		return usage
 	}

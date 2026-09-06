@@ -188,6 +188,27 @@ func (h *RouterHandler) routesToggle(ctx context.Context, args []string) (string
 	return h.applyRoutes(ctx, fmt.Sprintf("список %q: %s", l.Name, routeStateWord(l.Disabled)))
 }
 
+// routesSetIface repoints one list at another interface -- a Proxy
+// interface or a WireGuard one (including the in-router WG transport's
+// Wireguard4, or a hand-made Keenetic tunnel). The route is re-issued
+// onto the new interface and cleared off the old one by applyRoutes'
+// full reconcile.
+func (h *RouterHandler) routesSetIface(ctx context.Context, args []string) (string, error) {
+	if len(args) < 2 {
+		return "", fmt.Errorf("usage: routes_setiface <имя> <интерфейс>")
+	}
+	iface := strings.TrimSpace(args[1])
+	if iface == "" || !config.ValidRouteIface(iface) {
+		return "", fmt.Errorf("интерфейс %q: нужно имя вида Proxy0 или Wireguard4", args[1])
+	}
+	l, _ := h.routeList(strings.TrimSpace(args[0]))
+	if l == nil {
+		return "", fmt.Errorf("нет списка %q", args[0])
+	}
+	l.Interface = iface
+	return h.applyRoutes(ctx, fmt.Sprintf("список %q: → %s", l.Name, l.RouteIface()))
+}
+
 // applyRoutes saves the config (Validate runs in Save) and pushes the
 // full route set to the router. Best-effort on the router side, reported
 // inline -- the config change already took.

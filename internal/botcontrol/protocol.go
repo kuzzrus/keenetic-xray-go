@@ -60,12 +60,13 @@ const (
 	ActionSetPorts        = "set_ports"    // args[0]=SOCKS port, args[1]=HTTP port (both as decimal strings)
 	// DNS-based routes (KeeneticOS 5.0+): named lists of domains/subnets
 	// routed through Proxy0. See internal/keenetic.ApplyRoutes.
-	ActionRoutesList       = "routes_list"   // no args
-	ActionRoutesShow       = "routes_show"   // args[0] optional list name -> config-vs-router drift
-	ActionRoutesAdd        = "routes_add"    // args[0]=name, args[1]=space/comma/newline-separated entries (creates the list if new)
-	ActionRoutesDel        = "routes_del"    // args[0]=name, args[1]=entries to remove
-	ActionRoutesRemoveList = "routes_rmlist" // args[0]=name
-	ActionRoutesToggle     = "routes_toggle" // args[0]=name, args[1]="on"|"off"
+	ActionRoutesList       = "routes_list"     // no args
+	ActionRoutesShow       = "routes_show"     // args[0] optional list name -> config-vs-router drift
+	ActionRoutesAdd        = "routes_add"      // args[0]=name, args[1]=space/comma/newline-separated entries (creates the list if new)
+	ActionRoutesDel        = "routes_del"      // args[0]=name, args[1]=entries to remove
+	ActionRoutesRemoveList = "routes_rmlist"   // args[0]=name
+	ActionRoutesToggle     = "routes_toggle"   // args[0]=name, args[1]="on"|"off"
+	ActionRoutesSetIface   = "routes_setiface" // args[0]=name, args[1]=interface (ProxyN | WireguardN)
 	// In-router WireGuard transport (LAN -> WireguardN -> xray wireguard
 	// inbound -> tunnel). See internal/keenetic.ApplyWGTransport.
 	ActionWGTransportShow = "wg_show" // no args

@@ -24,6 +24,13 @@ func transportWG(cfg *config.Config, args []string) error {
 	switch action {
 	case "show":
 		printTransport(cfg)
+		if keenetic.Available() && cfg.WGTransport.Iface != "" {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			if live, err := keenetic.ShowWGTransport(ctx, cfg.WGTransport.Iface); err == nil && live != "" {
+				fmt.Println("---\n" + live)
+			}
+		}
 		return nil
 	case "on":
 		return wgTransportOn(cfg)

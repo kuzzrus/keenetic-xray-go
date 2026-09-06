@@ -186,6 +186,8 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 		return h.routesRemoveList(ctx, cmd.Args)
 	case ActionRoutesToggle:
 		return h.routesToggle(ctx, cmd.Args)
+	case ActionRoutesSetIface:
+		return h.routesSetIface(ctx, cmd.Args)
 	default:
 		return "", fmt.Errorf("unknown action %q", cmd.Action)
 	}

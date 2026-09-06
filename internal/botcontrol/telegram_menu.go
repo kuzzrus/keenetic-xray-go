@@ -184,13 +184,16 @@ func routesScreenText(id string) string {
 		"• роутер должен быть DNS-сервером клиента (не DoH/DoT/публичный DNS на устройстве)\n" +
 		"• клиент — на «Основной политике»\n" +
 		"• первый коннект к домену может уйти напрямую, пока роутер не увидит его DNS-ответ\n\n" +
+		"🎯 Интерфейс — куда гнать список: Proxy0 (по умолчанию), Wireguard4 (WG-транспорт) " +
+		"или любой твой WireGuard-интерфейс Keenetic.\n\n" +
 		"Наши списки отдельны от тех, что заведены в вебе роутера — друг друга не трогают."
 }
 
 func routesScreenKB(id string) inlineKeyboard {
 	return inlineKeyboard{InlineKeyboard: [][]inlineButton{
 		{{Text: "➕ Добавить", CallbackData: "rtadd:" + id}, {Text: "➖ Убрать", CallbackData: "rtdel:" + id}},
-		{{Text: "🔀 Вкл/Выкл", CallbackData: "rttog:" + id}, {Text: "🗑 Удалить список", CallbackData: "rtrm:" + id}},
+		{{Text: "🔀 Вкл/Выкл", CallbackData: "rttog:" + id}, {Text: "🎯 Интерфейс", CallbackData: "rtif:" + id}},
+		{{Text: "🗑 Удалить список", CallbackData: "rtrm:" + id}},
 		{{Text: "📋 Списки", CallbackData: "act:routes_list:" + id}, {Text: "📊 Статус", CallbackData: "act:routes_show:" + id}},
 		{{Text: "⬅️ Назад", CallbackData: "router:" + id}},
 	}}
@@ -400,6 +403,8 @@ func (b *TelegramBot) handleCallback(ctx context.Context, cb tgCallbackQuery) {
 		b.startRouteEntriesWizard(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "rtdel:"), true)
 	case strings.HasPrefix(data, "rttog:"):
 		b.startRouteToggleWizard(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "rttog:"))
+	case strings.HasPrefix(data, "rtif:"):
+		b.startRouteIfaceWizard(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "rtif:"))
 	case strings.HasPrefix(data, "rtrm:"):
 		b.startRouteRemoveWizard(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "rtrm:"))
 	case strings.HasPrefix(data, "srcp:"):

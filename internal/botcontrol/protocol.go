@@ -57,6 +57,7 @@ const (
 	ActionWatchdogEnable  = "watchdog_enable" // ensures a cron daemon exists (installing it via opkg if needed) before writing the entry
 	ActionWatchdogDisable = "watchdog_disable"
 	ActionWatchdogLog     = "watchdog_log" // restart events only, not routine ticks -- see internal/install.SetWatchdogCron
+	ActionDaemonLog       = "daemon_log"   // args[0] optional line count (default 200) -- tail of the daemon's own log file
 	ActionSetPorts        = "set_ports"    // args[0]=SOCKS port, args[1]=HTTP port (both as decimal strings)
 	// DNS-based routes (KeeneticOS 5.0+): named lists of domains/subnets
 	// routed through Proxy0. See internal/keenetic.ApplyRoutes.

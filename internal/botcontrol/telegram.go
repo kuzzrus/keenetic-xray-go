@@ -546,6 +546,7 @@ const helpText = `/menu — меню с кнопками (проще всего)
 /failover <router> show — текущие пороги health-check
 /failover <router> set <ключ> <значение> — подстроить их (перезапустит демон)
 /watchdog <router> show|enable|disable|log — cron, что перезапускает демон, если он упал
+/logs <router> [N] — последние N строк лога демона (по умолч. 200)
 /ports <router> <socks-port> <http-port> — сменить локальные порты (применяется на лету)
 /routes <router> list|show|new <имя> <домены…>|add|del|rm|on|off|iface <имя> <ProxyN|WireguardN> — списки доменов в туннель (KeeneticOS 5.0+)`
 
@@ -607,6 +608,11 @@ func (b *TelegramBot) dispatch(ctx context.Context, text string) string {
 		return b.dispatchFailover(ctx, args)
 	case "/watchdog":
 		return b.dispatchWatchdog(ctx, args)
+	case "/logs":
+		if len(args) < 1 {
+			return "формат: /logs <роутер> [N строк, по умолч. 200]"
+		}
+		return b.runRouterCommand(ctx, args[:1], ActionDaemonLog, args[1:])
 	case "/ports":
 		if len(args) != 3 {
 			return "формат: /ports <роутер> <socks-порт> <http-порт>"

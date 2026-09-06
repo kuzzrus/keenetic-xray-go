@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kuzzrus/keenetic-xray-go/internal/applog"
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 	"github.com/kuzzrus/keenetic-xray-go/internal/diskspace"
 	"github.com/kuzzrus/keenetic-xray-go/internal/failover"
@@ -63,6 +64,10 @@ type RouterHandler struct {
 	CronFile       string
 	WatchdogScript string
 	WatchdogLog    string
+
+	// DaemonLog is the daemon's own rolling log file (applog), tailed by
+	// the daemon_log action. Empty -> that action returns an error.
+	DaemonLog string
 }
 
 const defaultInstallURL = "https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/install.sh"
@@ -172,6 +177,8 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 		return h.watchdogDisable()
 	case ActionWatchdogLog:
 		return h.watchdogLog()
+	case ActionDaemonLog:
+		return h.daemonLog(cmd.Args)
 	case ActionSetPorts:
 		return h.setPorts(ctx, cmd.Args)
 	case ActionRoutesList:
@@ -909,6 +916,32 @@ func (h *RouterHandler) watchdogLog() (string, error) {
 		lines = lines[len(lines)-maxLines:]
 	}
 	return strings.Join(lines, "\n"), nil
+}
+
+// daemonLog tails the daemon's own rolling log (applog). args[0], if
+// given, is the line count; default 200, capped at 500 so a reply fits a
+// chat message.
+func (h *RouterHandler) daemonLog(args []string) (string, error) {
+	if h.DaemonLog == "" {
+		return "", fmt.Errorf("лог демона не настроен для этого агента")
+	}
+	n := 200
+	if len(args) > 0 {
+		if v, err := strconv.Atoi(strings.TrimSpace(args[0])); err == nil && v > 0 {
+			n = v
+		}
+	}
+	if n > 500 {
+		n = 500
+	}
+	out, err := applog.Tail(h.DaemonLog, n)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(out) == "" {
+		return "лог пуст", nil
+	}
+	return out, nil
 }
 
 // setPorts changes the local SOCKS/HTTP inbound ports (config.Failover

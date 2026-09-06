@@ -39,7 +39,7 @@ type Supervisor struct {
 	BackoffMin time.Duration // 0 -> DefaultBackoffMin
 	BackoffMax time.Duration // 0 -> DefaultBackoffMax
 
-	onRestart func() // test hook, called once per crash-triggered restart
+	OnRestart func() // called once per crash-triggered restart (not on a deliberate Restart/Stop)
 
 	mu      sync.Mutex
 	cmd     *exec.Cmd
@@ -122,8 +122,8 @@ func (s *Supervisor) superviseLoop(ctx context.Context, stopped chan struct{}) {
 			backoff = s.backoffMin() // ran long enough to call it stable
 		}
 		fmt.Fprintf(s.stderrOrDiscard(), "%s: exited (%v), restarting in %v\n", s.name(), err, backoff)
-		if s.onRestart != nil {
-			s.onRestart()
+		if s.OnRestart != nil {
+			s.OnRestart()
 		}
 
 		select {

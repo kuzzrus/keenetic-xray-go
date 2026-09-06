@@ -5,10 +5,13 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"github.com/kuzzrus/keenetic-xray-go/internal/applog"
 	"github.com/kuzzrus/keenetic-xray-go/internal/botcontrol"
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 	"github.com/kuzzrus/keenetic-xray-go/internal/failover"
@@ -59,6 +62,8 @@ func run(args []string) error {
 		return cmdFailover(rest)
 	case "watchdog":
 		return cmdWatchdog(rest)
+	case "logs":
+		return cmdLogs(rest)
 	case "routes":
 		return cmdRoutes(rest)
 	case "transport":
@@ -95,6 +100,7 @@ commands:
   proxy0 {show|set [--lan-ip=192.168.x.1]|off}   point Keenetic's Proxy0 at the local inbound
   failover {show|set <key> <value>}              tune health-check thresholds (applies live)
   watchdog {show|enable|disable|log}              cron entry that restarts the daemon if it's not running
+  logs [N]                                        last N lines of the daemon's rolling log (default 200)
   routes {list|show [name]|new <name> [entries…]|add <name> <entries…>|del <name> <entries…>|rm <name>|enable|disable <name>|set <name> [--iface=] [--exclusive]|apply}
                                                   KeeneticOS 5.0+ DNS-based routing: send named lists of domains/subnets through Proxy0
   transport {show|mode auto|packet-up|stream-up|stream-one|mode-clear|mss <1200..1452|auto|off>|wg {show|on|off}}
@@ -107,10 +113,23 @@ func cmdDaemon(args []string) error {
 		return err
 	}
 
+	// The daemon keeps its own rolling log (and xray-core's stderr) so
+	// `keenetic-xray logs` / the bot's 📜 Логи can show recent activity
+	// without SSH. Best-effort: a directory it can't create just means
+	// stdout only.
+	var dlog *applog.Writer
+	if w, e := applog.New(daemonLogPath(), 0); e == nil {
+		dlog = w
+		defer dlog.Close()
+	} else {
+		fmt.Fprintln(os.Stderr, "warning: daemon log file unavailable:", e)
+	}
+
 	d := failover.NewDaemon(failover.Paths{
 		XrayBinary:       xrayBinaryPath(),
 		ProductionConfig: productionConfigPath(),
 		PretestConfig:    pretestConfigPath(),
+		XrayStderr:       applog.Tee(dlog),
 	}, cfg)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -155,7 +174,10 @@ func cmdDaemon(args []string) error {
 		fmt.Printf("starting failover daemon (primary=%s, backup=%s)\n", p.Remark, b.Remark)
 	}
 
-	logf := func(format string, a ...any) { fmt.Printf(format+"\n", a...) }
+	logw := io.MultiWriter(os.Stdout, applog.Tee(dlog))
+	logf := func(format string, a ...any) {
+		fmt.Fprintf(logw, time.Now().Format("15:04:05")+" "+format+"\n", a...)
+	}
 	applyProxy0AtStartup(cfg, logf)
 	applyRoutesAtStartup(cfg, logf)
 	applyWGTransportAtStartup(cfg, logf)
@@ -178,6 +200,7 @@ func cmdDaemon(args []string) error {
 			CronFile:       cronFilePath(),
 			WatchdogScript: watchdogScriptPath(),
 			WatchdogLog:    watchdogLogPath(),
+			DaemonLog:      daemonLogPath(),
 		}
 		opts.StatusFunc = func(ctx context.Context) string {
 			out, _ := handler.Handle(ctx, botcontrol.Command{Action: botcontrol.ActionStatus})

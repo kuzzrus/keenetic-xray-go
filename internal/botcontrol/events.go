@@ -153,6 +153,10 @@ func renderFailoverEvent(fe failover.Event, leftPrimaryAt *time.Time) (Event, bo
 	if fe.Kind == failover.EventDaemonStart {
 		return Event{Kind: "daemon_start", Text: "▶️ демон запущен", Time: fe.At}, true
 	}
+	if fe.Kind == failover.EventXrayCrashLoop {
+		return Event{Kind: "xray_crashloop", Time: fe.At, Text: "⚠️ xray падает и перезапускается (" +
+			fe.Detail + ") — глянь /logs и профиль (адрес/ключи/транспорт)"}, true
+	}
 	if fe.Kind != failover.EventFailover {
 		return Event{Kind: "unknown", Text: fe.From.String() + " → " + fe.To.String(), Time: fe.At}, true
 	}

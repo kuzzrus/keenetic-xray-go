@@ -1,0 +1,85 @@
+name: geo-update
+
+# Rebuilds presets/*.lst + presets/manifest.json from the upstreams named
+# in presets/sources.json (see cmd/geo-gen). Runs once a day and commits
+# the refreshed lists straight to main. If a single run would rewrite
+# more than half the presets -- a sign the upstream format changed -- it
+# opens a PR instead so a human looks first.
+
+on:
+  schedule:
+    - cron: '17 5 * * *' # daily, 05:17 UTC
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'auto = commit to main (PR if churn > 50%); pr = always PR; dry-run = build only'
+        type: choice
+        default: auto
+        options: [auto, pr, dry-run]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: geo-update
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+
+      - name: Regenerate presets
+        run: |
+          if [ "${{ inputs.mode }}" = "dry-run" ]; then
+            go run ./cmd/geo-gen -dir presets -dry-run
+          else
+            go run ./cmd/geo-gen -dir presets
+          fi
+
+      - name: Commit or open PR
+        if: ${{ inputs.mode != 'dry-run' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+
+          if [ -z "$(git status --porcelain presets/)" ]; then
+            echo "presets unchanged - nothing to do"
+            exit 0
+          fi
+
+          changed=$(git status --porcelain -- presets/ | grep -c '\.lst$' || true)
+          total=$(find presets -name '*.lst' | wc -l | tr -d ' ')
+          echo "changed .lst files: ${changed:-0} / ${total:-0}"
+
+          stamp=$(date -u +%Y-%m-%d)
+          title="chore(presets): refresh $stamp"
+
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add presets/
+
+          # More than half the lists moved, or an explicit "pr" run -> PR.
+          if [ "${{ inputs.mode }}" = "pr" ] || { [ "${total:-0}" -gt 0 ] && [ "$(( ${changed:-0} * 2 ))" -gt "$total" ]; }; then
+            branch="geo-update/$stamp"
+            echo "churn is high - opening a PR on $branch instead of pushing to main"
+            git switch -C "$branch"
+            git commit -m "$title"
+            git push -u origin "$branch" --force
+            if ! gh pr view "$branch" >/dev/null 2>&1; then
+              gh pr create --base main --head "$branch" --title "$title" \
+                --body "Автообновление пресетов затронуло больше половины списков (${changed:-0} из ${total:-0}) - вероятно, поменялся формат источника. Проверьте job summary шага geo-gen перед мёржем."
+            fi
+            exit 0
+          fi
+
+          git commit -m "$title" -m "[skip ci]"
+          # A same-day manual run can race the nightly push; rebase once.
+          git push || { git pull --rebase origin main && git push; }

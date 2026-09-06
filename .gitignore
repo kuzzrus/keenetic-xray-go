@@ -1,5 +1,7 @@
 /dist/
 /keenetic-xray
+/geo-gen
+*.exe
 *.ipk
 *.test
 *.out

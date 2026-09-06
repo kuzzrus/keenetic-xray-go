@@ -106,15 +106,15 @@ jobs:
           fixes=$(printf '%s\n' "$all" | grep -E '^fix' || true)
           other=$(printf '%s\n' "$all" | grep -vE '^(feat|fix|docs|test|chore|ci)(\(|:)' || true)
           {
-            if [ -n "$PREV" ]; then echo "Changes since ${PREV}:"; else echo "Changes:"; fi
+            if [ -n "$PREV" ]; then echo "Изменения с ${PREV}:"; else echo "Изменения:"; fi
             if [ -z "${feats}${fixes}${other}" ] && [ -n "$all" ]; then
-              # nothing but docs/test/chore -- list them raw rather than an empty body
+              # только docs/test/chore -- перечислим как есть, а не пустое тело
               echo; printf '%s\n' "$all" | awk '{print "- " $0}'
             fi
-            if [ -n "$feats" ]; then echo; echo "### Features"; printf '%s\n' "$feats" | awk '{print "- " $0}'; fi
-            if [ -n "$fixes" ]; then echo; echo "### Fixes"; printf '%s\n' "$fixes" | awk '{print "- " $0}'; fi
-            if [ -n "$other" ]; then echo; echo "### Other"; printf '%s\n' "$other" | awk '{print "- " $0}'; fi
+            if [ -n "$feats" ]; then echo; echo "### Новое"; printf '%s\n' "$feats" | awk '{print "- " $0}'; fi
+            if [ -n "$fixes" ]; then echo; echo "### Исправления"; printf '%s\n' "$fixes" | awk '{print "- " $0}'; fi
+            if [ -n "$other" ]; then echo; echo "### Прочее"; printf '%s\n' "$other" | awk '{print "- " $0}'; fi
             echo
-            echo "_Install/update: \`keenetic-xray_*_<arch>.ipk\` (UPX-packed). The standalone \`keenetic-xray-linux-<arch>\` binaries are unpacked recovery fallbacks._"
+            echo "_Установка/обновление: \`keenetic-xray_*_<arch>.ipk\` (UPX-упакован). Отдельные \`keenetic-xray-linux-<arch>\` — распакованные бинари на случай отката._"
           } > "${RUNNER_TEMP}/notes.md"
           gh release edit "$TAG" --notes-file "${RUNNER_TEMP}/notes.md"

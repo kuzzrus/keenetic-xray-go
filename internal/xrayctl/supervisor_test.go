@@ -109,7 +109,7 @@ func TestSupervisor_RestartsOnCrash(t *testing.T) {
 		BackoffMax: 20 * time.Millisecond,
 	}
 	restarts := make(chan struct{}, 10)
-	sup.onRestart = func() {
+	sup.OnRestart = func() {
 		select {
 		case restarts <- struct{}{}:
 		default:

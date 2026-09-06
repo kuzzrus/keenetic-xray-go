@@ -980,6 +980,37 @@ func TestRouterHandler_WatchdogLog_ReturnsContent(t *testing.T) {
 	}
 }
 
+func TestRouterHandler_DaemonLog(t *testing.T) {
+	// Not configured -> error.
+	h0 := &RouterHandler{Config: config.Default()}
+	if _, err := h0.Handle(context.Background(), Command{Action: ActionDaemonLog}); err == nil {
+		t.Error("daemon_log without DaemonLog set should error")
+	}
+
+	// Missing file -> "лог пуст".
+	path := filepath.Join(t.TempDir(), "daemon.log")
+	h := &RouterHandler{Config: config.Default(), DaemonLog: path}
+	if out, err := h.Handle(context.Background(), Command{Action: ActionDaemonLog}); err != nil || out != "лог пуст" {
+		t.Errorf("missing file: out=%q err=%v", out, err)
+	}
+
+	// Tail respects the line-count arg.
+	var buf strings.Builder
+	for i := 0; i < 50; i++ {
+		fmt.Fprintf(&buf, "line %d\n", i)
+	}
+	if err := os.WriteFile(path, []byte(buf.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := h.Handle(context.Background(), Command{Action: ActionDaemonLog, Args: []string{"3"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lines := strings.Split(out, "\n"); len(lines) != 3 || lines[2] != "line 49" {
+		t.Errorf("daemon_log 3 = %q", out)
+	}
+}
+
 func TestRouterHandler_SetPorts(t *testing.T) {
 	cfgPath := filepath.Join(t.TempDir(), "config.json")
 	cfg := config.Default()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -17,7 +18,8 @@ type Paths struct {
 	XrayBinary       string
 	ProductionConfig string
 	PretestConfig    string
-	Env              []string // extra env vars for the supervised xray-core processes; nil inherits the parent's environment (test hook, see xrayctl.Supervisor.Env)
+	Env              []string  // extra env vars for the supervised xray-core processes; nil inherits the parent's environment (test hook, see xrayctl.Supervisor.Env)
+	XrayStderr       io.Writer // where supervised xray-core stderr goes; nil discards it
 }
 
 // realActions implements Actions against real xray-core processes (via
@@ -51,6 +53,7 @@ func newRealActions(paths Paths, cfg *config.Config) *realActions {
 			ConfigPath: paths.ProductionConfig,
 			Name:       "production",
 			Env:        paths.Env,
+			Stderr:     paths.XrayStderr,
 		},
 	}
 }
@@ -222,6 +225,7 @@ func (a *realActions) StartIsolatedPretest(ctx context.Context) error {
 		ConfigPath: a.paths.PretestConfig,
 		Name:       "pretest",
 		Env:        a.paths.Env,
+		Stderr:     a.paths.XrayStderr,
 	}
 	return a.pretest.Start()
 }
@@ -273,6 +277,11 @@ type Daemon struct {
 	startedAt   time.Time
 	transitions []Transition // bounded history, oldest first; appended on the Run goroutine only
 	events      chan Event   // buffered; non-blocking sends, dropped if full
+
+	// crash-loop detection; touched only on the production Supervisor's
+	// goroutine (via noteXrayCrash), so no lock.
+	crashes         []time.Time
+	crashLoopWarned bool
 }
 
 // Transition is one recorded failover state change, for `status` output
@@ -291,17 +300,29 @@ const (
 	EventDaemonStart EventKind = iota
 	// EventFailover: the state machine changed phase (From -> To).
 	EventFailover
+	// EventXrayCrashLoop: the production xray-core process has crashed and
+	// been restarted too many times in a short window. Detail carries the
+	// count/window.
+	EventXrayCrashLoop
 )
 
 // Event is a noteworthy daemon occurrence, for out-of-band notification
 // (the bot DMs the operator). Rendering to human text is the consumer's
 // job -- this package stays free of UX strings.
 type Event struct {
-	At   time.Time
-	Kind EventKind
-	From State // EventFailover
-	To   State // EventFailover
+	At     time.Time
+	Kind   EventKind
+	From   State  // EventFailover
+	To     State  // EventFailover
+	Detail string // EventXrayCrashLoop: e.g. "5 раз за 5 мин"
 }
+
+// crashLoopCount / crashLoopWindow: this many production-xray crashes
+// within this window trips one EventXrayCrashLoop advisory.
+const (
+	crashLoopCount  = 5
+	crashLoopWindow = 5 * time.Minute
+)
 
 // maxTransitions bounds the in-memory history: it feeds `status` output
 // and push notifications, it is not an audit log.
@@ -348,7 +369,44 @@ func NewDaemon(paths Paths, cfg *config.Config) *Daemon {
 	// loop -- the same goroutine Snapshot reads on, so the slice needs no
 	// lock.
 	machine.onTransition = d.recordTransition
+	actions.prod.OnRestart = d.noteXrayCrash
 	return d
+}
+
+// noteXrayCrash is called from the production Supervisor's goroutine on
+// every crash-triggered restart. It keeps a short ring of crash times
+// and emits one EventXrayCrashLoop when crashLoopCount land within
+// crashLoopWindow, re-arming once xray has been stable for a full window.
+// The ring is only ever touched here (one Supervisor -> one goroutine),
+// so it needs no lock; emit is a non-blocking channel send, safe from
+// any goroutine.
+func (d *Daemon) noteXrayCrash() {
+	now := time.Now()
+	if n := len(d.crashes); n > 0 && now.Sub(d.crashes[n-1]) > crashLoopWindow {
+		d.crashes = d.crashes[:0] // stable for a full window -> recovered
+		d.crashLoopWarned = false
+	}
+	d.crashes = append(d.crashes, now)
+	if len(d.crashes) > crashLoopCount {
+		d.crashes = d.crashes[len(d.crashes)-crashLoopCount:]
+	}
+	if d.crashLoopWarned || len(d.crashes) < crashLoopCount {
+		return
+	}
+	if now.Sub(d.crashes[0]) <= crashLoopWindow {
+		d.crashLoopWarned = true
+		d.emit(Event{
+			At: now, Kind: EventXrayCrashLoop,
+			Detail: fmt.Sprintf("%d раз за %s", len(d.crashes), shortWindow(crashLoopWindow)),
+		})
+	}
+}
+
+func shortWindow(d time.Duration) string {
+	if m := int(d.Minutes()); m >= 1 {
+		return fmt.Sprintf("%d мин", m)
+	}
+	return fmt.Sprintf("%d с", int(d.Seconds()))
 }
 
 func (d *Daemon) recordTransition(from, to State) {

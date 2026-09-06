@@ -486,3 +486,39 @@ func TestDaemon_ForceSwitchAndStateConcurrentWithRun(t *testing.T) {
 		t.Fatal("Run did not return after ctx cancellation")
 	}
 }
+
+func TestDaemon_XrayCrashLoop(t *testing.T) {
+	d := NewDaemon(Paths{}, config.Default())
+
+	// crashLoopCount crashes inside the window -> exactly one advisory.
+	for i := 0; i < crashLoopCount+2; i++ {
+		d.noteXrayCrash()
+	}
+	select {
+	case ev := <-d.Events():
+		if ev.Kind != EventXrayCrashLoop || ev.Detail == "" {
+			t.Fatalf("event = %+v, want EventXrayCrashLoop with a Detail", ev)
+		}
+	default:
+		t.Fatal("no crash-loop event emitted after a burst of crashes")
+	}
+	select {
+	case ev := <-d.Events():
+		t.Fatalf("a second advisory was emitted while still looping: %+v", ev)
+	default:
+	}
+
+	// Simulate a full quiet window, then a fresh burst -> re-armed.
+	d.crashes = []time.Time{time.Now().Add(-2 * crashLoopWindow)}
+	for i := 0; i < crashLoopCount; i++ {
+		d.noteXrayCrash()
+	}
+	select {
+	case ev := <-d.Events():
+		if ev.Kind != EventXrayCrashLoop {
+			t.Fatalf("re-armed event = %+v", ev)
+		}
+	default:
+		t.Fatal("crash-loop detector did not re-arm after a quiet window")
+	}
+}

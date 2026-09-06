@@ -37,6 +37,13 @@ func optPath() string {
 
 const defaultLogDir = "/opt/var/log/keenetic-xray"
 
+// daemonLogPath is the daemon's own rolling activity log (applog): its
+// startup/reconcile lines plus supervised xray-core stderr. Read by
+// `keenetic-xray logs` and the bot's daemon_log action.
+func daemonLogPath() string {
+	return envOr("KEENETIC_XRAY_DAEMON_LOG", logDir()+"/daemon.log")
+}
+
 func logDir() string {
 	return envOr("KEENETIC_XRAY_LOG_DIR", defaultLogDir)
 }

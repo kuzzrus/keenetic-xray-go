@@ -182,16 +182,21 @@ keenetic-xray status    # профили, вариант, порты, состо
 keenetic-xray doctor    # проверки: есть профили, конфиг валиден, ядро запускается,
                         # xray слушает порты, upstream Proxy0 совпадает, свободное место,
                         # MSS-правило на месте, WG-интерфейс поднят, история health-check
+keenetic-xray logs [N]  # последние N строк лога демона (по умолч. 200)
 ```
 
 В боте те же `/status <роутер>` и `/doctor <роутер>` (без аргумента —
-обзор всех роутеров). `/doctor` дополнительно показывает историю
-health-check: сколько ✅/❌ за последние N проверок, причины отказов
-(таймаут / отказ / DNS / HTTP 5xx) и задержку — видно, *почему* флапает.
-`/status` — счётчик переключений за час.
+обзор всех роутеров), плюс `/logs <роутер> [N]` и кнопка `📜 Логи` на
+карточке. `/doctor` дополнительно показывает историю health-check:
+сколько ✅/❌ за последние N проверок, причины отказов (таймаут / отказ /
+DNS / HTTP 5xx) и задержку — видно, *почему* флапает. `/status` —
+счётчик переключений за час.
 
-Живой лог демона по SSH: в busybox Keenetic нет `logread`; смотри вывод
-init.d-скрипта или гоняй `keenetic-xray daemon` на переднем плане.
+Демон пишет свой лог (свои строки + stderr xray-core) в
+`/opt/var/log/keenetic-xray/daemon.log` — самоусекается по размеру,
+читается через `keenetic-xray logs` и `/logs`. Если xray падает в
+краш-луп при живом демоне (5 падений за 5 минут), бот присылает
+уведомление со ссылкой на `/logs`.
 
 ---
 
@@ -206,6 +211,7 @@ keenetic-xray profile {add <vless-uri>|list|remove <index>}
 keenetic-xray subscription {set-url <url>|refresh|list|set-primary <i>|set-backup <i>}
 keenetic-xray status
 keenetic-xray doctor
+keenetic-xray logs [N]
 keenetic-xray variant {show|set mini|set full}
 keenetic-xray agent {configure <url> <router-id> <fingerprint> <token>|enable|disable|status}
 keenetic-xray proxy0 {show|set [--lan-ip=192.168.x.1] [--protocol=socks5|http] [--interface=Proxy0]|off}

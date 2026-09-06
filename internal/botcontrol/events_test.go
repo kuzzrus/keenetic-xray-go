@@ -80,6 +80,19 @@ func TestWatchStuckPrimary_DisabledWhenZero(t *testing.T) {
 	}
 }
 
+func TestRenderFailoverEvent_XrayCrashLoop(t *testing.T) {
+	var leftPrimaryAt time.Time
+	ev, fwd := renderFailoverEvent(failover.Event{
+		Kind: failover.EventXrayCrashLoop, At: time.Now(), Detail: "5 раз за 5 мин",
+	}, &leftPrimaryAt)
+	if !fwd || ev.Kind != "xray_crashloop" {
+		t.Fatalf("render = %+v, fwd=%v", ev, fwd)
+	}
+	if !strings.Contains(ev.Text, "5 раз за 5 мин") || !strings.Contains(ev.Text, "/logs") {
+		t.Errorf("text = %q, want it to carry the detail and point at /logs", ev.Text)
+	}
+}
+
 func TestFailoverEvents_RendersAndCloses(t *testing.T) {
 	in := make(chan failover.Event, 4)
 	ctx, cancel := context.WithCancel(context.Background())

@@ -3,6 +3,7 @@ package botcontrol
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,10 +16,11 @@ func TestWatchStuckPrimary(t *testing.T) {
 	t.Cleanup(func() { stuckWatchInterval = old })
 
 	t0 := time.Now().Add(-10 * time.Minute)
-	var role failover.Role = failover.RoleBackup
+	var role atomic.Int32 // failover.Role -- the watcher reads it from another goroutine
+	role.Store(int32(failover.RoleBackup))
 	snap := func(context.Context) (failover.Snapshot, bool) {
 		return failover.Snapshot{
-			LiveRole:  role,
+			LiveRole:  failover.Role(role.Load()),
 			StartedAt: time.Now().Add(-time.Hour),
 			Transitions: []failover.Transition{
 				{At: t0, From: failover.StateActivePrimary, To: failover.StateCooldown},
@@ -51,9 +53,9 @@ func TestWatchStuckPrimary(t *testing.T) {
 	}
 
 	// Recover to primary, then drop again -> re-armed, fires once more.
-	role = failover.RolePrimary
+	role.Store(int32(failover.RolePrimary))
 	time.Sleep(80 * time.Millisecond)
-	role = failover.RoleBackup
+	role.Store(int32(failover.RoleBackup))
 	if ev := recvEvent(t, out); ev.Kind != "primary_stuck" {
 		t.Fatalf("re-armed advisory = %+v", ev)
 	}

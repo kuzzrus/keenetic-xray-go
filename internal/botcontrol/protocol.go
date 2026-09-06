@@ -67,6 +67,7 @@ const (
 	ActionRoutesRemoveList = "routes_rmlist"   // args[0]=name
 	ActionRoutesToggle     = "routes_toggle"   // args[0]=name, args[1]="on"|"off"
 	ActionRoutesSetIface   = "routes_setiface" // args[0]=name, args[1]=interface (ProxyN | WireguardN)
+	ActionRoutesNames      = "routes_names"    // no args -> one "name\tcount\tstate\tiface" line per list (machine-readable, for the bot's list-as-buttons screen)
 	// In-router WireGuard transport (LAN -> WireguardN -> xray wireguard
 	// inbound -> tunnel). See internal/keenetic.ApplyWGTransport.
 	ActionWGTransportShow = "wg_show" // no args

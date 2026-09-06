@@ -177,28 +177,6 @@ func coreScreenText(id string) string {
 	return s
 }
 
-func routesScreenText(id string) string {
-	return "📍 Маршруты " + id + "\n\n" +
-		"Именованные списки доменов/подсетей, которые Keenetic (OS 5.0+) заворачивает через Proxy0 — в туннель. Остальное идёт напрямую.\n\n" +
-		"Для работы нужно:\n" +
-		"• роутер должен быть DNS-сервером клиента (не DoH/DoT/публичный DNS на устройстве)\n" +
-		"• клиент — на «Основной политике»\n" +
-		"• первый коннект к домену может уйти напрямую, пока роутер не увидит его DNS-ответ\n\n" +
-		"🎯 Интерфейс — куда гнать список: Proxy0 (по умолчанию), Wireguard4 (WG-транспорт) " +
-		"или любой твой WireGuard-интерфейс Keenetic.\n\n" +
-		"Наши списки отдельны от тех, что заведены в вебе роутера — друг друга не трогают."
-}
-
-func routesScreenKB(id string) inlineKeyboard {
-	return inlineKeyboard{InlineKeyboard: [][]inlineButton{
-		{{Text: "➕ Добавить", CallbackData: "rtadd:" + id}, {Text: "➖ Убрать", CallbackData: "rtdel:" + id}},
-		{{Text: "🔀 Вкл/Выкл", CallbackData: "rttog:" + id}, {Text: "🎯 Интерфейс", CallbackData: "rtif:" + id}},
-		{{Text: "🗑 Удалить список", CallbackData: "rtrm:" + id}},
-		{{Text: "📋 Списки", CallbackData: "act:routes_list:" + id}, {Text: "📊 Статус", CallbackData: "act:routes_show:" + id}},
-		{{Text: "⬅️ Назад", CallbackData: "router:" + id}},
-	}}
-}
-
 func coreScreenKB(id string) inlineKeyboard {
 	rows := [][]inlineButton{
 		{{Text: "⬆️ Переустановить текущий пин", CallbackData: "coreup:" + id}},
@@ -391,22 +369,9 @@ func (b *TelegramBot) handleCallback(ctx context.Context, cb tgCallbackQuery) {
 	case strings.HasPrefix(data, "corestable:"):
 		b.enqueueCardArgs(ctx, cb, strings.TrimPrefix(data, "corestable:"), ActionUpdateCore, []string{"stable"})
 	case strings.HasPrefix(data, "rtm:"):
-		id := strings.TrimPrefix(data, "rtm:")
-		if !b.Store.HasRouter(id) {
-			b.editCB(ctx, cb, "нет такого роутера: "+id, b.routersListKB())
-			return
-		}
-		b.editCB(ctx, cb, routesScreenText(id), routesScreenKB(id))
-	case strings.HasPrefix(data, "rtadd:"):
-		b.startRouteEntriesWizard(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "rtadd:"), false)
-	case strings.HasPrefix(data, "rtdel:"):
-		b.startRouteEntriesWizard(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "rtdel:"), true)
-	case strings.HasPrefix(data, "rttog:"):
-		b.startRouteToggleWizard(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "rttog:"))
-	case strings.HasPrefix(data, "rtif:"):
-		b.startRouteIfaceWizard(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "rtif:"))
-	case strings.HasPrefix(data, "rtrm:"):
-		b.startRouteRemoveWizard(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "rtrm:"))
+		b.openRoutesScreen(ctx, cb, strings.TrimPrefix(data, "rtm:"))
+	case strings.HasPrefix(data, "rt") && b.handleRouteCallback(ctx, cb, data):
+		// the 📍 Маршруты list-first flow (rtL/rtI/rtSi/rtT/rtEa/rtEd/rtDel/rtDy/rtNew/rtIm)
 	case strings.HasPrefix(data, "srcp:"):
 		b.startSlotSourceWizard(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "srcp:"), true)
 	case strings.HasPrefix(data, "srcb:"):

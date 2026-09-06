@@ -52,8 +52,26 @@ type TelegramBot struct {
 	wizardMu   sync.Mutex
 	wizards    map[int64]*wizState // per-chat multi-step dialog state (e.g. /add_router)
 
+	routeMenuMu sync.Mutex
+	routeMenus  map[int64]routeMenu // per-chat 📍 Маршруты state: the list snapshot the buttons index into
+
 	flapMu sync.Mutex
 	flap   map[string]*flapWindow // per-router failover-notification rate state
+}
+
+// routeMenu is what the bot last showed on the 📍 Маршруты screen for one
+// chat: the router it's for and the ordered list snapshot from
+// routes_names, so a button carrying just an index resolves to a name.
+type routeMenu struct {
+	routerID string
+	items    []routeItem
+}
+
+type routeItem struct {
+	name     string
+	count    int
+	disabled bool
+	iface    string
 }
 
 // Flap-mute thresholds: if a router produces flapThreshold "failover"
@@ -115,6 +133,7 @@ type inlineButton struct {
 func (b *TelegramBot) Run(ctx context.Context) error {
 	b.initClient()
 	b.wizards = make(map[int64]*wizState)
+	b.routeMenus = make(map[int64]routeMenu)
 	if err := b.setMyCommands(ctx); err != nil && ctx.Err() == nil {
 		b.logger().Printf("telegram: setMyCommands: %s", b.scrubToken(err))
 	}

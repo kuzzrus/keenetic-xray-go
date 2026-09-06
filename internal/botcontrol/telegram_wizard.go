@@ -29,11 +29,9 @@ const (
 	wizSlotSource
 	wizPorts
 	wizProxyIface
-	wizRouteName    // route list: step 1, the name
-	wizRouteEntries // route list: step 2, the domains/subnets to add or remove
-	wizRouteToggle  // "<name> on|off"
-	wizRouteRemove  // "<name>" -> delete the whole list
-	wizRouteIface   // "<name> <ProxyN|WireguardN>"
+	wizRouteName    // route list: step 1, the name (new-list flow)
+	wizRouteEntries // route list: the domains/subnets to add or remove
+	wizRouteIface   // an interface name for an already-chosen list
 )
 
 func (b *TelegramBot) startAddRouterWizard(ctx context.Context, chatID int64) {
@@ -215,14 +213,8 @@ func (b *TelegramBot) handleWizardText(ctx context.Context, chatID int64, text s
 		b.wizardRouteEntries(ctx, chatID, st, text)
 		return true
 
-	case wizRouteToggle:
-		b.wizardRouteToggle(ctx, chatID, st, strings.TrimSpace(text))
 	case wizRouteIface:
 		b.wizardRouteIface(ctx, chatID, st, strings.TrimSpace(text))
-		return true
-
-	case wizRouteRemove:
-		b.wizardRouteRemove(ctx, chatID, st, strings.TrimSpace(text))
 		return true
 	}
 
@@ -297,40 +289,6 @@ func (b *TelegramBot) startRouteEntriesWizard(ctx context.Context, chatID int64,
 	b.sendMessage(ctx, chatID, verb+" ("+routerID+").\nНазвание списка (латиница/цифры/-, напр. youtube):\nОтмена: /cancel")
 }
 
-func (b *TelegramBot) startRouteToggleWizard(ctx context.Context, chatID int64, routerID string) {
-	if !b.Store.HasRouter(routerID) {
-		b.sendMessage(ctx, chatID, fmt.Sprintf("нет такого роутера %q. Список: /routers", routerID))
-		return
-	}
-	b.wizardMu.Lock()
-	b.wizards[chatID] = &wizState{step: wizRouteToggle, routerID: routerID}
-	b.wizardMu.Unlock()
-	b.sendMessage(ctx, chatID, "Вкл/выкл список ("+routerID+").\nПришли: <имя> on  или  <имя> off\nОтмена: /cancel")
-}
-
-func (b *TelegramBot) startRouteRemoveWizard(ctx context.Context, chatID int64, routerID string) {
-	if !b.Store.HasRouter(routerID) {
-		b.sendMessage(ctx, chatID, fmt.Sprintf("нет такого роутера %q. Список: /routers", routerID))
-		return
-	}
-	b.wizardMu.Lock()
-	b.wizards[chatID] = &wizState{step: wizRouteRemove, routerID: routerID}
-	b.wizardMu.Unlock()
-	b.sendMessage(ctx, chatID, "Удаление списка целиком ("+routerID+").\nПришли имя списка.\nОтмена: /cancel")
-}
-
-func (b *TelegramBot) startRouteIfaceWizard(ctx context.Context, chatID int64, routerID string) {
-	if !b.Store.HasRouter(routerID) {
-		b.sendMessage(ctx, chatID, fmt.Sprintf("нет такого роутера %q. Список: /routers", routerID))
-		return
-	}
-	b.wizardMu.Lock()
-	b.wizards[chatID] = &wizState{step: wizRouteIface, routerID: routerID}
-	b.wizardMu.Unlock()
-	b.sendMessage(ctx, chatID, "Куда гнать список ("+routerID+").\nПришли: <имя списка> <интерфейс>\n"+
-		"напр. youtube Wireguard4  ·  insta Proxy0\nОтмена: /cancel")
-}
-
 func (b *TelegramBot) wizardRouteEntries(ctx context.Context, chatID int64, st *wizState, raw string) {
 	entries := splitRouteEntries(raw)
 	if len(entries) == 0 {
@@ -343,39 +301,6 @@ func (b *TelegramBot) wizardRouteEntries(ctx context.Context, chatID int64, st *
 		action = ActionRoutesDel
 	}
 	out, answered, errText := b.enqueueAndWait(ctx, st.routerID, action, []string{st.listName, strings.Join(entries, " ")})
-	b.sendMessage(ctx, chatID, b.stepResult(st.routerID, answered, errText, "✅ "+strings.TrimSpace(out)))
-}
-
-func (b *TelegramBot) wizardRouteToggle(ctx context.Context, chatID int64, st *wizState, line string) {
-	f := strings.Fields(line)
-	if len(f) != 2 || (f[1] != "on" && f[1] != "off") {
-		b.sendMessage(ctx, chatID, "нужно: <имя> on  или  <имя> off. Ещё раз или /cancel") // stays armed
-		return
-	}
-	b.wizardClear(chatID)
-	out, answered, errText := b.enqueueAndWait(ctx, st.routerID, ActionRoutesToggle, []string{f[0], f[1]})
-	b.sendMessage(ctx, chatID, b.stepResult(st.routerID, answered, errText, "✅ "+strings.TrimSpace(out)))
-}
-
-func (b *TelegramBot) wizardRouteRemove(ctx context.Context, chatID int64, st *wizState, line string) {
-	name := strings.Fields(line)
-	if len(name) != 1 {
-		b.sendMessage(ctx, chatID, "нужно одно имя списка. Ещё раз или /cancel") // stays armed
-		return
-	}
-	b.wizardClear(chatID)
-	out, answered, errText := b.enqueueAndWait(ctx, st.routerID, ActionRoutesRemoveList, []string{name[0]})
-	b.sendMessage(ctx, chatID, b.stepResult(st.routerID, answered, errText, "✅ "+strings.TrimSpace(out)))
-}
-
-func (b *TelegramBot) wizardRouteIface(ctx context.Context, chatID int64, st *wizState, line string) {
-	f := strings.Fields(line)
-	if len(f) != 2 || !config.ValidRouteIface(f[1]) || f[1] == "" {
-		b.sendMessage(ctx, chatID, "нужно: <имя списка> <интерфейс вида Proxy0 / Wireguard4>. Ещё раз или /cancel") // stays armed
-		return
-	}
-	b.wizardClear(chatID)
-	out, answered, errText := b.enqueueAndWait(ctx, st.routerID, ActionRoutesSetIface, []string{f[0], f[1]})
 	b.sendMessage(ctx, chatID, b.stepResult(st.routerID, answered, errText, "✅ "+strings.TrimSpace(out)))
 }
 

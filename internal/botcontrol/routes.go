@@ -27,6 +27,23 @@ func (h *RouterHandler) routeList(name string) (*config.RouteList, int) {
 	return nil, -1
 }
 
+// routesNames renders the route lists in a tab-separated, machine-
+// readable form -- "name<TAB>count<TAB>on|off<TAB>iface" per line, empty
+// when there are none. The bot parses this to build one button per list
+// (tab can't appear in a list name -- ValidRouteListName rejects control
+// chars). Kept separate from routesListText, which is for humans.
+func (h *RouterHandler) routesNames() string {
+	var b strings.Builder
+	for _, l := range h.Config.Routing.Lists {
+		state := "on"
+		if l.Disabled {
+			state = "off"
+		}
+		fmt.Fprintf(&b, "%s\t%d\t%s\t%s\n", l.Name, len(l.Entries), state, l.RouteIface())
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
 func (h *RouterHandler) routesListText() string {
 	ls := h.Config.Routing.Lists
 	if len(ls) == 0 {

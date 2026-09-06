@@ -97,6 +97,31 @@ func fakeAgent(t *testing.T, store *Store, routerID string, reply func(action st
 	}()
 }
 
+// recordingAgent is fakeAgent that hands the whole Command to reply (so a
+// test can assert on args) and records every command it saw.
+func recordingAgent(t *testing.T, store *Store, routerID string, reply func(Command) string) *recorder {
+	t.Helper()
+	rec := &recorder{}
+	stop := make(chan struct{})
+	t.Cleanup(func() { close(stop) })
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if cmd, _ := store.Dequeue(routerID); cmd != nil {
+				rec.add(cmd.Action + " " + strings.Join(cmd.Args, "|"))
+				_ = store.RecordResult(routerID, Result{CommandID: cmd.ID, Output: reply(*cmd)})
+				continue
+			}
+			time.Sleep(15 * time.Millisecond)
+		}
+	}()
+	return rec
+}
+
 func TestTelegramBot_SourcesMenu_UnknownRouter(t *testing.T) {
 	srv, fake := newFakeTelegram(t)
 	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: newBotStore(t), APIBase: srv.URL}
@@ -313,7 +338,57 @@ func TestTelegramBot_CoreScreen(t *testing.T) {
 	}
 }
 
-func TestTelegramBot_RoutesScreen_AddWizard(t *testing.T) {
+func TestTelegramBot_RoutesScreen_ListButtonsAndIface(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	mustRegister(t, store, "r1")
+	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL, ResultTimeout: 2 * time.Second}
+	runBotInBackground(t, bot)
+
+	iface := "Proxy0"
+	rec := recordingAgent(t, store, "r1", func(c Command) string {
+		switch c.Action {
+		case ActionRoutesNames:
+			return "youtube\t12\ton\t" + iface + "\ninsta\t3\toff\tProxy0"
+		case ActionRoutesSetIface:
+			iface = c.Args[1] // reflect the change in the next routes_names
+			return "список \"" + c.Args[0] + "\": → " + c.Args[1]
+		}
+		return "ok"
+	})
+
+	fake.push(1, "/menu")
+	fake.waitForReply(t, 3*time.Second)
+	msgID := fake.lastSent(t).MessageID
+
+	// Open 📍 Маршруты -> list rendered from routes_names, one button per list.
+	fake.pushCallback(1, msgID, "rtm:r1")
+	fake.waitForEditContaining(t, 3*time.Second, "youtube")
+	if txt := fake.waitForEditContaining(t, 3*time.Second, "insta"); !strings.Contains(txt, "2 списка") {
+		t.Errorf("routes list text = %q", txt)
+	}
+
+	// Tap the first list -> its own screen; then 🎯 Интерфейс -> choices.
+	fake.pushCallback(1, msgID, "rtL:r1:0")
+	fake.waitForEditContaining(t, 3*time.Second, "📁 youtube")
+	fake.pushCallback(1, msgID, "rtI:r1:0")
+	fake.waitForEditContaining(t, 3*time.Second, "куда гнать")
+
+	// Pick Wireguard4 -> routes_setiface [youtube Wireguard4], then the list
+	// re-renders with the new interface (the "→ Wireguard4" form only
+	// appears in the list render, not the iface-choice screen copy).
+	fake.pushCallback(1, msgID, "rtSi:r1:0:w4")
+	fake.waitForEditContaining(t, 3*time.Second, "youtube · 12 · → Wireguard4")
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && !rec.has("routes_setiface youtube|Wireguard4") {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !rec.has("routes_setiface youtube|Wireguard4") {
+		t.Errorf("recorded commands = %v, want routes_setiface youtube|Wireguard4", rec.list())
+	}
+}
+
+func TestTelegramBot_RoutesScreen_NewListWizard(t *testing.T) {
 	srv, fake := newFakeTelegram(t)
 	store := newBotStore(t)
 	mustRegister(t, store, "r1")
@@ -324,13 +399,10 @@ func TestTelegramBot_RoutesScreen_AddWizard(t *testing.T) {
 	fake.waitForReply(t, 3*time.Second)
 	msgID := fake.lastSent(t).MessageID
 
-	fake.pushCallback(1, msgID, "rtm:r1")
-	fake.waitForEditContaining(t, 3*time.Second, "Маршруты")
-
-	// ➕ Добавить -> asks for the list name, then the entries.
-	fake.pushCallback(1, msgID, "rtadd:r1")
+	// ➕ Новый список -> asks for a name (rejects non-latin), then entries.
+	fake.pushCallback(1, msgID, "rtNew:r1")
 	waitSent(t, fake, 3*time.Second, "Название списка")
-	fake.push(1, "соцсети") // no latin -> rejected, wizard stays armed
+	fake.push(1, "соцсети")
 	waitSent(t, fake, 3*time.Second, "латинская буква")
 	fake.push(1, "youtube")
 	waitSent(t, fake, 3*time.Second, "youtube")
@@ -351,39 +423,6 @@ func TestTelegramBot_RoutesScreen_AddWizard(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	waitSent(t, fake, 3*time.Second, "создан список")
-}
-
-func TestTelegramBot_RoutesScreen_IfaceWizard(t *testing.T) {
-	srv, fake := newFakeTelegram(t)
-	store := newBotStore(t)
-	mustRegister(t, store, "r1")
-	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL, ResultTimeout: 2 * time.Second}
-	runBotInBackground(t, bot)
-
-	fake.push(1, "/menu")
-	fake.waitForReply(t, 3*time.Second)
-	msgID := fake.lastSent(t).MessageID
-	fake.pushCallback(1, msgID, "rtm:r1")
-	fake.waitForEditContaining(t, 3*time.Second, "Маршруты")
-
-	// 🎯 Интерфейс -> asks for "<list> <iface>"; a bad iface keeps it armed.
-	fake.pushCallback(1, msgID, "rtif:r1")
-	waitSent(t, fake, 3*time.Second, "интерфейс")
-	fake.push(1, "youtube wg0")
-	waitSent(t, fake, 3*time.Second, "Proxy0 / Wireguard4")
-	fake.push(1, "youtube Wireguard4")
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if cmd, _ := store.Dequeue("r1"); cmd != nil {
-			if cmd.Action != ActionRoutesSetIface || len(cmd.Args) != 2 || cmd.Args[0] != "youtube" || cmd.Args[1] != "Wireguard4" {
-				t.Errorf("dequeued = %q %v, want routes_setiface [youtube Wireguard4]", cmd.Action, cmd.Args)
-			}
-			_ = store.RecordResult("r1", Result{CommandID: cmd.ID, Output: "список \"youtube\": → Wireguard4"})
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	waitSent(t, fake, 3*time.Second, "Wireguard4")
 }
 
 func contains(xs []string, want string) bool {

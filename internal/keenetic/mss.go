@@ -51,15 +51,17 @@ func EnsureIptables(ctx context.Context) error {
 	return nil
 }
 
-// mssRuleSpec is the mangle FORWARD rule minus the -A/-D verb: clamp the
-// MSS of every forwarded TCP SYN to mss.
-func mssRuleSpec(mss int) []string {
-	return []string{
-		"-t", "mangle", "FORWARD",
-		"-p", "tcp", "--tcp-flags", "SYN,RST", "SYN",
-		"-m", "comment", "--comment", mssComment,
-		"-j", "TCPMSS", "--set-mss", strconv.Itoa(mss),
+// mssMatch is the match+target half of our rule -- everything that comes
+// *after* `-t mangle -A FORWARD`: clamp the MSS of every forwarded TCP
+// SYN to mss. withComment tags it so it's trivial to find again, but the
+// `comment` match module isn't on every iptables build, so SetMSSClamp
+// retries without it.
+func mssMatch(mss int, withComment bool) []string {
+	m := []string{"-p", "tcp", "--tcp-flags", "SYN,RST", "SYN"}
+	if withComment {
+		m = append(m, "-m", "comment", "--comment", mssComment)
 	}
+	return append(m, "-j", "TCPMSS", "--set-mss", strconv.Itoa(mss))
 }
 
 // SetMSSClamp installs this project's one MSS-clamp rule at mss, removing
@@ -69,10 +71,30 @@ func SetMSSClamp(ctx context.Context, mss int) error {
 		return ClearMSSClamp(ctx)
 	}
 	clearOurRules(ctx)
-	if err := iptablesRun(ctx, append([]string{"-A"}, mssRuleSpec(mss)...)...); err != nil {
+	// `-t mangle` and the `-A FORWARD` verb+chain must lead; the match
+	// follows. (Getting this order wrong is an iptables "exit status 2".)
+	add := func(withComment bool) error {
+		args := append([]string{"-t", "mangle", "-A", "FORWARD"}, mssMatch(mss, withComment)...)
+		return iptablesRun(ctx, args...)
+	}
+	if add(true) == nil {
+		return nil
+	}
+	if err := add(false); err != nil {
 		return fmt.Errorf("adding MSS-clamp rule (--set-mss %d): %w", mss, err)
 	}
 	return nil
+}
+
+// isOurMSSRule matches an `iptables -S FORWARD` line this project would
+// have produced: our comment, or (on a build without the comment match)
+// our exact SYN-clamp signature.
+func isOurMSSRule(line string) bool {
+	if strings.Contains(line, mssComment) {
+		return true
+	}
+	return strings.Contains(line, "--tcp-flags SYN,RST SYN") &&
+		strings.Contains(line, "TCPMSS") && strings.Contains(line, "--set-mss")
 }
 
 // MSSClampInPlace reports whether our FORWARD mangle rule for exactly
@@ -87,7 +109,7 @@ func MSSClampInPlace(ctx context.Context, mss int) bool {
 	}
 	want := "--set-mss " + strconv.Itoa(mss)
 	for _, line := range strings.Split(out, "\n") {
-		if strings.HasPrefix(line, "-A FORWARD ") && strings.Contains(line, mssComment) && strings.Contains(line, want) {
+		if strings.HasPrefix(line, "-A FORWARD ") && strings.Contains(line, want) && isOurMSSRule(line) {
 			return true
 		}
 	}
@@ -104,16 +126,16 @@ func ClearMSSClamp(ctx context.Context) error {
 	return nil
 }
 
-// clearOurRules deletes every FORWARD mangle rule carrying our comment,
-// reading the live spec back with `-S` so the -D matches exactly
-// whatever --set-mss value is there.
+// clearOurRules deletes every FORWARD mangle rule that is ours (see
+// isOurMSSRule), reading the live spec back with `-S` so the -D matches
+// byte-for-byte whatever is there.
 func clearOurRules(ctx context.Context) {
 	out, err := iptablesListForward(ctx)
 	if err != nil {
 		return
 	}
 	for _, line := range strings.Split(out, "\n") {
-		if !strings.HasPrefix(line, "-A FORWARD ") || !strings.Contains(line, mssComment) {
+		if !strings.HasPrefix(line, "-A FORWARD ") || !isOurMSSRule(line) {
 			continue
 		}
 		spec := strings.Fields(strings.TrimPrefix(line, "-A "))

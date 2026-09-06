@@ -44,7 +44,12 @@ func TestSetMSSClamp_AddsOurRule(t *testing.T) {
 		t.Fatalf("iptables calls = %v, want one -A", *sent)
 	}
 	got := (*sent)[0]
-	for _, want := range []string{"-A -t mangle FORWARD", "-p tcp --tcp-flags SYN,RST SYN",
+	// `-t mangle -A FORWARD` must lead -- the wrong order is an
+	// iptables "exit status 2".
+	if !strings.HasPrefix(got, "-t mangle -A FORWARD ") {
+		t.Errorf("rule %q must start with `-t mangle -A FORWARD`", got)
+	}
+	for _, want := range []string{"-p tcp --tcp-flags SYN,RST SYN",
 		"--comment " + mssComment, "-j TCPMSS --set-mss 1360"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("rule %q missing %q", got, want)
@@ -68,8 +73,32 @@ func TestSetMSSClamp_ReplacesStaleValue(t *testing.T) {
 	if !strings.HasPrefix((*sent)[0], "-t mangle -D FORWARD ") || !strings.Contains((*sent)[0], "--set-mss 1400") {
 		t.Errorf("first call = %q, want -D of the stale 1400 rule", (*sent)[0])
 	}
-	if !strings.Contains((*sent)[1], "-A -t mangle FORWARD") || !strings.Contains((*sent)[1], "--set-mss 1360") {
+	if !strings.HasPrefix((*sent)[1], "-t mangle -A FORWARD ") || !strings.Contains((*sent)[1], "--set-mss 1360") {
 		t.Errorf("second call = %q, want -A of the 1360 rule", (*sent)[1])
+	}
+}
+
+func TestSetMSSClamp_FallsBackWithoutCommentMatch(t *testing.T) {
+	// Simulate an iptables build whose `comment` match errors out: the
+	// commented add fails, the plain one must be retried and succeed.
+	fakeIptables(t, true, "-P FORWARD ACCEPT\n", nil)
+	var sent []string
+	iptablesRun = func(_ context.Context, args ...string) error {
+		joined := strings.Join(args, " ")
+		sent = append(sent, joined)
+		if strings.Contains(joined, "-m comment") {
+			return fmt.Errorf("exit status 2")
+		}
+		return nil
+	}
+	if err := SetMSSClamp(context.Background(), 1360); err != nil {
+		t.Fatalf("SetMSSClamp = %v, want nil after the no-comment retry", err)
+	}
+	if len(sent) != 2 {
+		t.Fatalf("calls = %v, want the commented add then the plain retry", sent)
+	}
+	if strings.Contains(sent[1], "-m comment") || !strings.Contains(sent[1], "-j TCPMSS --set-mss 1360") {
+		t.Errorf("retry = %q, want the same rule without -m comment", sent[1])
 	}
 }
 
@@ -96,7 +125,8 @@ func TestClearMSSClamp_NoIptablesIsNoop(t *testing.T) {
 
 func TestClearOurRules_LeavesForeignRules(t *testing.T) {
 	dump := "-P FORWARD ACCEPT\n" +
-		"-A FORWARD -p tcp -j TCPMSS --clamp-mss-to-pmtu\n" + // someone else's
+		"-A FORWARD -p tcp -j TCPMSS --clamp-mss-to-pmtu\n" + // PMTU-clamp, not ours
+		"-A FORWARD -p tcp -m tcp --tcp-flags FIN,SYN,RST,ACK SYN -j TCPMSS --set-mss 1500\n" + // --syn style, foreign
 		"-A FORWARD -p tcp -m comment --comment " + mssComment + " -j TCPMSS --set-mss 1360\n"
 	sent := fakeIptables(t, true, dump, nil)
 	clearOurRules(context.Background())
@@ -105,6 +135,17 @@ func TestClearOurRules_LeavesForeignRules(t *testing.T) {
 	}
 	if !strings.Contains((*sent)[0], mssComment) || !strings.Contains((*sent)[0], "--set-mss 1360") {
 		t.Errorf("deleted %q, want only our tagged rule", (*sent)[0])
+	}
+}
+
+func TestClearOurRules_MatchesUncommentedSignature(t *testing.T) {
+	// A build without the comment match left our rule tagless; the
+	// SYN,RST/SYN + TCPMSS signature must still identify it.
+	dump := "-A FORWARD -p tcp -m tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1280\n"
+	sent := fakeIptables(t, true, dump, nil)
+	clearOurRules(context.Background())
+	if len(*sent) != 1 || !strings.Contains((*sent)[0], "--set-mss 1280") {
+		t.Fatalf("calls = %v, want a -D of the uncommented signature rule", *sent)
 	}
 }
 

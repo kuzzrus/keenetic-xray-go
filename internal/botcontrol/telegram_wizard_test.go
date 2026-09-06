@@ -353,6 +353,39 @@ func TestTelegramBot_RoutesScreen_AddWizard(t *testing.T) {
 	waitSent(t, fake, 3*time.Second, "создан список")
 }
 
+func TestTelegramBot_RoutesScreen_IfaceWizard(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	mustRegister(t, store, "r1")
+	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL, ResultTimeout: 2 * time.Second}
+	runBotInBackground(t, bot)
+
+	fake.push(1, "/menu")
+	fake.waitForReply(t, 3*time.Second)
+	msgID := fake.lastSent(t).MessageID
+	fake.pushCallback(1, msgID, "rtm:r1")
+	fake.waitForEditContaining(t, 3*time.Second, "Маршруты")
+
+	// 🎯 Интерфейс -> asks for "<list> <iface>"; a bad iface keeps it armed.
+	fake.pushCallback(1, msgID, "rtif:r1")
+	waitSent(t, fake, 3*time.Second, "интерфейс")
+	fake.push(1, "youtube wg0")
+	waitSent(t, fake, 3*time.Second, "Proxy0 / Wireguard4")
+	fake.push(1, "youtube Wireguard4")
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if cmd, _ := store.Dequeue("r1"); cmd != nil {
+			if cmd.Action != ActionRoutesSetIface || len(cmd.Args) != 2 || cmd.Args[0] != "youtube" || cmd.Args[1] != "Wireguard4" {
+				t.Errorf("dequeued = %q %v, want routes_setiface [youtube Wireguard4]", cmd.Action, cmd.Args)
+			}
+			_ = store.RecordResult("r1", Result{CommandID: cmd.ID, Output: "список \"youtube\": → Wireguard4"})
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	waitSent(t, fake, 3*time.Second, "Wireguard4")
+}
+
 func contains(xs []string, want string) bool {
 	for _, x := range xs {
 		if x == want {

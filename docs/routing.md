@@ -65,14 +65,16 @@ CLI:
 ```
 keenetic-xray routes new youtube youtube.com googlevideo.com ytimg.com
 keenetic-xray routes add youtube 1.2.3.0/24
+keenetic-xray routes set youtube --iface=Wireguard4   # send this list out a different interface
 keenetic-xray routes set youtube --exclusive          # drop, don't leak direct, if the tunnel is down
 keenetic-xray routes disable youtube                  # keep the list, stop routing it
 keenetic-xray routes show youtube                     # config vs what's live on the router
 keenetic-xray routes rm youtube
 ```
 
-Bot: `📍 Маршруты` on a router card (add / remove entries, on/off, delete,
-show), or `/routes <router> {list|show|new|add|del|rm|on|off}`.
+Bot: `📍 Маршруты` on a router card (add / remove entries, on/off,
+`🎯 Интерфейс`, delete, show), or
+`/routes <router> {list|show|new|add|del|rm|on|off|iface <name> <ProxyN|WireguardN>}`.
 
 ## `--exclusive`
 

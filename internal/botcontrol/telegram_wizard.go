@@ -33,6 +33,7 @@ const (
 	wizRouteEntries // route list: step 2, the domains/subnets to add or remove
 	wizRouteToggle  // "<name> on|off"
 	wizRouteRemove  // "<name>" -> delete the whole list
+	wizRouteIface   // "<name> <ProxyN|WireguardN>"
 )
 
 func (b *TelegramBot) startAddRouterWizard(ctx context.Context, chatID int64) {
@@ -216,6 +217,8 @@ func (b *TelegramBot) handleWizardText(ctx context.Context, chatID int64, text s
 
 	case wizRouteToggle:
 		b.wizardRouteToggle(ctx, chatID, st, strings.TrimSpace(text))
+	case wizRouteIface:
+		b.wizardRouteIface(ctx, chatID, st, strings.TrimSpace(text))
 		return true
 
 	case wizRouteRemove:
@@ -316,6 +319,18 @@ func (b *TelegramBot) startRouteRemoveWizard(ctx context.Context, chatID int64, 
 	b.sendMessage(ctx, chatID, "Удаление списка целиком ("+routerID+").\nПришли имя списка.\nОтмена: /cancel")
 }
 
+func (b *TelegramBot) startRouteIfaceWizard(ctx context.Context, chatID int64, routerID string) {
+	if !b.Store.HasRouter(routerID) {
+		b.sendMessage(ctx, chatID, fmt.Sprintf("нет такого роутера %q. Список: /routers", routerID))
+		return
+	}
+	b.wizardMu.Lock()
+	b.wizards[chatID] = &wizState{step: wizRouteIface, routerID: routerID}
+	b.wizardMu.Unlock()
+	b.sendMessage(ctx, chatID, "Куда гнать список ("+routerID+").\nПришли: <имя списка> <интерфейс>\n"+
+		"напр. youtube Wireguard4  ·  insta Proxy0\nОтмена: /cancel")
+}
+
 func (b *TelegramBot) wizardRouteEntries(ctx context.Context, chatID int64, st *wizState, raw string) {
 	entries := splitRouteEntries(raw)
 	if len(entries) == 0 {
@@ -350,6 +365,17 @@ func (b *TelegramBot) wizardRouteRemove(ctx context.Context, chatID int64, st *w
 	}
 	b.wizardClear(chatID)
 	out, answered, errText := b.enqueueAndWait(ctx, st.routerID, ActionRoutesRemoveList, []string{name[0]})
+	b.sendMessage(ctx, chatID, b.stepResult(st.routerID, answered, errText, "✅ "+strings.TrimSpace(out)))
+}
+
+func (b *TelegramBot) wizardRouteIface(ctx context.Context, chatID int64, st *wizState, line string) {
+	f := strings.Fields(line)
+	if len(f) != 2 || !config.ValidRouteIface(f[1]) || f[1] == "" {
+		b.sendMessage(ctx, chatID, "нужно: <имя списка> <интерфейс вида Proxy0 / Wireguard4>. Ещё раз или /cancel") // stays armed
+		return
+	}
+	b.wizardClear(chatID)
+	out, answered, errText := b.enqueueAndWait(ctx, st.routerID, ActionRoutesSetIface, []string{f[0], f[1]})
 	b.sendMessage(ctx, chatID, b.stepResult(st.routerID, answered, errText, "✅ "+strings.TrimSpace(out)))
 }
 

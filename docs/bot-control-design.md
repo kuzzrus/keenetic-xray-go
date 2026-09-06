@@ -240,6 +240,20 @@ current config to show as defaults -- `📊 Показать` on the screen (a
 <http>`, `/proxy0 <router> protocol socks5|http`, `/proxy0 <router>
 interface Proxy1`.
 
+`📍 Маршруты` (`rtm:`) opens a screen for named DNS-route lists
+(KeeneticOS 5.0+): `➕ Добавить` / `➖ Убрать` start a two-step wizard
+(list name, then a pasted blob of domains/subnets; `routes_add` creates
+the list if new, `routes_del` removes entries), `🔀 Вкл/Выкл` and
+`🗑 Удалить список` are one-line wizards (`routes_toggle` / `routes_rmlist`),
+`📋 Списки` (`routes_list`) and `📊 Статус` (`routes_show` -- config vs
+what's live on the router) are read-only. Every list maps to a router
+`object-group fqdn keenetic-xray-<sanitized-name>` plus a `dns-proxy
+route ... Proxy0 auto [reject]`; `internal/keenetic.ApplyRoutes`
+reconciles the whole set and only ever touches the `keenetic-xray-`
+prefix, never a list built in the web UI. The screen text carries the
+three Keenetic requirements (router is the DNS server, default policy,
+DNS warm-up). `cmd/keenetic-xray/routes.go` is the same logic as a CLI.
+
 `🧩 Ядро xray` (`corem:`) opens a screen with `⬆️ Переустановить текущий
 пин` (`coreup:`), `✅ Стабильное <DefaultTag>` (`corestable:`), and --
 only when `xraycore.PrereleaseTag` is non-empty -- `🧪 Пререлиз <tag>`
@@ -293,6 +307,8 @@ ones are text-only:
 /restart <router>               restart the failover daemon (detached; the replacement emits daemon_start)
 /ensure_core <router>           (re)install the xray-core binary if it's missing/broken -- vendored build, opkg fallback
 /update_core <router> [vX.Y.Z|stable]   force-replace the xray-core binary and rebind xray; a tag persists in config.xray_core_tag, "stable" clears it
+/routes <router> {list|show [name]|new <name> <entries…>|add <name> <entries…>|del <name> <entries…>|rm <name>|on <name>|off <name>}
+                               named DNS-route lists (KeeneticOS 5.0+): domains/subnets sent through Proxy0
 /update <router>                re-run install.sh (whole keenetic-xray package)
 /failover <router> show                        current health-check thresholds
 /failover <router> set <key> <value>           tune one (restarts the daemon to apply)

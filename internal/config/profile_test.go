@@ -231,6 +231,84 @@ func TestConfigSave_CreatesConfigDir(t *testing.T) {
 	}
 }
 
+func TestClassifyRouteEntry(t *testing.T) {
+	okCases := []struct {
+		in   string
+		kind RouteEntryKind
+		norm string
+	}{
+		{"youtube.com", RouteDomain, "youtube.com"},
+		{"  WWW.Example.CO.UK. ", RouteDomain, "www.example.co.uk"},
+		{"sub-domain.a.io", RouteDomain, "sub-domain.a.io"},
+		{"8.8.8.8", RouteSubnet, "8.8.8.8"},
+		{"1.2.3.0/24", RouteSubnet, "1.2.3.0/24"},
+		{"1.2.3.4/24", RouteSubnet, "1.2.3.0/24"}, // canonicalized
+		{"203.0.113.7/32", RouteSubnet, "203.0.113.7"},
+	}
+	for _, c := range okCases {
+		k, n, err := ClassifyRouteEntry(c.in)
+		if err != nil {
+			t.Errorf("ClassifyRouteEntry(%q): unexpected error %v", c.in, err)
+			continue
+		}
+		if k != c.kind || n != c.norm {
+			t.Errorf("ClassifyRouteEntry(%q) = (%v, %q), want (%v, %q)", c.in, k, n, c.kind, c.norm)
+		}
+	}
+
+	badCases := []string{
+		"", "   ", "*.youtube.com", "youtube.*",
+		"2001:db8::1", "::/0", "[::1]",
+		"0.0.0.0/0", "10.0.0.0/8", "192.168.1.0/24", "172.20.0.0/16",
+		"127.0.0.1", "169.254.1.1", "224.0.0.1",
+		"пример.рф", "not a domain", "1.2.3", "1.2.3.4.5",
+	}
+	for _, c := range badCases {
+		if _, _, err := ClassifyRouteEntry(c); err == nil {
+			t.Errorf("ClassifyRouteEntry(%q): expected an error", c)
+		}
+	}
+}
+
+func TestSanitizeRouteListName(t *testing.T) {
+	cases := map[string]string{
+		"youtube":                                "youtube",
+		"  My List!  ":                           "my-list",
+		"соцсети":                                "",
+		"a__b--c":                                "a-b-c",
+		"----":                                   "",
+		"VeryLongNameThatExceedsTwentyFourChars": "verylongnamethatexceedst",
+	}
+	for in, want := range cases {
+		if got := SanitizeRouteListName(in); got != want {
+			t.Errorf("SanitizeRouteListName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestRoutingConfig_Validate(t *testing.T) {
+	ok := RoutingConfig{Lists: []RouteList{
+		{Name: "youtube", Entries: []string{"youtube.com", "1.2.3.0/24"}},
+		{Name: "work", Entries: []string{"corp.example"}, Interface: "Proxy1", Disabled: true},
+	}}
+	if err := ok.Validate(); err != nil {
+		t.Errorf("valid routing config rejected: %v", err)
+	}
+
+	bad := []RoutingConfig{
+		{Lists: []RouteList{{Name: "соцсети", Entries: nil}}},                                // unusable name
+		{Lists: []RouteList{{Name: "a"}, {Name: "A"}}},                                       // collide to "a"
+		{Lists: []RouteList{{Name: "x", Entries: []string{"192.168.0.0/16"}}}},               // private subnet
+		{Lists: []RouteList{{Name: "x", Interface: "eth0", Entries: []string{"a.io"}}}},      // bad iface
+		{Lists: []RouteList{{Name: "x", Entries: make([]string, MaxRouteEntriesPerList+1)}}}, // too many
+	}
+	for i, rc := range bad {
+		if err := rc.Validate(); err == nil {
+			t.Errorf("bad routing config %d accepted", i)
+		}
+	}
+}
+
 func TestConfig_Proxy0Port(t *testing.T) {
 	c := Default() // SOCKSPort 1080, HTTPPort 1081 from DefaultFailoverConfig
 	if got := c.Proxy0Port(); got != c.Failover.SOCKSPort {

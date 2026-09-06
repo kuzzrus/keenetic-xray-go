@@ -52,6 +52,14 @@ const (
 	ActionWatchdogDisable = "watchdog_disable"
 	ActionWatchdogLog     = "watchdog_log" // restart events only, not routine ticks -- see internal/install.SetWatchdogCron
 	ActionSetPorts        = "set_ports"    // args[0]=SOCKS port, args[1]=HTTP port (both as decimal strings)
+	// DNS-based routes (KeeneticOS 5.0+): named lists of domains/subnets
+	// routed through Proxy0. See internal/keenetic.ApplyRoutes.
+	ActionRoutesList       = "routes_list"   // no args
+	ActionRoutesShow       = "routes_show"   // args[0] optional list name -> config-vs-router drift
+	ActionRoutesAdd        = "routes_add"    // args[0]=name, args[1]=space/comma/newline-separated entries (creates the list if new)
+	ActionRoutesDel        = "routes_del"    // args[0]=name, args[1]=entries to remove
+	ActionRoutesRemoveList = "routes_rmlist" // args[0]=name
+	ActionRoutesToggle     = "routes_toggle" // args[0]=name, args[1]="on"|"off"
 )
 
 // Command is a single unit of work queued for a router by the control

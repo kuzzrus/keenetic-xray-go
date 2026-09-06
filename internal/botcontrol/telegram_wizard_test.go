@@ -283,6 +283,46 @@ func TestTelegramBot_CoreScreen(t *testing.T) {
 	}
 }
 
+func TestTelegramBot_RoutesScreen_AddWizard(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	mustRegister(t, store, "r1")
+	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL, ResultTimeout: 2 * time.Second}
+	runBotInBackground(t, bot)
+
+	fake.push(1, "/menu")
+	fake.waitForReply(t, 3*time.Second)
+	msgID := fake.lastSent(t).MessageID
+
+	fake.pushCallback(1, msgID, "rtm:r1")
+	fake.waitForEditContaining(t, 3*time.Second, "Маршруты")
+
+	// ➕ Добавить -> asks for the list name, then the entries.
+	fake.pushCallback(1, msgID, "rtadd:r1")
+	waitSent(t, fake, 3*time.Second, "Название списка")
+	fake.push(1, "соцсети") // no latin -> rejected, wizard stays armed
+	waitSent(t, fake, 3*time.Second, "латинская буква")
+	fake.push(1, "youtube")
+	waitSent(t, fake, 3*time.Second, "youtube")
+
+	fake.push(1, "youtube.com googlevideo.com\n1.2.3.0/24")
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if cmd, _ := store.Dequeue("r1"); cmd != nil {
+			if cmd.Action != ActionRoutesAdd || len(cmd.Args) != 2 || cmd.Args[0] != "youtube" {
+				t.Errorf("dequeued = %q %v, want routes_add [youtube ...]", cmd.Action, cmd.Args)
+			}
+			if !strings.Contains(cmd.Args[1], "youtube.com") || !strings.Contains(cmd.Args[1], "1.2.3.0/24") {
+				t.Errorf("entries arg = %q", cmd.Args[1])
+			}
+			_ = store.RecordResult("r1", Result{CommandID: cmd.ID, Output: "создан список \"youtube\": +3 записей"})
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	waitSent(t, fake, 3*time.Second, "создан список")
+}
+
 func contains(xs []string, want string) bool {
 	for _, x := range xs {
 		if x == want {

@@ -15,7 +15,9 @@ import (
 type wizState struct {
 	step     wizStep
 	routerID string
-	primary  bool // wizSlotSource: which slot the pasted source feeds
+	primary  bool   // wizSlotSource: which slot the pasted source feeds
+	listName string // wizRoute*: the target route list
+	del      bool   // wizRouteEntries: remove rather than add
 }
 
 type wizStep int
@@ -27,6 +29,10 @@ const (
 	wizSlotSource
 	wizPorts
 	wizProxyIface
+	wizRouteName    // route list: step 1, the name
+	wizRouteEntries // route list: step 2, the domains/subnets to add or remove
+	wizRouteToggle  // "<name> on|off"
+	wizRouteRemove  // "<name>" -> delete the whole list
 )
 
 func (b *TelegramBot) startAddRouterWizard(ctx context.Context, chatID int64) {
@@ -188,6 +194,33 @@ func (b *TelegramBot) handleWizardText(ctx context.Context, chatID int64, text s
 	case wizProxyIface:
 		b.wizardSetProxyIface(ctx, chatID, st, strings.TrimSpace(text))
 		return true
+
+	case wizRouteName:
+		name := strings.TrimSpace(text)
+		if !config.ValidRouteListName(name) {
+			b.sendMessage(ctx, chatID, "имя: 1..32 символа, минимум одна латинская буква/цифра (оно станет именем object-group на роутере). Ещё раз или /cancel")
+			return true
+		}
+		st.listName = name
+		st.step = wizRouteEntries
+		verb := "добавить в"
+		if st.del {
+			verb = "убрать из"
+		}
+		b.sendMessage(ctx, chatID, "Что "+verb+" список \""+name+"\":\nвставь домены, IP и подсети — через пробел, запятую или с новой строки.\nОтмена: /cancel")
+		return true
+
+	case wizRouteEntries:
+		b.wizardRouteEntries(ctx, chatID, st, text)
+		return true
+
+	case wizRouteToggle:
+		b.wizardRouteToggle(ctx, chatID, st, strings.TrimSpace(text))
+		return true
+
+	case wizRouteRemove:
+		b.wizardRouteRemove(ctx, chatID, st, strings.TrimSpace(text))
+		return true
 	}
 
 	b.wizardClear(chatID)
@@ -240,6 +273,83 @@ func (b *TelegramBot) wizardSetProxyIface(ctx context.Context, chatID int64, st 
 
 	b.wizardClear(chatID)
 	out, answered, errText := b.enqueueAndWait(ctx, st.routerID, ActionProxy0Config, []string{"", iface[0]})
+	b.sendMessage(ctx, chatID, b.stepResult(st.routerID, answered, errText, "✅ "+strings.TrimSpace(out)))
+}
+
+// startRouteEntriesWizard begins the two-step "add/remove entries in a
+// route list" flow: step 1 asks for the list name (created if new, for
+// add), step 2 takes the pasted domains/subnets.
+func (b *TelegramBot) startRouteEntriesWizard(ctx context.Context, chatID int64, routerID string, del bool) {
+	if !b.Store.HasRouter(routerID) {
+		b.sendMessage(ctx, chatID, fmt.Sprintf("нет такого роутера %q. Список: /routers", routerID))
+		return
+	}
+	b.wizardMu.Lock()
+	b.wizards[chatID] = &wizState{step: wizRouteName, routerID: routerID, del: del}
+	b.wizardMu.Unlock()
+	verb := "Добавление в список"
+	if del {
+		verb = "Удаление из списка"
+	}
+	b.sendMessage(ctx, chatID, verb+" ("+routerID+").\nНазвание списка (латиница/цифры/-, напр. youtube):\nОтмена: /cancel")
+}
+
+func (b *TelegramBot) startRouteToggleWizard(ctx context.Context, chatID int64, routerID string) {
+	if !b.Store.HasRouter(routerID) {
+		b.sendMessage(ctx, chatID, fmt.Sprintf("нет такого роутера %q. Список: /routers", routerID))
+		return
+	}
+	b.wizardMu.Lock()
+	b.wizards[chatID] = &wizState{step: wizRouteToggle, routerID: routerID}
+	b.wizardMu.Unlock()
+	b.sendMessage(ctx, chatID, "Вкл/выкл список ("+routerID+").\nПришли: <имя> on  или  <имя> off\nОтмена: /cancel")
+}
+
+func (b *TelegramBot) startRouteRemoveWizard(ctx context.Context, chatID int64, routerID string) {
+	if !b.Store.HasRouter(routerID) {
+		b.sendMessage(ctx, chatID, fmt.Sprintf("нет такого роутера %q. Список: /routers", routerID))
+		return
+	}
+	b.wizardMu.Lock()
+	b.wizards[chatID] = &wizState{step: wizRouteRemove, routerID: routerID}
+	b.wizardMu.Unlock()
+	b.sendMessage(ctx, chatID, "Удаление списка целиком ("+routerID+").\nПришли имя списка.\nОтмена: /cancel")
+}
+
+func (b *TelegramBot) wizardRouteEntries(ctx context.Context, chatID int64, st *wizState, raw string) {
+	entries := splitRouteEntries(raw)
+	if len(entries) == 0 {
+		b.sendMessage(ctx, chatID, "пусто — вставь домены/IP/подсети, или /cancel") // stays armed
+		return
+	}
+	b.wizardClear(chatID)
+	action := ActionRoutesAdd
+	if st.del {
+		action = ActionRoutesDel
+	}
+	out, answered, errText := b.enqueueAndWait(ctx, st.routerID, action, []string{st.listName, strings.Join(entries, " ")})
+	b.sendMessage(ctx, chatID, b.stepResult(st.routerID, answered, errText, "✅ "+strings.TrimSpace(out)))
+}
+
+func (b *TelegramBot) wizardRouteToggle(ctx context.Context, chatID int64, st *wizState, line string) {
+	f := strings.Fields(line)
+	if len(f) != 2 || (f[1] != "on" && f[1] != "off") {
+		b.sendMessage(ctx, chatID, "нужно: <имя> on  или  <имя> off. Ещё раз или /cancel") // stays armed
+		return
+	}
+	b.wizardClear(chatID)
+	out, answered, errText := b.enqueueAndWait(ctx, st.routerID, ActionRoutesToggle, []string{f[0], f[1]})
+	b.sendMessage(ctx, chatID, b.stepResult(st.routerID, answered, errText, "✅ "+strings.TrimSpace(out)))
+}
+
+func (b *TelegramBot) wizardRouteRemove(ctx context.Context, chatID int64, st *wizState, line string) {
+	name := strings.Fields(line)
+	if len(name) != 1 {
+		b.sendMessage(ctx, chatID, "нужно одно имя списка. Ещё раз или /cancel") // stays armed
+		return
+	}
+	b.wizardClear(chatID)
+	out, answered, errText := b.enqueueAndWait(ctx, st.routerID, ActionRoutesRemoveList, []string{name[0]})
 	b.sendMessage(ctx, chatID, b.stepResult(st.routerID, answered, errText, "✅ "+strings.TrimSpace(out)))
 }
 

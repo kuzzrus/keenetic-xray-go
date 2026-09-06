@@ -59,6 +59,8 @@ func run(args []string) error {
 		return cmdFailover(rest)
 	case "watchdog":
 		return cmdWatchdog(rest)
+	case "routes":
+		return cmdRoutes(rest)
 	case "internal":
 		return cmdInternal(rest)
 	default:
@@ -90,7 +92,9 @@ commands:
   agent {configure <url> <router-id> <fingerprint> <token>|enable|disable|status}
   proxy0 {show|set [--lan-ip=192.168.x.1]|off}   point Keenetic's Proxy0 at the local inbound
   failover {show|set <key> <value>}              tune health-check thresholds (applies live)
-  watchdog {show|enable|disable|log}              cron entry that restarts the daemon if it's not running`)
+  watchdog {show|enable|disable|log}              cron entry that restarts the daemon if it's not running
+  routes {list|show [name]|new <name> [entries…]|add <name> <entries…>|del <name> <entries…>|rm <name>|enable|disable <name>|set <name> [--iface=] [--exclusive]|apply}
+                                                  KeeneticOS 5.0+ DNS-based routing: send named lists of domains/subnets through Proxy0`)
 }
 
 func cmdDaemon(args []string) error {
@@ -147,7 +151,9 @@ func cmdDaemon(args []string) error {
 		fmt.Printf("starting failover daemon (primary=%s, backup=%s)\n", p.Remark, b.Remark)
 	}
 
-	applyProxy0AtStartup(cfg, func(format string, a ...any) { fmt.Printf(format+"\n", a...) })
+	logf := func(format string, a ...any) { fmt.Printf(format+"\n", a...) }
+	applyProxy0AtStartup(cfg, logf)
+	applyRoutesAtStartup(cfg, logf)
 
 	if cfg.Agent.Enabled {
 		opts, err := loadAgentOptions(cfg)

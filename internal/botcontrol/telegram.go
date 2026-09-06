@@ -525,7 +525,8 @@ const helpText = `/menu — меню с кнопками (проще всего)
 /failover <router> show — текущие пороги health-check
 /failover <router> set <ключ> <значение> — подстроить их (перезапустит демон)
 /watchdog <router> show|enable|disable|log — cron, что перезапускает демон, если он упал
-/ports <router> <socks-port> <http-port> — сменить локальные порты (применяется на лету)`
+/ports <router> <socks-port> <http-port> — сменить локальные порты (применяется на лету)
+/routes <router> list|show|new <имя> <домены…>|add|del|rm|on|off — списки доменов в туннель через Proxy0 (KeeneticOS 5.0+)`
 
 func (b *TelegramBot) dispatch(ctx context.Context, text string) string {
 	fields := strings.Fields(text)
@@ -590,6 +591,8 @@ func (b *TelegramBot) dispatch(ctx context.Context, text string) string {
 			return "формат: /ports <роутер> <socks-порт> <http-порт>"
 		}
 		return b.runRouterCommand(ctx, args[:1], ActionSetPorts, args[1:])
+	case "/routes":
+		return b.dispatchRoutes(ctx, args)
 	default:
 		return "неизвестная команда. Откройте /menu или /help"
 	}
@@ -610,6 +613,47 @@ func (b *TelegramBot) dispatchFailover(ctx context.Context, args []string) strin
 			return usage
 		}
 		return b.runRouterCommand(ctx, routerID, ActionFailoverSet, []string{args[2], args[3]})
+	default:
+		return usage
+	}
+}
+
+// dispatchRoutes routes /routes <router> {list|show [name]|new <name> <entries…>|
+// add <name> <entries…>|del <name> <entries…>|rm <name>|on <name>|off <name>}.
+func (b *TelegramBot) dispatchRoutes(ctx context.Context, args []string) string {
+	usage := "формат: /routes <роутер> {list | show [имя] | new <имя> <записи…> | add <имя> <записи…> | del <имя> <записи…> | rm <имя> | on <имя> | off <имя>}"
+	if len(args) < 2 {
+		if len(args) == 1 {
+			return b.runRouterCommand(ctx, args[:1], ActionRoutesList, nil)
+		}
+		return usage
+	}
+	rid := args[:1]
+	switch args[1] {
+	case "list":
+		return b.runRouterCommand(ctx, rid, ActionRoutesList, nil)
+	case "show":
+		return b.runRouterCommand(ctx, rid, ActionRoutesShow, args[2:])
+	case "new", "add":
+		if len(args) < 4 {
+			return usage
+		}
+		return b.runRouterCommand(ctx, rid, ActionRoutesAdd, []string{args[2], strings.Join(args[3:], " ")})
+	case "del":
+		if len(args) < 4 {
+			return usage
+		}
+		return b.runRouterCommand(ctx, rid, ActionRoutesDel, []string{args[2], strings.Join(args[3:], " ")})
+	case "rm":
+		if len(args) != 3 {
+			return usage
+		}
+		return b.runRouterCommand(ctx, rid, ActionRoutesRemoveList, args[2:3])
+	case "on", "off":
+		if len(args) != 3 {
+			return usage
+		}
+		return b.runRouterCommand(ctx, rid, ActionRoutesToggle, []string{args[2], args[1]})
 	default:
 		return usage
 	}

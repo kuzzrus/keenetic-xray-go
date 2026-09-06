@@ -19,6 +19,7 @@ var failoverTunableKeys = []string{
 	"check_retries",
 	"check_retry_delay_seconds",
 	"health_check_url",
+	"primary_stuck_warn_hours",
 }
 
 // SetTunable adjusts one failover knob by its JSON field name, validating
@@ -73,6 +74,12 @@ func (f *FailoverConfig) SetTunable(key, val string) error {
 			return fmt.Errorf("health_check_url must start with http:// or https://")
 		}
 		f.HealthCheckURL = val
+	case "primary_stuck_warn_hours":
+		n, err := nonNegativeInt(val)
+		if err != nil {
+			return fmt.Errorf("primary_stuck_warn_hours: %w", err)
+		}
+		f.PrimaryStuckWarnHours = n
 	default:
 		return fmt.Errorf("unknown key %q (want one of: %s)", key, strings.Join(failoverTunableKeys, ", "))
 	}
@@ -90,6 +97,7 @@ func (f FailoverConfig) TunablesText() string {
 	fmt.Fprintf(&b, "rollback_backoff_seconds: %d\n", f.RollbackBackoffSeconds)
 	fmt.Fprintf(&b, "check_retries: %d\n", f.CheckRetries)
 	fmt.Fprintf(&b, "check_retry_delay_seconds: %d\n", f.CheckRetryDelaySeconds)
+	fmt.Fprintf(&b, "primary_stuck_warn_hours: %d\n", f.PrimaryStuckWarnHours)
 	fmt.Fprintf(&b, "health_check_url: %s", f.HealthCheckURL)
 	if len(f.HealthCheckFallbackURLs) > 0 {
 		fmt.Fprintf(&b, "\nhealth_check_fallback_urls: %s", strings.Join(f.HealthCheckFallbackURLs, ", "))

@@ -133,6 +133,17 @@ type FailoverConfig struct {
 	SOCKSPort              int `json:"socks_port"`
 	HTTPPort               int `json:"http_port"`
 	PretestPort            int `json:"pretest_port"`
+	// PrimaryStuckWarnHours: after this long carrying traffic on backup
+	// without primary recovering, the daemon pushes ONE advisory to the
+	// bot (the operator otherwise only learns it by opening /doctor).
+	// Re-armed once primary is live again. 0 disables.
+	PrimaryStuckWarnHours int `json:"primary_stuck_warn_hours,omitempty"`
+}
+
+// PrimaryStuckWarnAfter is PrimaryStuckWarnHours as a Duration; zero
+// means the advisory is off.
+func (f FailoverConfig) PrimaryStuckWarnAfter() time.Duration {
+	return time.Duration(f.PrimaryStuckWarnHours) * time.Hour
 }
 
 // DefaultFailoverConfig returns the plan's defaults: the numbers given
@@ -159,6 +170,7 @@ func DefaultFailoverConfig() FailoverConfig {
 		SOCKSPort:              1080,
 		HTTPPort:               1081,
 		PretestPort:            11080,
+		PrimaryStuckWarnHours:  3,
 	}
 }
 
@@ -676,9 +688,11 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// Save writes the config as indented JSON to path with 0600 permissions —
-// it may contain a subscription URL and other values not meant to be
-// world-readable.
+// Save writes the config as indented JSON to path with 0600 permissions
+// (it may hold a subscription URL and WG keys). The write is atomic:
+// data goes to a temp file in the same directory, then os.Rename swaps it
+// in -- so a power loss on a router mid-write leaves the old config
+// intact instead of a truncated one the daemon can't parse.
 func (c *Config) Save(path string) error {
 	if err := c.Validate(); err != nil {
 		return fmt.Errorf("refusing to save invalid config: %w", err)
@@ -688,12 +702,40 @@ func (c *Config) Save(path string) error {
 		return fmt.Errorf("encoding config: %w", err)
 	}
 	data = append(data, '\n')
-	if dir := filepath.Dir(path); dir != "." {
+
+	dir := filepath.Dir(path)
+	if dir != "." {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("creating config directory: %w", err)
 		}
 	}
-	return os.WriteFile(path, data, 0o600)
+
+	tmp, err := os.CreateTemp(dir, ".config-*.json.tmp")
+	if err != nil {
+		return fmt.Errorf("creating temp config: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op after a successful Rename
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("writing temp config: %w", err)
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return fmt.Errorf("chmod temp config: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("fsync temp config: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("closing temp config: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("replacing config: %w", err)
+	}
+	return nil
 }
 
 // Validate checks internal consistency: known variant, in-range profile

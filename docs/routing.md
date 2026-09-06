@@ -55,10 +55,11 @@ DNS-based routes only work when:
    router has seen a DNS answer for it. Subsequent connections route.
    Also: a connection *already open* to an IP when you add/change a list
    keeps its original route until it closes — netfilter caches the route
-   decision per flow. If `conntrack-tools` is installed
-   (`opkg install conntrack-tools`), the tool runs `conntrack -F` after
-   any list change so those flows re-evaluate on their next packet and
-   move into the tunnel; without it, they just age out.
+   decision per flow. If the `conntrack` CLI is installed
+   (`opkg install conntrack` — Entware packages it as `conntrack`, not
+   `conntrack-tools`), the tool runs `conntrack -F` after any list change
+   so those flows re-evaluate on their next packet and move into the
+   tunnel; without it, they just age out.
 
 `*` wildcards aren't allowed; a domain automatically covers its
 subdomains. IDN must be entered in punycode (`xn--…`). IPv6 isn't

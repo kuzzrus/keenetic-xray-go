@@ -245,6 +245,31 @@ func TestRouterHandler_Status_RichFields(t *testing.T) {
 	}
 }
 
+func TestRouterHandler_Status_TransportLines(t *testing.T) {
+	d := newTestDaemon(t)
+	cfg := config.Default()
+	cfg.Profiles = []config.Profile{testProfile("primary", "a"), testProfile("backup", "b")}
+	cfg.PrimaryIndex, cfg.BackupIndex = 0, 1
+	cfg.Proxy0.Enabled = true
+	cfg.Proxy0.Protocol = "http"
+	cfg.WGTransport = config.WGTransportConfig{Enabled: true, Iface: "Wireguard4"}
+	h := &RouterHandler{Daemon: d, Config: cfg, OptPath: t.TempDir()}
+
+	out, err := h.Handle(context.Background(), Command{Action: ActionStatus})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"(socks5)", "(http)", // both inbounds named
+		"proxy0: вкл → Proxy0/http",      // protocol is now explicit
+		"wg-транспорт: вкл → Wireguard4", // second transport shown
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestRouterHandler_Doctor(t *testing.T) {
 	cfg := config.Default()
 	cfg.Profiles = []config.Profile{testProfile("primary", "a.example.com"), testProfile("backup", "b.example.com")}

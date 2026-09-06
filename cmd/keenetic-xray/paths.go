@@ -66,6 +66,13 @@ func runDir() string {
 	return envOr("KEENETIC_XRAY_RUN_DIR", defaultRunDir)
 }
 
+// netfilterHookPath is the ndm firewall-rebuild hook this project ships
+// (packaging/ndm/netfilter.d/50-keenetic-xray.sh) -- it SIGUSR1's the
+// daemon so a reconcile runs the instant ndm touches the firewall.
+func netfilterHookPath() string {
+	return envOr("KEENETIC_XRAY_NETFILTER_HOOK", "/opt/etc/ndm/netfilter.d/50-keenetic-xray.sh")
+}
+
 const defaultAgentTokenFile = "/opt/etc/keenetic-xray/agent-token.secret"
 
 func defaultAgentTokenPath() string {

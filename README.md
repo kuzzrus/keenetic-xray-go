@@ -149,9 +149,13 @@ screen. `mss auto` (= 1360) writes one `iptables` mangle rule tagged
 headroom if stalls return, `off` removes it. It only applies while
 `Proxy0` is on, is removed on `proxy0 off`, and `iptables` is pulled in
 via `opkg` if the router doesn't have it. The router firmware sometimes
-flushes the rule when it rebuilds the firewall, so the daemon re-checks
-every 2 minutes and puts it back. Also a bot action -- the `📶 MSS`
-presets on `⚙️ Порты и транспорт`, or `/proxy0 <router> mss auto|off|N`.
+flushes the rule when it rebuilds the firewall. The daemon re-asserts
+this (and Proxy0, the routes, the WG interface) two ways: a `netfilter.d`
+hook (`/opt/etc/ndm/netfilter.d/50-keenetic-xray.sh`, shipped in the
+`.ipk`) that `ndm` runs on every firewall rebuild and which SIGUSR1s the
+daemon for an immediate drift-check, plus a 2-minute fallback poll. Also
+a bot action -- the `📶 MSS` presets on `⚙️ Порты и транспорт`, or
+`/proxy0 <router> mss auto|off|N`.
 
 `transport wg on` stands up an in-router WireGuard carrier as an
 alternative to Proxy0/SOCKS for the router→xray hop: `LAN → WireguardN →

@@ -19,11 +19,10 @@ import (
 // rest too.
 const reconcileInterval = 2 * time.Minute
 
-// routerReconcileLoop periodically re-asserts every router-side setting,
-// cheaply: each step reads the live state first and only issues ndmc /
-// iptables commands (and logs) when it finds drift. Config is reloaded
-// each tick so a change applied over SIGHUP (`proxy0 off`, `transport wg
-// off`, a route edit) is respected.
+// routerReconcileLoop periodically runs reconcileOnce. It's the fallback:
+// the netfilter.d hook (packaging/ndm/netfilter.d) makes ndm signal the
+// daemon (SIGUSR1 -> reconcileOnce) the moment it rebuilds the firewall,
+// so drift is normally fixed within a second, not up to two minutes.
 func routerReconcileLoop(ctx context.Context, logf func(string, ...any)) {
 	if !keenetic.Available() {
 		return
@@ -36,15 +35,27 @@ func routerReconcileLoop(ctx context.Context, logf func(string, ...any)) {
 			return
 		case <-t.C:
 		}
-		cfg, err := config.Load(configPath())
-		if err != nil {
-			continue
-		}
-		reconcileProxy0(ctx, cfg, logf)
-		applyRoutesAtStartup(cfg, logf) // already drift-based and quiet-when-clean
-		reconcileWGTransport(ctx, cfg, logf)
-		reconcileMSSClamp(ctx, cfg, logf)
+		reconcileOnce(ctx, logf)
 	}
+}
+
+// reconcileOnce re-asserts every router-side setting once, cheaply: each
+// step reads the live state first and only issues ndmc / iptables
+// commands (and logs) when it finds drift. Config is reloaded so a change
+// applied over SIGHUP (`proxy0 off`, `transport wg off`, a route edit) is
+// respected.
+func reconcileOnce(ctx context.Context, logf func(string, ...any)) {
+	if !keenetic.Available() {
+		return
+	}
+	cfg, err := config.Load(configPath())
+	if err != nil {
+		return
+	}
+	reconcileProxy0(ctx, cfg, logf)
+	applyRoutesAtStartup(cfg, logf) // already drift-based and quiet-when-clean
+	reconcileWGTransport(ctx, cfg, logf)
+	reconcileMSSClamp(ctx, cfg, logf)
 }
 
 // reconcileProxy0 re-points the Proxy interface at the local inbound only

@@ -197,6 +197,12 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 		return h.routesSetIface(ctx, cmd.Args)
 	case ActionRoutesNames:
 		return h.routesNames(), nil
+	case ActionRoutesPresetList:
+		return h.routesPresetList(), nil
+	case ActionRoutesPresetAdd:
+		return h.routesPresetAdd(ctx, cmd.Args)
+	case ActionRoutesPresetSync:
+		return h.routesPresetSync(ctx, cmd.Args)
 	default:
 		return "", fmt.Errorf("unknown action %q", cmd.Action)
 	}

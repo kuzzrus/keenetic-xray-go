@@ -473,6 +473,14 @@ type RouteList struct {
 	Interface string   `json:"interface,omitempty"` // "" -> Proxy0.IfaceName()
 	Exclusive bool     `json:"exclusive,omitempty"` // add "reject": matched traffic is dropped, not leaked direct, when the interface is down
 	Disabled  bool     `json:"disabled,omitempty"`  // keep the list but stop routing it
+
+	// Preset, when set, is the id of the built-in list (internal/presets)
+	// this list was seeded from -- "youtube", "youtube-ip". PresetRev is
+	// that preset's content hash at the last sync. The bot/CLI compare
+	// Entries against the embedded preset to show "update available" and
+	// offer a re-sync; a plain hand-made list leaves both empty.
+	Preset    string `json:"preset,omitempty"`
+	PresetRev string `json:"preset_rev,omitempty"`
 }
 
 // MaxRouteEntriesPerList caps one list. Generous -- the point is to stop

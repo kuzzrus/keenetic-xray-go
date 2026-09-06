@@ -87,6 +87,45 @@ Bot: `📍 Маршруты` on a router card (add / remove entries, on/off,
 `🎯 Интерфейс`, delete, show), or
 `/routes <router> {list|show|new|add|del|rm|on|off|iface <name> <ProxyN|WireguardN>}`.
 
+## Ready-made lists (`routes preset`)
+
+`internal/presets/data/` ships curated per-service lists — `youtube`,
+`telegram`, `discord`, `github`, … in ~10 category groups — generated
+from Geo-Aggregator (domains) and `lord-alfred/ipranges` + Telegram's own
+publication (CIDR) by `cmd/geo-gen`, refreshed daily in CI (see
+`internal/presets/data/README.md`). They're **embedded in the agent
+binary**, so a router gets a fresher list by updating the agent.
+
+```
+keenetic-xray routes preset list                 # browse, with ✓ / ⬆ marks
+keenetic-xray routes preset show youtube
+keenetic-xray routes preset add youtube --ip      # bind list "youtube" (+ "youtube-ip")
+keenetic-xray routes preset add youtube --iface=Wireguard4
+keenetic-xray routes preset sync youtube          # or --all
+```
+
+Bot: `📍 Маршруты` → `📦 Готовые списки` → category → service →
+`Добавить (домены)` / `Домены + IP‑диапазоны`.
+
+`add` creates a route list named after the preset (`youtube`, and with
+`--ip` also `youtube-ip`) and records which preset + content revision it
+came from (`RouteList.Preset` / `PresetRev`). Such a list is **managed**:
+a re-`add` or `sync` overwrites its entries wholesale from the embedded
+preset — keep hand-tuned domains in a separate list. `preset add` refuses
+to take over a list of the same name that was made by hand.
+
+The bot/CLI compare a bound list's current entries against the embedded
+preset and show `⬆ +N −M` when they differ (usually because the agent was
+updated to a build with a newer list); `sync` pulls the new version in.
+The comparison is per-entry, so one added or removed domain shows up.
+
+CIDR companions (`<service>-ip`) exist only where the provider's IP block
+is genuinely that service's own and stays small after aggregation —
+YouTube/Google, Meta/Instagram, X, Telegram, Cloudflare, Discord,
+Perplexity, and a few more. Whole clouds and CDNs (AWS, Azure, Microsoft,
+GitHub, OpenAI — whose published ranges are mostly Azure) are
+domains-only.
+
 ## `--exclusive`
 
 Adds `reject` to the route: when `Proxy0` is down, matched traffic is

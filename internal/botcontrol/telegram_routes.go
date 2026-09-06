@@ -106,6 +106,7 @@ func routesListKB(id string, items []routeItem) inlineKeyboard {
 		rows = append(rows, []inlineButton{{Text: label, CallbackData: fmt.Sprintf("rtL:%s:%d", id, i)}})
 	}
 	rows = append(rows,
+		[]inlineButton{{Text: "📦 Готовые списки", CallbackData: "rtp:" + id}},
 		[]inlineButton{{Text: "➕ Новый список", CallbackData: "rtNew:" + id}, {Text: "📊 Статус", CallbackData: "act:routes_show:" + id}},
 		[]inlineButton{{Text: "⬅️ Назад", CallbackData: "router:" + id}},
 	)

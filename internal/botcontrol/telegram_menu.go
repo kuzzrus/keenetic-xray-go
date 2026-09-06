@@ -372,6 +372,8 @@ func (b *TelegramBot) handleCallback(ctx context.Context, cb tgCallbackQuery) {
 		b.enqueueCardArgs(ctx, cb, strings.TrimPrefix(data, "corestable:"), ActionUpdateCore, []string{"stable"})
 	case strings.HasPrefix(data, "rtm:"):
 		b.openRoutesScreen(ctx, cb, strings.TrimPrefix(data, "rtm:"))
+	case strings.HasPrefix(data, "rtp") && b.handlePresetCallback(ctx, cb, data):
+		// the 📦 Готовые списки flow (rtp/rtpc/rtps/rtpa/rtpy)
 	case strings.HasPrefix(data, "rt") && b.handleRouteCallback(ctx, cb, data):
 		// the 📍 Маршруты list-first flow (rtL/rtI/rtSi/rtT/rtEa/rtEd/rtDel/rtDy/rtNew/rtIm)
 	case strings.HasPrefix(data, "srcp:"):

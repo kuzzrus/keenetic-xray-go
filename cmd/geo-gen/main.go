@@ -1,5 +1,6 @@
-// Command geo-gen regenerates presets/*.lst and presets/manifest.json from
-// the upstreams named in presets/sources.json.
+// Command geo-gen regenerates internal/presets/data/*.lst and
+// .../manifest.json from the upstreams named in
+// internal/presets/data/sources.json.
 //
 // It is a CI/maintenance tool -- .github/workflows/geo-update.yml runs it
 // daily -- and is never compiled into the router binary or shipped.
@@ -47,6 +48,7 @@ type sourcesFile struct {
 	MinKeep       int          `json:"min_keep"`
 	DriftGateLow  float64      `json:"drift_gate_low"`
 	DriftGateHigh float64      `json:"drift_gate_high"`
+	CategoryOrder []string     `json:"category_order"`
 	Presets       []presetSpec `json:"presets"`
 }
 
@@ -75,9 +77,10 @@ type manifestRow struct {
 }
 
 type manifestFile struct {
-	Version   int           `json:"version"`
-	Generated string        `json:"generated"`
-	Presets   []manifestRow `json:"presets"`
+	Version    int           `json:"version"`
+	Generated  string        `json:"generated"`
+	Categories []string      `json:"categories,omitempty"`
+	Presets    []manifestRow `json:"presets"`
 }
 
 type catalog struct {
@@ -91,7 +94,7 @@ type catalog struct {
 var httpClient = &http.Client{Timeout: 45 * time.Second}
 
 func main() {
-	dir := flag.String("dir", "presets", "directory holding sources.json and the generated *.lst / manifest.json")
+	dir := flag.String("dir", "internal/presets/data", "directory holding sources.json and the generated *.lst / manifest.json")
 	dryRun := flag.Bool("dry-run", false, "fetch and compute, but don't write files; report what would change")
 	flag.Parse()
 
@@ -182,12 +185,14 @@ func run(dir string, dryRun bool) error {
 	}
 
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
+	cats := categoryOrder(src.CategoryOrder, rows)
 	mfPath := filepath.Join(dir, "manifest.json")
 	generated := time.Now().UTC().Format("2006-01-02")
-	if old := loadManifest(mfPath); old != nil && sameRows(old.Presets, rows) {
+	if old := loadManifest(mfPath); old != nil && sameRows(old.Presets, rows) &&
+		strings.Join(old.Categories, "|") == strings.Join(cats, "|") {
 		generated = old.Generated // nothing changed -> keep the old stamp, no diff
 	}
-	mf := manifestFile{Version: 1, Generated: generated, Presets: rows}
+	mf := manifestFile{Version: 1, Generated: generated, Categories: cats, Presets: rows}
 	out, _ := json.MarshalIndent(mf, "", "  ")
 	out = append(out, '\n')
 	if dryRun {
@@ -573,6 +578,29 @@ func diffCount(oldE, newE []string) (added, removed int) {
 		}
 	}
 	return added, removed
+}
+
+// categoryOrder returns the configured category order, with any category
+// that appears on a preset but not in the configured list appended
+// (alphabetically) so nothing silently vanishes from the menu.
+func categoryOrder(configured []string, rows []manifestRow) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, c := range configured {
+		if c != "" && !seen[c] {
+			seen[c] = true
+			out = append(out, c)
+		}
+	}
+	var extra []string
+	for _, r := range rows {
+		if !seen[r.Category] {
+			seen[r.Category] = true
+			extra = append(extra, r.Category)
+		}
+	}
+	sort.Strings(extra)
+	return append(out, extra...)
 }
 
 func loadManifest(path string) *manifestFile {

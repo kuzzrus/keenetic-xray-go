@@ -67,6 +67,12 @@ mode stream-up` глобально переопределяет `xhttp` `mode` (
   (или `WireguardN`), остальное — напрямую. Под капотом `object-group
   fqdn keenetic-xray-*` + `dns-proxy route`. Списки namespace'нуты и
   никогда не трогают заведённые в вебе роутера.
+- **Готовые списки** (`keenetic-xray routes preset …`, кнопка `📦 Готовые
+  списки`) — курируемые списки по сервисам (`youtube`, `telegram`,
+  `github`, … ~10 категорий), вшиты в бинарь и обновляются в репозитории
+  раз в сутки. `preset add` привязывает список к пресету; бот/CLI
+  показывают `⬆ +N −M`, когда после обновления агента появилась свежая
+  версия, `preset sync` её подтягивает.
 
 **MSS-клампинг.** Устройство в LAN согласует MSS ~1460 под MTU роутера
 1500, но такие пакеты не влезают в путь `Proxy0 → xray → xhttp/REALITY` —
@@ -217,6 +223,7 @@ keenetic-xray agent {configure <url> <router-id> <fingerprint> <token>|enable|di
 keenetic-xray proxy0 {show|set [--lan-ip=192.168.x.1] [--protocol=socks5|http] [--interface=Proxy0]|off}
 keenetic-xray failover {show|set <key> <value>}
 keenetic-xray routes {list|show [name]|new <name> [entries…]|add <name> <entries…>|del <name> <entries…>|rm <name>|enable <name>|disable <name>|set <name> [--iface=Proxy0|Wireguard4] [--exclusive]|apply}
+keenetic-xray routes preset {list|show <name>|add <name> [--ip] [--iface=…] [--exclusive]|sync [<name>|--all]}
 keenetic-xray transport {show|mode auto|packet-up|stream-up|stream-one|mode-clear|mss <1200..1452|auto|off>|wg {show|on|off}}
 ```
 

@@ -1,10 +1,10 @@
 name: geo-update
 
-# Rebuilds presets/*.lst + presets/manifest.json from the upstreams named
-# in presets/sources.json (see cmd/geo-gen). Runs once a day and commits
-# the refreshed lists straight to main. If a single run would rewrite
-# more than half the presets -- a sign the upstream format changed -- it
-# opens a PR instead so a human looks first.
+# Rebuilds internal/presets/data/*.lst + manifest.json from the upstreams
+# named in internal/presets/data/sources.json (see cmd/geo-gen). Runs once
+# a day and commits the refreshed lists straight to main. If a single run
+# would rewrite more than half the presets -- a sign the upstream format
+# changed -- it opens a PR instead so a human looks first.
 
 on:
   schedule:
@@ -38,9 +38,9 @@ jobs:
       - name: Regenerate presets
         run: |
           if [ "${{ inputs.mode }}" = "dry-run" ]; then
-            go run ./cmd/geo-gen -dir presets -dry-run
+            go run ./cmd/geo-gen -dry-run
           else
-            go run ./cmd/geo-gen -dir presets
+            go run ./cmd/geo-gen
           fi
 
       - name: Commit or open PR
@@ -49,14 +49,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
+          data=internal/presets/data
 
-          if [ -z "$(git status --porcelain presets/)" ]; then
+          if [ -z "$(git status --porcelain "$data/")" ]; then
             echo "presets unchanged - nothing to do"
             exit 0
           fi
 
-          changed=$(git status --porcelain -- presets/ | grep -c '\.lst$' || true)
-          total=$(find presets -name '*.lst' | wc -l | tr -d ' ')
+          changed=$(git status --porcelain -- "$data/" | grep -c '\.lst$' || true)
+          total=$(find "$data" -name '*.lst' | wc -l | tr -d ' ')
           echo "changed .lst files: ${changed:-0} / ${total:-0}"
 
           stamp=$(date -u +%Y-%m-%d)
@@ -64,7 +65,7 @@ jobs:
 
           git config user.name  'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add presets/
+          git add "$data/"
 
           # More than half the lists moved, or an explicit "pr" run -> PR.
           if [ "${{ inputs.mode }}" = "pr" ] || { [ "${total:-0}" -gt 0 ] && [ "$(( ${changed:-0} * 2 ))" -gt "$total" ]; }; then

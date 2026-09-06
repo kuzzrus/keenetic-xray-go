@@ -194,6 +194,16 @@ reply alongside `Subscription.URL`). Setting one slot's source never
 fills in an empty other slot -- see internal/botcontrol/commands.go's
 setSlotSource; it only warns when the other slot still needs its own.
 
+`sub_refresh` (`🔄 Обновить подписку`) refreshes **everything that has a
+source**: the shared `Subscription` if set (`subscription.Refresh` +
+`ApplyResult`, which deliberately restores independently-sourced slots
+untouched), *and then* each `PrimarySource` / `BackupSource` --
+re-resolved via `subscription.ResolveSource` and `UpsertProfile`'d back
+over its slot. Without that second pass a provider's node changes (or a
+new build's parsing, e.g. the v0.12.0 xhttp `extra` blob) never reach an
+independently-sourced slot without re-pasting its URL by hand. Errors on
+one source don't abort the others.
+
 There used to be a `📋 Профили` card button (an interactive screen for
 picking among *already loaded* profiles by index, `pfp:`/`pfb:`
 callbacks). Removed as low-value next to `🔗 Источники` -- it invited

@@ -914,7 +914,7 @@ func (h *RouterHandler) setSlotSource(ctx context.Context, primary bool, args []
 		selector = strings.TrimSpace(args[1])
 	}
 
-	prof, err := h.resolveSource(ctx, src, selector)
+	prof, err := subscription.ResolveSource(ctx, src, selector)
 	if err != nil {
 		return "", err
 	}
@@ -957,55 +957,6 @@ func (h *RouterHandler) slotSet(idx int) bool {
 	return idx >= 0 && idx < len(h.Config.Profiles)
 }
 
-// resolveSource turns a link or subscription URL (+ selector) into one
-// profile.
-func (h *RouterHandler) resolveSource(ctx context.Context, src, selector string) (config.Profile, error) {
-	switch {
-	case strings.HasPrefix(src, "vless://"):
-		return config.ParseVLESSURI(src)
-	case strings.HasPrefix(src, "http://"), strings.HasPrefix(src, "https://"):
-		res, err := subscription.Refresh(ctx, src, "", "")
-		if err != nil {
-			return config.Profile{}, err
-		}
-		return pickProfile(res.Profiles, selector)
-	default:
-		return config.Profile{}, fmt.Errorf("нужна vless:// ссылка или http(s):// URL")
-	}
-}
-
-// pickProfile selects one profile from a subscription's list by selector:
-// "" / "first" -> [0]; an integer -> that index; otherwise a unique
-// case-insensitive Remark substring.
-func pickProfile(ps []config.Profile, selector string) (config.Profile, error) {
-	if len(ps) == 0 {
-		return config.Profile{}, fmt.Errorf("в подписке нет профилей")
-	}
-	if selector == "" || strings.EqualFold(selector, "first") {
-		return ps[0], nil
-	}
-	if n, err := strconv.Atoi(selector); err == nil {
-		if n < 0 || n >= len(ps) {
-			return config.Profile{}, fmt.Errorf("индекс %d вне диапазона (%d профилей)", n, len(ps))
-		}
-		return ps[n], nil
-	}
-	match, matches := config.Profile{}, 0
-	for _, p := range ps {
-		if strings.Contains(strings.ToLower(p.Remark), strings.ToLower(selector)) {
-			match, matches = p, matches+1
-		}
-	}
-	switch matches {
-	case 1:
-		return match, nil
-	case 0:
-		return config.Profile{}, fmt.Errorf("нет профиля с %q в названии", selector)
-	default:
-		return config.Profile{}, fmt.Errorf("под %q подходит %d профилей — уточни селектор", selector, matches)
-	}
-}
-
 func (h *RouterHandler) subSetURL(args []string) (string, error) {
 	if len(args) != 1 {
 		return "", fmt.Errorf("usage: sub_seturl <url>")
@@ -1018,35 +969,70 @@ func (h *RouterHandler) subSetURL(args []string) (string, error) {
 }
 
 func (h *RouterHandler) subRefresh(ctx context.Context) (string, error) {
-	if h.Config.Subscription == nil || h.Config.Subscription.URL == "" {
-		return "", fmt.Errorf("no subscription URL set -- run sub_seturl first")
+	hasShared := h.Config.Subscription != nil && h.Config.Subscription.URL != ""
+	hasSlots := h.Config.PrimarySource != nil || h.Config.BackupSource != nil
+	if !hasShared && !hasSlots {
+		return "", fmt.Errorf("нет ни подписки, ни источников слотов -- задай sub_seturl или 🔗 Источники")
 	}
 
-	var primaryKey, backupKey string
-	if p := h.Config.Primary(); p != nil {
-		primaryKey = p.Remark
-	}
-	if b := h.Config.Backup(); b != nil {
-		backupKey = b.Remark
+	var b strings.Builder
+
+	if hasShared {
+		var primaryKey, backupKey string
+		if p := h.Config.Primary(); p != nil {
+			primaryKey = p.Remark
+		}
+		if bk := h.Config.Backup(); bk != nil {
+			backupKey = bk.Remark
+		}
+		result, err := subscription.Refresh(ctx, h.Config.Subscription.URL, primaryKey, backupKey)
+		if err != nil {
+			return "", err
+		}
+		for _, w := range subscription.ApplyResult(h.Config, result) {
+			fmt.Fprintf(&b, "⚠️ %s\n", w)
+		}
+		fmt.Fprintf(&b, "подписка: %d профилей\n", len(result.Profiles))
 	}
 
-	result, err := subscription.Refresh(ctx, h.Config.Subscription.URL, primaryKey, backupKey)
-	if err != nil {
-		return "", err
+	// Independently-sourced slots (PrimarySource/BackupSource) are left
+	// untouched by a shared-subscription refresh above, so re-fetch each
+	// here -- otherwise a provider's node changes (and this build's new
+	// xhttp_extra parsing) never land without re-pasting the URL by hand.
+	for _, s := range []struct {
+		name    string
+		src     *config.SlotSource
+		primary bool
+	}{
+		{"основной", h.Config.PrimarySource, true},
+		{"резервный", h.Config.BackupSource, false},
+	} {
+		if s.src == nil {
+			continue
+		}
+		prof, err := subscription.ResolveSource(ctx, s.src.URL, s.src.Selector)
+		if err != nil {
+			fmt.Fprintf(&b, "⚠️ источник (%s): %v\n", s.name, err)
+			continue
+		}
+		idx := h.Config.UpsertProfile(prof)
+		if s.primary {
+			h.Config.PrimaryIndex = idx
+		} else {
+			h.Config.BackupIndex = idx
+		}
+		fmt.Fprintf(&b, "источник (%s) ← %s\n", s.name, prof.Remark)
 	}
 
-	warnings := subscription.ApplyResult(h.Config, result)
 	if err := h.Config.Save(h.ConfigPath); err != nil {
 		return "", err
 	}
 	h.rebindXray(ctx) // profiles may have changed -- restart xray on them now
 
-	var b strings.Builder
-	fmt.Fprintf(&b, "refreshed: %d profiles\n", len(result.Profiles))
-	for _, w := range warnings {
-		fmt.Fprintf(&b, "warning: %s\n", w)
+	if b.Len() == 0 {
+		return "нечего обновлять", nil
 	}
-	return b.String(), nil
+	return strings.TrimRight(b.String(), "\n"), nil
 }
 
 func (h *RouterHandler) subSetRole(ctx context.Context, args []string, primary bool) (string, error) {

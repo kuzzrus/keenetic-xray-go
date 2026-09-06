@@ -251,6 +251,77 @@ func TestValidProxyIface(t *testing.T) {
 	}
 }
 
+func TestValidRouteIfaceAndWGIface(t *testing.T) {
+	for _, ok := range []string{"", "Proxy0", "Proxy7", "Wireguard0", "Wireguard4", "Wireguard42"} {
+		if !ValidRouteIface(ok) {
+			t.Errorf("ValidRouteIface(%q) = false, want true", ok)
+		}
+	}
+	for _, bad := range []string{"wireguard0", "Wireguard", "WireGuard0", "eth0", "Proxy 0"} {
+		if ValidRouteIface(bad) {
+			t.Errorf("ValidRouteIface(%q) = true, want false", bad)
+		}
+	}
+	if ValidWGIface("") || ValidWGIface("Proxy0") || !ValidWGIface("Wireguard4") {
+		t.Error("ValidWGIface: want only Wireguard<n>")
+	}
+}
+
+func TestWGTransportConfig_Defaults(t *testing.T) {
+	var w WGTransportConfig
+	if w.WGPort() != DefaultWGPort || w.WGAddr() != DefaultWGAddr || w.WGMTU() != DefaultWGMTU {
+		t.Errorf("zero-value defaults = %d/%s/%d", w.WGPort(), w.WGAddr(), w.WGMTU())
+	}
+	w = WGTransportConfig{Port: 51820, Addr: "10.9.9.9", MTU: 1400}
+	if w.WGPort() != 51820 || w.WGAddr() != "10.9.9.9" || w.WGMTU() != 1400 {
+		t.Errorf("explicit values not honored: %+v", w)
+	}
+	if w.Ready() {
+		t.Error("Ready() true without key material")
+	}
+}
+
+func TestWGTransportConfig_EnsureKeys(t *testing.T) {
+	var w WGTransportConfig
+	gen, err := w.EnsureKeys()
+	if err != nil || !gen {
+		t.Fatalf("EnsureKeys first call = (%v, %v), want (true, nil)", gen, err)
+	}
+	if !ValidWGKey(w.XraySecretKey) || !ValidWGKey(w.XrayPublicKey) || !ValidWGKey(w.PSK) {
+		t.Fatalf("EnsureKeys left invalid keys: %+v", w)
+	}
+	priv := w.XraySecretKey
+	gen, err = w.EnsureKeys()
+	if err != nil || gen || w.XraySecretKey != priv {
+		t.Errorf("EnsureKeys second call regenerated: gen=%v key changed=%v", gen, w.XraySecretKey != priv)
+	}
+}
+
+func TestConfigValidate_WGTransport(t *testing.T) {
+	c := Default()
+	c.WGTransport = WGTransportConfig{Enabled: true, Iface: "Wireguard4", Port: DefaultWGPort, Addr: "172.31.209.2", MTU: 1280}
+	if _, err := c.WGTransport.EnsureKeys(); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("valid WG transport rejected: %v", err)
+	}
+	for _, mut := range []func(*WGTransportConfig){
+		func(w *WGTransportConfig) { w.Iface = "wg0" },
+		func(w *WGTransportConfig) { w.Port = 70000 },
+		func(w *WGTransportConfig) { w.Addr = "not-an-ip" },
+		func(w *WGTransportConfig) { w.MTU = 900 },
+		func(w *WGTransportConfig) { w.PSK = "truncated" },
+	} {
+		cc := Default()
+		cc.WGTransport = c.WGTransport
+		mut(&cc.WGTransport)
+		if err := cc.Validate(); err == nil {
+			t.Errorf("mutated WG transport passed Validate: %+v", cc.WGTransport)
+		}
+	}
+}
+
 func TestValidXrayCoreTag(t *testing.T) {
 	for _, ok := range []string{"", "v26.3.27", "v26.7.28", "v1.0.0"} {
 		if !ValidXrayCoreTag(ok) {

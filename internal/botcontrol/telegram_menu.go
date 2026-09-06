@@ -141,7 +141,28 @@ func portsTransportScreenKB(id string) inlineKeyboard {
 		{{Text: "✏️ Интерфейс Keenetic", CallbackData: "ptif:" + id}},
 		{{Text: "📶 MSS: Авто", CallbackData: "ptmss:" + id + ":auto"}, {Text: "1400", CallbackData: "ptmss:" + id + ":1400"}},
 		{{Text: "1280", CallbackData: "ptmss:" + id + ":1280"}, {Text: "MSS: Выкл", CallbackData: "ptmss:" + id + ":off"}},
+		{{Text: "🔌 WG-транспорт", CallbackData: "wgt:" + id}},
 		{{Text: "📊 Показать", CallbackData: "act:proxy0_show:" + id}, {Text: "⬅️ Назад", CallbackData: "router:" + id}},
+	}}
+}
+
+func wgTransportScreenText(id string) string {
+	return "🔌 WG-транспорт " + id + "\n\n" +
+		"Ставит на роутере интерфейс WireGuard, который заворачивает выбранный LAN-трафик " +
+		"в локальный xray (в Entware) в обход Proxy0/SOCKS: LAN → WireguardN → xray → туннель. " +
+		"Работает вместе с Proxy0 — что гнать в WG, выбираешь в 📍 Маршруты (интерфейс списка) " +
+		"или политикой Keenetic.\n\n" +
+		"Ключи (X25519) и PSK генерятся сами, приватные лежат в config.json. " +
+		"Интерфейс берётся первый свободный (Wireguard4…), метка `keenetic-xray-wg` — " +
+		"твои ручные WG-туннели не трогаются. У интерфейса свой MTU 1280 и встроенный клампинг MSS, " +
+		"так что видео здесь не залипает.\n\n" +
+		"Состояние — 📊 Показать."
+}
+
+func wgTransportScreenKB(id string) inlineKeyboard {
+	return inlineKeyboard{InlineKeyboard: [][]inlineButton{
+		{{Text: "✅ Включить", CallbackData: "act:wg_on:" + id}, {Text: "⛔ Выключить", CallbackData: "act:wg_off:" + id}},
+		{{Text: "📊 Показать", CallbackData: "act:wg_show:" + id}, {Text: "⬅️ Назад", CallbackData: "ptm:" + id}},
 	}}
 }
 
@@ -214,6 +235,12 @@ func callbackAction(name string) string {
 		return ActionDaemonRestart
 	case "self_update":
 		return ActionSelfUpdate
+	case "wg_show":
+		return ActionWGTransportShow
+	case "wg_on":
+		return ActionWGTransportOn
+	case "wg_off":
+		return ActionWGTransportOff
 	case "wd_show":
 		return ActionWatchdogShow
 	case "wd_enable":
@@ -320,6 +347,13 @@ func (b *TelegramBot) handleCallback(ctx context.Context, cb tgCallbackQuery) {
 			return
 		}
 		b.editCB(ctx, cb, portsTransportScreenText(id), portsTransportScreenKB(id))
+	case strings.HasPrefix(data, "wgt:"):
+		id := strings.TrimPrefix(data, "wgt:")
+		if !b.Store.HasRouter(id) {
+			b.editCB(ctx, cb, "нет такого роутера: "+id, b.routersListKB())
+			return
+		}
+		b.editCB(ctx, cb, wgTransportScreenText(id), wgTransportScreenKB(id))
 	case strings.HasPrefix(data, "ptwiz:"):
 		b.startPortsWizard(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "ptwiz:"))
 	case strings.HasPrefix(data, "ptif:"):

@@ -61,3 +61,23 @@ func TestCmdTransport_MSSClamp(t *testing.T) {
 		t.Error("an out-of-range MSS should error")
 	}
 }
+
+func TestCmdTransport_WGShow(t *testing.T) {
+	cfgFile := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("KEENETIC_XRAY_CONFIG", cfgFile)
+
+	// `transport wg show` is read-only and works without ndmc.
+	if err := run([]string{"transport", "wg", "show"}); err != nil {
+		t.Fatalf("transport wg show: %v", err)
+	}
+	if err := run([]string{"transport", "wg", "bogus"}); err == nil {
+		t.Error("an unknown wg subcommand should error")
+	}
+	// `transport show` also surfaces WG state without touching it.
+	if err := run([]string{"transport", "show"}); err != nil {
+		t.Fatalf("transport show: %v", err)
+	}
+	if cfg, _ := config.Load(cfgFile); cfg.WGTransport.Enabled {
+		t.Error("transport show/wg show must not enable the WG transport")
+	}
+}

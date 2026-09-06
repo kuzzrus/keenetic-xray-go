@@ -125,8 +125,8 @@ keenetic-xray variant {show|set mini|set full}
 keenetic-xray agent {configure <url> <router-id> <fingerprint> <token>|enable|disable|status}
 keenetic-xray proxy0 {show|set [--lan-ip=192.168.x.1] [--protocol=socks5|http] [--interface=Proxy0]|off}
 keenetic-xray failover {show|set <key> <value>}
-keenetic-xray routes {list|show [name]|new <name> [entries…]|add <name> <entries…>|del <name> <entries…>|rm <name>|enable <name>|disable <name>|set <name> [--iface=] [--exclusive]|apply}
-keenetic-xray transport {show|mode auto|packet-up|stream-up|stream-one|mode-clear|mss <1200..1452|auto|off>}
+keenetic-xray routes {list|show [name]|new <name> [entries…]|add <name> <entries…>|del <name> <entries…>|rm <name>|enable <name>|disable <name>|set <name> [--iface=Proxy0|Wireguard4] [--exclusive]|apply}
+keenetic-xray transport {show|mode auto|packet-up|stream-up|stream-one|mode-clear|mss <1200..1452|auto|off>|wg {show|on|off}}
 ```
 
 `proxy0 set` points Keenetic's `Proxy0` at the local inbound and flips the
@@ -152,6 +152,21 @@ via `opkg` if the router doesn't have it. The router firmware sometimes
 flushes the rule when it rebuilds the firewall, so the daemon re-checks
 every 2 minutes and puts it back. Also a bot action -- the `📶 MSS`
 presets on `⚙️ Порты и транспорт`, or `/proxy0 <router> mss auto|off|N`.
+
+`transport wg on` stands up an in-router WireGuard carrier as an
+alternative to Proxy0/SOCKS for the router→xray hop: `LAN → WireguardN →
+xray wireguard inbound → tunnel`. It picks the lowest free `WireguardN`,
+generates the xray-side X25519 keypair + a pre-shared key (kept in
+`config.json`), lets KeeneticOS generate its own keypair and reads the
+public key back, then wires the two together (`description
+keenetic-xray-wg` marks the interface -- hand-made WG tunnels are never
+touched). The interface gets MTU 1280 and KeeneticOS's own
+`ip tcp adjust-mss pmtu`, so video doesn't stall on this path. It
+coexists with `Proxy0`; point traffic at it per list with
+`routes set <list> --iface=Wireguard4` or with a Keenetic policy. The
+daemon re-asserts it on start; `transport wg off` removes the interface.
+Bot: `🔌 WG-транспорт` under `⚙️ Порты и транспорт`, or
+`/proxy0 <router> wg on|off|show`.
 
 `failover show`/`set` read or tune the health-check thresholds -- useful
 when primary is a single flaky server and the defaults switch too

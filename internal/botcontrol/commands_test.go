@@ -347,6 +347,30 @@ func TestRouterHandler_SetMSS(t *testing.T) {
 	}
 }
 
+func TestRouterHandler_WGTransport_WithoutNdmc(t *testing.T) {
+	h := &RouterHandler{Config: config.Default(), ConfigPath: filepath.Join(t.TempDir(), "c.json")}
+
+	// show is informational and never fails.
+	out, err := h.Handle(context.Background(), Command{Action: ActionWGTransportShow})
+	if err != nil {
+		t.Fatalf("wg_show: %v", err)
+	}
+	if !strings.Contains(out, "WG-транспорт") {
+		t.Errorf("wg_show output = %q", out)
+	}
+
+	// on requires ndmc; off just flips the flag + saves.
+	if _, err := h.Handle(context.Background(), Command{Action: ActionWGTransportOn}); err == nil {
+		t.Error("wg_on should error without ndmc")
+	}
+	if _, err := h.Handle(context.Background(), Command{Action: ActionWGTransportOff}); err != nil {
+		t.Fatalf("wg_off: %v", err)
+	}
+	if saved, _ := config.Load(h.ConfigPath); saved.WGTransport.Enabled {
+		t.Error("wg_off left WGTransport.Enabled true")
+	}
+}
+
 func TestRouterHandler_UpdateCore(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "c.json")

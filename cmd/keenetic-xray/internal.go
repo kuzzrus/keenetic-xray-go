@@ -156,6 +156,11 @@ func cmdPrermCleanup(args []string) error {
 		if err := keenetic.ClearRoutes(ctx); err != nil {
 			fmt.Println("warning: could not clear DNS routes:", err)
 		}
+		// Drop the forwarded-TCP MSS-clamp rule we own (tagged
+		// keenetic-xray-mss); a router without iptables is a no-op.
+		if err := keenetic.ClearMSSClamp(ctx); err != nil {
+			fmt.Println("warning: could not clear the MSS-clamp rule:", err)
+		}
 	}
 	return install.PrermCleanup(installPaths(), purge)
 }

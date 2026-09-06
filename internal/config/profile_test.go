@@ -166,6 +166,62 @@ func TestConfigValidate_Proxy0Protocol(t *testing.T) {
 	}
 }
 
+func TestConfigValidate_Proxy0MSSClamp(t *testing.T) {
+	c := Default()
+	for _, ok := range []int{0, -1, 1200, 1360, 1452} {
+		c.Proxy0.MSSClamp = ok
+		if err := c.Validate(); err != nil {
+			t.Errorf("proxy0.mss_clamp %d: unexpected error %v", ok, err)
+		}
+	}
+	for _, bad := range []int{1, 1199, 1453, 9000} {
+		c.Proxy0.MSSClamp = bad
+		if err := c.Validate(); err == nil {
+			t.Errorf("proxy0.mss_clamp %d: expected an error", bad)
+		}
+	}
+}
+
+func TestProxy0MSSClampValueAndText(t *testing.T) {
+	cases := []struct {
+		raw       int
+		wantValue int
+		wantText  string
+	}{
+		{0, DefaultMSSClamp, "авто (1360)"},
+		{-1, 0, "выкл"},
+		{1400, 1400, "1400"},
+	}
+	for _, tc := range cases {
+		p := Proxy0Config{MSSClamp: tc.raw}
+		if got := p.MSSClampValue(); got != tc.wantValue {
+			t.Errorf("MSSClampValue(%d) = %d, want %d", tc.raw, got, tc.wantValue)
+		}
+		if got := p.MSSClampText(); got != tc.wantText {
+			t.Errorf("MSSClampText(%d) = %q, want %q", tc.raw, got, tc.wantText)
+		}
+	}
+}
+
+func TestParseMSSClampArg(t *testing.T) {
+	ok := map[string]int{
+		"auto": 0, "AUTO": 0, "": 0, "default": 0,
+		"off": -1, "none": -1, "0": -1,
+		"1200": 1200, "1360": 1360, "1452": 1452, " 1400 ": 1400,
+	}
+	for in, want := range ok {
+		got, err := ParseMSSClampArg(in)
+		if err != nil || got != want {
+			t.Errorf("ParseMSSClampArg(%q) = (%d, %v), want (%d, nil)", in, got, err, want)
+		}
+	}
+	for _, bad := range []string{"1199", "1453", "abc", "1360px", "-5"} {
+		if _, err := ParseMSSClampArg(bad); err == nil {
+			t.Errorf("ParseMSSClampArg(%q): expected an error", bad)
+		}
+	}
+}
+
 func TestConfigValidate_Proxy0Interface(t *testing.T) {
 	c := Default()
 	for _, ok := range []string{"", "Proxy0", "Proxy1", "Proxy12"} {

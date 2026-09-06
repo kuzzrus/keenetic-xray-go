@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -186,6 +187,65 @@ type Proxy0Config struct {
 	Interface string `json:"interface,omitempty"` // "" -> "Proxy0"; also Proxy1, Proxy2, ...
 	Protocol  string `json:"protocol,omitempty"`  // "" -> "socks5"; also "http"
 	LANIP     string `json:"lan_ip,omitempty"`    // override; "" -> auto-detect via ndmc
+
+	// MSSClamp is the TCP MSS forced on forwarded connections while
+	// Proxy0 is on -- the fix for a PMTU black hole where the tunnel
+	// (Proxy0 -> xray -> xhttp/reality) can't carry full 1460-MSS
+	// segments, so large transfers (video) stall ~20s on retransmit.
+	// 0 -> the default DefaultMSSClamp; a negative value disables it;
+	// a positive value is used as-is (1200..1452).
+	MSSClamp int `json:"mss_clamp,omitempty"`
+}
+
+// DefaultMSSClamp is the MSS applied when Proxy0.MSSClamp is 0. Chosen
+// conservatively: 1500 WAN MTU minus IP/TCP (40) minus TLS record and
+// xhttp/VLESS framing headroom.
+const DefaultMSSClamp = 1360
+
+// MSSClampValue resolves Proxy0.MSSClamp to the MSS to enforce, or 0 for
+// "don't clamp".
+func (p Proxy0Config) MSSClampValue() int {
+	switch {
+	case p.MSSClamp < 0:
+		return 0
+	case p.MSSClamp == 0:
+		return DefaultMSSClamp
+	default:
+		return p.MSSClamp
+	}
+}
+
+// MSSClampText renders Proxy0.MSSClamp for humans: "авто (1360)", an
+// explicit value, or "выкл".
+func (p Proxy0Config) MSSClampText() string {
+	switch {
+	case p.MSSClamp < 0:
+		return "выкл"
+	case p.MSSClamp == 0:
+		return fmt.Sprintf("авто (%d)", DefaultMSSClamp)
+	default:
+		return strconv.Itoa(p.MSSClamp)
+	}
+}
+
+// ParseMSSClampArg maps a CLI/bot token to the value stored in
+// Proxy0.MSSClamp: "auto" -> 0 (use DefaultMSSClamp), "off" -> -1
+// (disable), a decimal -> itself, range-checked to 1200..1452.
+func ParseMSSClampArg(s string) (int, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "auto", "default", "":
+		return 0, nil
+	case "off", "none", "disable", "0":
+		return -1, nil
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil {
+		return 0, fmt.Errorf("mss %q: нужно число 1200..1452, либо auto / off", s)
+	}
+	if n < 1200 || n > 1452 {
+		return 0, fmt.Errorf("mss %d вне диапазона 1200..1452 (auto = %d, off — отключить)", n, DefaultMSSClamp)
+	}
+	return n, nil
 }
 
 // proxyIfaceRe matches the Keenetic Proxy interface names this project
@@ -558,6 +618,9 @@ func (c *Config) Validate() error {
 	}
 	if !ValidProxyIface(c.Proxy0.Interface) {
 		return fmt.Errorf("proxy0.interface %q: want a name like Proxy0 or Proxy1", c.Proxy0.Interface)
+	}
+	if v := c.Proxy0.MSSClamp; v > 0 && (v < 1200 || v > 1452) {
+		return fmt.Errorf("proxy0.mss_clamp %d out of range (1200..1452, 0 for default, negative to disable)", v)
 	}
 	if !ValidXrayCoreTag(c.XrayCoreTag) {
 		return fmt.Errorf("xray_core_tag %q: want a release tag like v26.7.28", c.XrayCoreTag)

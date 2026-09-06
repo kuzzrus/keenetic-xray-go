@@ -126,7 +126,7 @@ keenetic-xray agent {configure <url> <router-id> <fingerprint> <token>|enable|di
 keenetic-xray proxy0 {show|set [--lan-ip=192.168.x.1] [--protocol=socks5|http] [--interface=Proxy0]|off}
 keenetic-xray failover {show|set <key> <value>}
 keenetic-xray routes {list|show [name]|new <name> [entries…]|add <name> <entries…>|del <name> <entries…>|rm <name>|enable <name>|disable <name>|set <name> [--iface=] [--exclusive]|apply}
-keenetic-xray transport {show|mode auto|packet-up|stream-up|stream-one|mode-clear}
+keenetic-xray transport {show|mode auto|packet-up|stream-up|stream-one|mode-clear|mss <1200..1452|auto|off>}
 ```
 
 `proxy0 set` points Keenetic's `Proxy0` at the local inbound and flips the
@@ -138,6 +138,20 @@ Keenetic UI. `--protocol=http` targets the HTTP inbound instead of SOCKS
 different Keenetic Proxy interface (the old one is brought down first).
 Both are also bot actions -- `⚙️ Порты и транспорт` on a router card, or
 `/proxy0 <router> protocol http` / `/proxy0 <router> interface Proxy1`.
+
+`transport mss` clamps the TCP MSS of connections the router forwards
+into the tunnel -- the fix for a PMTU black hole. A LAN client negotiates
+MSS ~1460 against the router's 1500 MTU, but those full-size segments
+don't fit the `Proxy0 → xray → xhttp/REALITY` path, so large transfers
+(video: Reels, Shorts) stall ~20 s on retransmit, sometimes to a black
+screen. `mss auto` (= 1360) writes one `iptables` mangle rule tagged
+`keenetic-xray-mss`; `1400` is a milder clamp, `1280` has the most
+headroom if stalls return, `off` removes it. It only applies while
+`Proxy0` is on, is removed on `proxy0 off`, and `iptables` is pulled in
+via `opkg` if the router doesn't have it. The router firmware sometimes
+flushes the rule when it rebuilds the firewall, so the daemon re-checks
+every 2 minutes and puts it back. Also a bot action -- the `📶 MSS`
+presets on `⚙️ Порты и транспорт`, or `/proxy0 <router> mss auto|off|N`.
 
 `failover show`/`set` read or tune the health-check thresholds -- useful
 when primary is a single flaky server and the defaults switch too

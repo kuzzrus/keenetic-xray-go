@@ -134,8 +134,74 @@ func proxy0Set(cfg *config.Config, args []string) error {
 		return err
 	}
 	fmt.Printf("%s (%s) -> %s:%d\n", cfg.Proxy0.IfaceName(), cfg.Proxy0.ProtoName(), ip, port)
+	applyMSSClamp(cfg, func(f string, a ...any) { fmt.Printf(f+"\n", a...) })
 	applyDaemonChange(bufio.NewReader(os.Stdin), true)
 	return nil
+}
+
+// applyMSSClamp installs (or, when disabled, removes) the forwarded-TCP
+// MSS-clamp rule for the Proxy0 path -- the fix for a PMTU black hole
+// where the tunnel can't carry full 1460-MSS segments and large
+// transfers stall. Best-effort: a router without iptables just doesn't
+// get it.
+func applyMSSClamp(cfg *config.Config, logf func(string, ...any)) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	mss := cfg.Proxy0.MSSClampValue()
+	if !cfg.Proxy0.Enabled || mss <= 0 {
+		if err := keenetic.ClearMSSClamp(ctx); err != nil {
+			logf("mss-clamp: clear failed: %v", err)
+		}
+		return
+	}
+	if err := keenetic.EnsureIptables(ctx); err != nil {
+		logf("mss-clamp: iptables unavailable, skipping (%v)", err)
+		return
+	}
+	if err := keenetic.SetMSSClamp(ctx, mss); err != nil {
+		logf("mss-clamp: %v", err)
+		return
+	}
+	logf("mss-clamp: forwarded TCP MSS -> %d", mss)
+}
+
+// mssKeepalive re-asserts the MSS-clamp rule when the router firmware has
+// flushed it. ndm rewrites the firewall on all sorts of events (an
+// interface flap, a policy edit, a schedule firing) and silently drops
+// rules it didn't add -- so the clamp works right after `proxy0 on` and
+// then stops "some time later", which looks exactly like the video
+// stalls coming back. One `iptables -S` read every 2 min; only logs when
+// it actually had to put the rule back. Reloads config each tick so a
+// `proxy0 off` (applied over SIGHUP) stops it re-adding a stale clamp.
+func mssKeepalive(ctx context.Context, logf func(string, ...any)) {
+	if !keenetic.Available() {
+		return
+	}
+	t := time.NewTicker(2 * time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		cfg, err := config.Load(configPath())
+		if err != nil {
+			continue
+		}
+		mss := cfg.Proxy0.MSSClampValue()
+		if !cfg.Proxy0.Enabled || mss <= 0 || !keenetic.IptablesPresent() {
+			continue
+		}
+		if keenetic.MSSClampInPlace(ctx, mss) {
+			continue
+		}
+		if err := keenetic.SetMSSClamp(ctx, mss); err != nil {
+			logf("mss-clamp: re-assert failed: %v", err)
+			continue
+		}
+		logf("mss-clamp: re-asserted MSS %d (firmware had dropped the rule)", mss)
+	}
 }
 
 func proxy0Off(cfg *config.Config) error {
@@ -151,6 +217,7 @@ func proxy0Off(cfg *config.Config) error {
 		return err
 	}
 	fmt.Println("proxy0 disabled (the interface was brought down; xray rebinds to loopback once applied)")
+	applyMSSClamp(cfg, func(f string, a ...any) { fmt.Printf(f+"\n", a...) })
 	applyDaemonChange(bufio.NewReader(os.Stdin), true)
 	return nil
 }

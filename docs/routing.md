@@ -80,3 +80,23 @@ Adds `reject` to the route: when `Proxy0` is down, matched traffic is
 dropped rather than sent out the WAN unprotected. Off by default —
 availability over leak-prevention — because the failover daemon normally
 keeps a tunnel live regardless.
+
+## Video stalls through the tunnel? MSS clamping
+
+If routed video (Instagram Reels, YouTube Shorts) plays for a few
+seconds, freezes ~20 s, then resumes — sometimes to a black screen —
+it's a **PMTU black hole**, not a routing problem. The LAN client
+negotiates a TCP MSS of ~1460 against the router's 1500-byte MTU, but
+those full-size segments don't fit the `Proxy0 → xray → xhttp/REALITY`
+path, and large transfers stall on retransmit. It affects traffic
+*forwarded* by the router only — a client app running its own xray
+(Happ, an AWG tunnel) sizes its own segments and isn't touched, which is
+why "direct on the phone" works while the router doesn't.
+
+Fix: `keenetic-xray transport mss auto` (= MSS 1360). It adds one
+`iptables` mangle rule tagged `keenetic-xray-mss` that clamps forwarded
+TCP SYNs. Presets: `1400` milder, `1280` most headroom, `off` to remove.
+Applies only while `Proxy0` is on; removed on `proxy0 off`; `iptables`
+is installed via `opkg` if missing; the daemon re-asserts the rule every
+2 minutes in case the firmware flushes it. In the bot: the `📶 MSS`
+presets on `⚙️ Порты и транспорт`, or `/proxy0 <router> mss auto|off|N`.

@@ -316,6 +316,37 @@ func TestRouterHandler_Proxy0Config(t *testing.T) {
 	}
 }
 
+func TestRouterHandler_SetMSS(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "c.json")
+	cfg := config.Default()
+	cfg.Proxy0.Enabled = false // disabled -> only persisted, no iptables needed
+	h := &RouterHandler{Config: cfg, ConfigPath: cfgPath}
+
+	out, err := h.Handle(context.Background(), Command{Action: ActionSetMSS, Args: []string{"1400"}})
+	if err != nil {
+		t.Fatalf("set_mss 1400: %v", err)
+	}
+	if !strings.Contains(out, "1400") || !strings.Contains(out, "применится при включении") {
+		t.Errorf("out = %q", out)
+	}
+	if saved, _ := config.Load(cfgPath); saved.Proxy0.MSSClamp != 1400 {
+		t.Errorf("saved MSSClamp = %d, want 1400", saved.Proxy0.MSSClamp)
+	}
+
+	if _, err := h.Handle(context.Background(), Command{Action: ActionSetMSS, Args: []string{"off"}}); err != nil {
+		t.Fatalf("set_mss off: %v", err)
+	}
+	if saved, _ := config.Load(cfgPath); saved.Proxy0.MSSClamp != -1 {
+		t.Errorf("saved MSSClamp = %d, want -1", saved.Proxy0.MSSClamp)
+	}
+
+	for _, bad := range [][]string{{"9000"}, {"abc"}, {}} {
+		if _, err := h.Handle(context.Background(), Command{Action: ActionSetMSS, Args: bad}); err == nil {
+			t.Errorf("args %v: expected an error", bad)
+		}
+	}
+}
+
 func TestRouterHandler_UpdateCore(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "c.json")

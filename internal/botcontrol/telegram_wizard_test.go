@@ -239,6 +239,20 @@ func TestTelegramBot_TransportScreen_ProtocolAndInterface(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+
+	// "📶 MSS: Авто" preset -> set_mss carrying "auto".
+	fake.pushCallback(1, msgID, "ptmss:r1:auto")
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if cmd, _ := store.Dequeue("r1"); cmd != nil {
+			if cmd.Action != ActionSetMSS || len(cmd.Args) != 1 || cmd.Args[0] != "auto" {
+				t.Errorf("dequeued = %q %v, want set_mss [auto]", cmd.Action, cmd.Args)
+			}
+			_ = store.RecordResult("r1", Result{CommandID: cmd.ID, Output: "MSS-клампинг (Proxy0): авто (1360)"})
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 func TestTelegramBot_CoreScreen(t *testing.T) {

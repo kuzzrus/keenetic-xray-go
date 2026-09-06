@@ -57,9 +57,13 @@ DNS-based routes only work when:
    keeps its original route until it closes — netfilter caches the route
    decision per flow. If the `conntrack` CLI is installed
    (`opkg install conntrack` — Entware packages it as `conntrack`, not
-   `conntrack-tools`), the tool runs `conntrack -F` after any list change
-   so those flows re-evaluate on their next packet and move into the
-   tunnel; without it, they just age out.
+   `conntrack-tools`), the tool clears the conntrack entries for the IPs
+   currently resolved in the affected object-groups after any list change
+   (`conntrack -D -d <ip>`), so those flows re-evaluate on their next
+   packet and move onto the new route; unrelated connections keep their
+   NAT state. If it can't enumerate a useful IP set (nothing resolved
+   yet, CIDR-only list, or too many) it falls back to a full
+   `conntrack -F`. Without the package, stale flows just age out.
 
 `*` wildcards aren't allowed; a domain automatically covers its
 subdomains. IDN must be entered in punycode (`xn--…`). IPv6 isn't

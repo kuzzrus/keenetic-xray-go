@@ -243,11 +243,15 @@ func (h *RouterHandler) applyRoutes(ctx context.Context, okMsg string) (string, 
 		return okMsg + fmt.Sprintf("\n⚠️ на роутере не применилось: %v", err), nil
 	}
 	out := okMsg + fmt.Sprintf("\nроутер: +%d/-%d записей, групп +%d/-%d", rep.EntriesAdded, rep.EntriesRemoved, len(rep.GroupsCreated), len(rep.GroupsRemoved))
-	// Move connections already open to a now-matched IP into the tunnel
-	// immediately (no-op unless `opkg install conntrack`).
-	if changed := rep.EntriesAdded + rep.EntriesRemoved + len(rep.GroupsCreated) + len(rep.GroupsRemoved) + len(rep.RoutesSet) + len(rep.RoutesCleared); changed > 0 && keenetic.ConntrackPresent() {
-		if err := keenetic.FlushConntrack(cctx); err == nil {
-			out += "\nconntrack сброшен"
+	// Move connections already open to a now-matched IP onto the new
+	// route immediately (no-op unless `opkg install conntrack`).
+	if changed := rep.EntriesAdded + rep.EntriesRemoved + len(rep.GroupsCreated) + len(rep.GroupsRemoved) + len(rep.RoutesSet) + len(rep.RoutesCleared); changed > 0 {
+		groups := make([]string, 0, len(h.Config.Routing.Lists))
+		for _, l := range h.Config.Routing.Lists {
+			groups = append(groups, keenetic.RouteGroupPrefix+config.SanitizeRouteListName(l.Name))
+		}
+		if mode, _ := keenetic.FlushConntrackForGroups(cctx, groups); mode != "" {
+			out += "\nconntrack сброшен (" + mode + ")"
 		}
 	}
 	return out, nil

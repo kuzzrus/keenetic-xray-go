@@ -220,28 +220,45 @@ func TestRouterHandler_Status_RichFields(t *testing.T) {
 	cfg.Proxy0.Enabled = false // this test is about status rendering, not the proxy0 default
 	h := &RouterHandler{Daemon: d, Config: cfg, OptPath: t.TempDir()}
 
-	out, err := h.Handle(context.Background(), Command{Action: ActionStatus})
-	if err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-	for _, want := range []string{"uptime:", "в эфире: primary", "xray:", "proxy0: выкл"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("status output missing %q:\n%s", want, out)
-		}
-	}
+	// Poll: under full-repo `go test` parallelism the re-exec'd fake-xray
+	// helper is slow to schedule, so the daemon can take a beat to reach a
+	// state where status() renders every field.
+	waitStatus(t, h, "uptime:", "в эфире: primary", "xray:", "proxy0: выкл")
 
 	if err := d.ForceSwitch(context.Background(), failover.RoleBackup); err != nil {
 		t.Fatalf("ForceSwitch: %v", err)
 	}
-	out, err = h.Handle(context.Background(), Command{Action: ActionStatus})
-	if err != nil {
-		t.Fatalf("Handle after switch: %v", err)
+	waitStatus(t, h, "в эфире: backup", "последнее переключение:")
+}
+
+// waitStatus polls ActionStatus until its output contains every wanted
+// substring, or fails after a few seconds naming what's still missing.
+func waitStatus(t *testing.T, h *RouterHandler, want ...string) {
+	t.Helper()
+	deadline := time.Now().Add(4 * time.Second)
+	var out string
+	for time.Now().Before(deadline) {
+		o, err := h.Handle(context.Background(), Command{Action: ActionStatus})
+		if err != nil {
+			t.Fatalf("Handle(status): %v", err)
+		}
+		out = o
+		missing := false
+		for _, w := range want {
+			if !strings.Contains(out, w) {
+				missing = true
+				break
+			}
+		}
+		if !missing {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
-	if !strings.Contains(out, "в эфире: backup") {
-		t.Errorf("after switch, status should show backup live:\n%s", out)
-	}
-	if !strings.Contains(out, "последнее переключение:") {
-		t.Errorf("after switch, status should show the last transition:\n%s", out)
+	for _, w := range want {
+		if !strings.Contains(out, w) {
+			t.Errorf("status output still missing %q:\n%s", w, out)
+		}
 	}
 }
 

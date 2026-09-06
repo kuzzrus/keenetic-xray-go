@@ -271,26 +271,37 @@ func routesApply(cfg *config.Config, okMsg string) error {
 	}
 	fmt.Printf("%s. на роутере: +%d/-%d записей, групп +%d/-%d\n",
 		okMsg, rep.EntriesAdded, rep.EntriesRemoved, len(rep.GroupsCreated), len(rep.GroupsRemoved))
-	flushConntrackAfterRoutes(ctx, rep)
+	flushConntrackAfterRoutes(ctx, cfg, rep)
 	return nil
 }
 
-// flushConntrackAfterRoutes drops the conntrack table when a route set
-// actually changed, so connections already open to a now-matched IP
-// re-evaluate their route on the next packet instead of staying direct
-// until they close. No-op unless `conntrack` is installed.
-func flushConntrackAfterRoutes(ctx context.Context, rep keenetic.RouteReport) {
+// flushConntrackAfterRoutes moves already-open connections onto the new
+// route when a route set actually changed: it deletes the conntrack
+// entries for the IPs in our object-groups (falling back to a full flush
+// if it can't enumerate them). No-op unless `conntrack` is installed.
+func flushConntrackAfterRoutes(ctx context.Context, cfg *config.Config, rep keenetic.RouteReport) {
 	if rep.EntriesAdded+rep.EntriesRemoved+len(rep.GroupsCreated)+len(rep.GroupsRemoved)+len(rep.RoutesSet)+len(rep.RoutesCleared) == 0 {
 		return
 	}
 	if !keenetic.ConntrackPresent() {
 		return
 	}
-	if err := keenetic.FlushConntrack(ctx); err != nil {
-		fmt.Printf("conntrack -F: %v\n", err)
+	mode, err := keenetic.FlushConntrackForGroups(ctx, ourRouteGroups(cfg))
+	if err != nil {
+		fmt.Printf("conntrack: %v\n", err)
 		return
 	}
-	fmt.Println("conntrack сброшен — открытые соединения переедут в туннель на следующем пакете")
+	fmt.Printf("conntrack сброшен (%s) — открытые соединения переедут на новый маршрут\n", mode)
+}
+
+// ourRouteGroups is the router-side object-group name for every list in
+// the config.
+func ourRouteGroups(cfg *config.Config) []string {
+	out := make([]string, 0, len(cfg.Routing.Lists))
+	for _, l := range cfg.Routing.Lists {
+		out = append(out, keenetic.RouteGroupPrefix+config.SanitizeRouteListName(l.Name))
+	}
+	return out
 }
 
 // desiredRoutes resolves config route lists into keenetic.DesiredRoute

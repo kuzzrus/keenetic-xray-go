@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -61,6 +62,16 @@ func ParseVLESSURI(raw string) (Profile, error) {
 	if alpn := q.Get("alpn"); alpn != "" {
 		profile.ALPN = strings.Split(alpn, ",")
 	}
+	// `extra` carries the xhttp tuning blob (xmux, sc*, xPaddingBytes, ...).
+	// net/url already percent-decoded it; keep it only if it's a JSON
+	// object, so a provider quirk degrades to "no tuning" rather than
+	// losing the whole profile.
+	if v := strings.TrimSpace(q.Get("extra")); v != "" {
+		var obj map[string]json.RawMessage
+		if json.Unmarshal([]byte(v), &obj) == nil {
+			profile.XHTTPExtra = json.RawMessage(v)
+		}
+	}
 	if profile.Remark == "" {
 		profile.Remark = profile.Address
 	}
@@ -94,6 +105,9 @@ func (p Profile) URI() string {
 	setIfNonEmpty(q, "serviceName", p.ServiceName)
 	setIfNonEmpty(q, "headerType", p.HeaderType)
 	setIfNonEmpty(q, "mode", p.Mode)
+	if len(p.XHTTPExtra) > 0 {
+		q.Set("extra", string(p.XHTTPExtra))
+	}
 	if len(p.ALPN) > 0 {
 		q.Set("alpn", strings.Join(p.ALPN, ","))
 	}

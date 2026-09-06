@@ -16,6 +16,25 @@ type XrayConfigOptions struct {
 	ListenHost string  // inbound bind address; "" -> "127.0.0.1". Set to "0.0.0.0" so Keenetic's Proxy0 can reach the inbound over the LAN.
 	Outbound   Profile // the profile to route all traffic through
 	XHTTPMode  string  // "" -> keep the profile's own mode; otherwise force this xhttp mode (Config.XHTTPMode)
+
+	// WG, when set, adds a `wireguard` inbound so Keenetic can carry
+	// selected LAN traffic into xray over an in-router WireGuard hop
+	// instead of (or alongside) Proxy0/SOCKS. Never set for the isolated
+	// recovery-pretest instance.
+	WG *WGInboundOptions
+}
+
+// WGInboundOptions describes the xray `wireguard` inbound for the
+// in-router WG transport. xray is the WG "server"; the single peer is
+// the Keenetic WireGuard interface.
+type WGInboundOptions struct {
+	ListenHost     string   // bind address (0.0.0.0 so Keenetic reaches it over the LAN)
+	Port           int      // UDP listen port
+	SecretKey      string   // xray's WG private key, base64
+	MTU            int      // 0 -> omit (xray default)
+	PeerPublicKey  string   // the Keenetic interface's public key, base64
+	PeerPSK        string   // shared pre-shared key, base64; "" -> omit
+	PeerAllowedIPs []string // nil -> ["0.0.0.0/0"]
 }
 
 func (o XrayConfigOptions) listenHost() string {
@@ -60,6 +79,13 @@ func GenerateXrayConfig(opts XrayConfigOptions) ([]byte, error) {
 			Tag:      "http-in",
 		})
 	}
+	if opts.WG != nil {
+		wgIn, err := wgInbound(*opts.WG)
+		if err != nil {
+			return nil, err
+		}
+		inbounds = append(inbounds, wgIn)
+	}
 
 	outbound, err := buildOutbound(opts.Outbound, opts.XHTTPMode)
 	if err != nil {
@@ -81,6 +107,50 @@ func GenerateXrayConfig(opts XrayConfigOptions) ([]byte, error) {
 		return nil, fmt.Errorf("encoding xray config: %w", err)
 	}
 	return data, nil
+}
+
+// wgInbound renders the `wireguard` inbound. kernelMode is false --
+// Entware has no kernel WireGuard module, xray does it in userspace.
+func wgInbound(o WGInboundOptions) (xrayInbound, error) {
+	switch {
+	case o.ListenHost == "":
+		return xrayInbound{}, fmt.Errorf("wireguard inbound: ListenHost required")
+	case o.Port <= 0 || o.Port > 65535:
+		return xrayInbound{}, fmt.Errorf("wireguard inbound: bad port %d", o.Port)
+	case !ValidWGKey(o.SecretKey):
+		return xrayInbound{}, fmt.Errorf("wireguard inbound: SecretKey is not a valid key")
+	case !ValidWGKey(o.PeerPublicKey):
+		return xrayInbound{}, fmt.Errorf("wireguard inbound: PeerPublicKey is not a valid key")
+	case o.PeerPSK != "" && !ValidWGKey(o.PeerPSK):
+		return xrayInbound{}, fmt.Errorf("wireguard inbound: PeerPSK is not a valid key")
+	}
+
+	allowed := o.PeerAllowedIPs
+	if len(allowed) == 0 {
+		allowed = []string{"0.0.0.0/0"}
+	}
+	peer := map[string]any{
+		"publicKey":  o.PeerPublicKey,
+		"allowedIPs": allowed,
+	}
+	if o.PeerPSK != "" {
+		peer["preSharedKey"] = o.PeerPSK
+	}
+	settings := map[string]any{
+		"secretKey":  o.SecretKey,
+		"kernelMode": false,
+		"peers":      []map[string]any{peer},
+	}
+	if o.MTU > 0 {
+		settings["mtu"] = o.MTU
+	}
+	return xrayInbound{
+		Listen:   o.ListenHost,
+		Port:     o.Port,
+		Protocol: "wireguard",
+		Settings: settings,
+		Tag:      "wg-in",
+	}, nil
 }
 
 func buildOutbound(p Profile, xhttpMode string) (xrayOutbound, error) {

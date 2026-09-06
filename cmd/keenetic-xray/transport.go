@@ -61,8 +61,10 @@ func cmdTransport(args []string) error {
 		}
 		applyMSSClamp(cfg, func(f string, a ...any) { fmt.Printf(f+"\n", a...) })
 		return nil
+	case "wg":
+		return transportWG(cfg, args[1:])
 	default:
-		return fmt.Errorf("usage: keenetic-xray transport {show|mode <mode>|mode-clear|mss <1200..1452|auto|off>}")
+		return fmt.Errorf("usage: keenetic-xray transport {show|mode <mode>|mode-clear|mss <1200..1452|auto|off>|wg {show|on|off}}")
 	}
 
 	if err := cfg.Save(configPath()); err != nil {
@@ -84,4 +86,21 @@ func printTransport(cfg *config.Config) {
 		mss += " (не активен — proxy0 выключен)"
 	}
 	fmt.Printf("MSS-клампинг (Proxy0): %s\n", mss)
+
+	w := cfg.WGTransport
+	switch {
+	case !w.Enabled:
+		fmt.Println("WG-транспорт: выкл")
+	case !w.Ready():
+		fmt.Printf("WG-транспорт: вкл (%s) — ключи ещё не согласованы\n", firstNonEmptyStr(w.Iface, "интерфейс не выбран"))
+	default:
+		fmt.Printf("WG-транспорт: вкл — %s, xray-inbound :%d, MTU %d\n", w.Iface, w.WGPort(), w.WGMTU())
+	}
+}
+
+func firstNonEmptyStr(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }

@@ -166,11 +166,12 @@ func (a *realActions) SwitchLiveTo(ctx context.Context, role Role) error {
 		return fmt.Errorf("no %s profile configured", role)
 	}
 
-	// When Proxy0 is enabled the production inbound must be reachable from
-	// Keenetic's Proxy interface over the LAN, so bind all interfaces
-	// rather than loopback. The pretest instance stays loopback-only.
+	// When Proxy0 or the WG transport is enabled the production inbound
+	// must be reachable from Keenetic over the LAN, so bind all
+	// interfaces rather than loopback. The pretest instance stays
+	// loopback-only.
 	listen := ""
-	if a.cfg.Proxy0.Enabled {
+	if a.cfg.Proxy0.Enabled || a.cfg.WGTransport.Enabled {
 		listen = "0.0.0.0"
 	}
 	data, err := config.GenerateXrayConfig(config.XrayConfigOptions{
@@ -179,6 +180,7 @@ func (a *realActions) SwitchLiveTo(ctx context.Context, role Role) error {
 		ListenHost: listen,
 		Outbound:   *profile,
 		XHTTPMode:  a.cfg.XHTTPMode,
+		WG:         wgInboundOpts(a.cfg),
 	})
 	if err != nil {
 		return fmt.Errorf("generating production config: %w", err)
@@ -230,6 +232,25 @@ func (a *realActions) StopIsolatedPretest(ctx context.Context) error {
 		a.pretest = nil
 	}
 	return nil
+}
+
+// wgInboundOpts builds the xray `wireguard` inbound options from the WG
+// transport config, or nil when it's off or its key material isn't in
+// place yet. The pretest instance never gets a WG inbound.
+func wgInboundOpts(cfg *config.Config) *config.WGInboundOptions {
+	w := cfg.WGTransport
+	if !w.Enabled || !w.Ready() {
+		return nil
+	}
+	return &config.WGInboundOptions{
+		ListenHost:     "0.0.0.0",
+		Port:           w.WGPort(),
+		SecretKey:      w.XraySecretKey,
+		MTU:            w.WGMTU(),
+		PeerPublicKey:  w.KeeneticPublicKey,
+		PeerPSK:        w.PSK,
+		PeerAllowedIPs: []string{"0.0.0.0/0"},
+	}
 }
 
 // Daemon drives a Machine on a real ticker, using real xray-core processes

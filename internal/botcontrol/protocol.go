@@ -66,6 +66,11 @@ const (
 	ActionRoutesDel        = "routes_del"    // args[0]=name, args[1]=entries to remove
 	ActionRoutesRemoveList = "routes_rmlist" // args[0]=name
 	ActionRoutesToggle     = "routes_toggle" // args[0]=name, args[1]="on"|"off"
+	// In-router WireGuard transport (LAN -> WireguardN -> xray wireguard
+	// inbound -> tunnel). See internal/keenetic.ApplyWGTransport.
+	ActionWGTransportShow = "wg_show" // no args
+	ActionWGTransportOn   = "wg_on"   // no args -- creates/reconciles the interface, generates keys
+	ActionWGTransportOff  = "wg_off"  // no args -- removes the interface
 )
 
 // Command is a single unit of work queued for a router by the control

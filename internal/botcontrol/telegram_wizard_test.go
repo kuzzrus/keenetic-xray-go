@@ -253,6 +253,22 @@ func TestTelegramBot_TransportScreen_ProtocolAndInterface(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+
+	// "🔌 WG-транспорт" -> its sub-screen; "Включить" -> wg_on.
+	fake.pushCallback(1, msgID, "wgt:r1")
+	fake.waitForEditContaining(t, 3*time.Second, "WG-транспорт")
+	fake.pushCallback(1, msgID, "act:wg_on:r1")
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if cmd, _ := store.Dequeue("r1"); cmd != nil {
+			if cmd.Action != ActionWGTransportOn {
+				t.Errorf("dequeued = %q, want wg_on", cmd.Action)
+			}
+			_ = store.RecordResult("r1", Result{CommandID: cmd.ID, Output: "WG-транспорт включён"})
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 func TestTelegramBot_CoreScreen(t *testing.T) {

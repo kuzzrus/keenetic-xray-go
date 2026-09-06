@@ -161,6 +161,11 @@ func cmdPrermCleanup(args []string) error {
 		if err := keenetic.ClearMSSClamp(ctx); err != nil {
 			fmt.Println("warning: could not clear the MSS-clamp rule:", err)
 		}
+		// Remove the in-router WireGuard transport interface (found by
+		// its keenetic-xray-wg marker; hand-made WG tunnels are untouched).
+		if err := keenetic.ClearWGTransport(ctx); err != nil {
+			fmt.Println("warning: could not remove the WG-transport interface:", err)
+		}
 	}
 	return install.PrermCleanup(installPaths(), purge)
 }

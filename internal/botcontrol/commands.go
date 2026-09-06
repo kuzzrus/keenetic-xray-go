@@ -102,6 +102,13 @@ func (h *RouterHandler) scrubSecrets(s string) string {
 	if h.Config.BackupSource != nil {
 		redact(h.Config.BackupSource.URL)
 	}
+	// The WG-transport pre-shared / secret keys can land in a failed
+	// ndmc command echoed back in an error.
+	for _, k := range []string{h.Config.WGTransport.PSK, h.Config.WGTransport.XraySecretKey} {
+		if k != "" {
+			s = strings.ReplaceAll(s, k, "<wg-ключ>")
+		}
+	}
 	return s
 }
 
@@ -139,6 +146,12 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 		return h.proxy0Config(ctx, cmd.Args)
 	case ActionSetMSS:
 		return h.setMSS(ctx, cmd.Args)
+	case ActionWGTransportShow:
+		return h.wgTransportShow(ctx)
+	case ActionWGTransportOn:
+		return h.wgTransportOn(ctx)
+	case ActionWGTransportOff:
+		return h.wgTransportOff(ctx)
 	case ActionDaemonRestart:
 		return h.daemonRestart()
 	case ActionEnsureCore:
@@ -673,6 +686,93 @@ func (h *RouterHandler) setMSS(ctx context.Context, args []string) (string, erro
 		return "", err
 	}
 	return summary + note + fmt.Sprintf("\nправило установлено: forwarded TCP MSS → %d", mss), nil
+}
+
+// wgTransportShow reports the in-router WireGuard transport state (config
+// + live interface).
+func (h *RouterHandler) wgTransportShow(ctx context.Context) (string, error) {
+	w := h.Config.WGTransport
+	var b strings.Builder
+	switch {
+	case !w.Enabled:
+		b.WriteString("WG-транспорт: выкл")
+	case !w.Ready():
+		iface := w.Iface
+		if iface == "" {
+			iface = "интерфейс не выбран"
+		}
+		fmt.Fprintf(&b, "WG-транспорт: вкл (%s) — ключи ещё не согласованы", iface)
+	default:
+		fmt.Fprintf(&b, "WG-транспорт: вкл — %s, xray :%d, MTU %d", w.Iface, w.WGPort(), w.WGMTU())
+	}
+	if keenetic.Available() && w.Iface != "" {
+		if live, err := keenetic.ShowWGTransport(ctx, w.Iface); err == nil && live != "" {
+			b.WriteString("\n" + live)
+		}
+	}
+	return b.String(), nil
+}
+
+// wgTransportOn creates/reconciles the Keenetic WireGuard interface,
+// generating the xray-side keypair + PSK on first run, and rebinds xray
+// so the `wireguard` inbound comes up.
+func (h *RouterHandler) wgTransportOn(ctx context.Context) (string, error) {
+	if !keenetic.Available() {
+		return "", fmt.Errorf("ndmc не найден — работает только на роутере Keenetic")
+	}
+	if _, err := h.Config.WGTransport.EnsureKeys(); err != nil {
+		return "", err
+	}
+	ip, err := keenetic.LANIP(ctx, h.Config.Proxy0.LANIP)
+	if err != nil {
+		return "", fmt.Errorf("определение LAN IP роутера: %w", err)
+	}
+	if h.Config.WGTransport.Iface == "" {
+		iface, err := keenetic.FreeWireguardIface(ctx)
+		if err != nil {
+			return "", err
+		}
+		h.Config.WGTransport.Iface = iface
+	}
+	w := h.Config.WGTransport
+	spec := keenetic.WGTransportSpec{
+		Iface:      w.Iface,
+		Address:    w.WGAddr(),
+		MTU:        w.WGMTU(),
+		PeerPubKey: w.XrayPublicKey,
+		PeerPSK:    w.PSK,
+		Endpoint:   net.JoinHostPort(ip, strconv.Itoa(w.WGPort())),
+		Keepalive:  25,
+	}
+	kpub, err := keenetic.ApplyWGTransport(ctx, spec)
+	if err != nil {
+		return "", err
+	}
+	h.Config.WGTransport.Enabled = true
+	h.Config.WGTransport.KeeneticPublicKey = kpub
+	if err := h.Config.Save(h.ConfigPath); err != nil {
+		return "", err
+	}
+	h.rebindXray(ctx)
+	return fmt.Sprintf("WG-транспорт включён: %s (MTU %d), xray :%d.\n"+
+		"Заворачивай трафик: 📍 Маршруты → список с интерфейсом %s (или политикой Keenetic).",
+		spec.Iface, spec.MTU, w.WGPort(), spec.Iface), nil
+}
+
+// wgTransportOff removes the Keenetic WireGuard interface and rebinds
+// xray without the inbound. Keys stay in config for a fast re-enable.
+func (h *RouterHandler) wgTransportOff(ctx context.Context) (string, error) {
+	if keenetic.Available() {
+		if err := keenetic.ClearWGTransport(ctx); err != nil {
+			return "", err
+		}
+	}
+	h.Config.WGTransport.Enabled = false
+	if err := h.Config.Save(h.ConfigPath); err != nil {
+		return "", err
+	}
+	h.rebindXray(ctx)
+	return "WG-транспорт выключен (интерфейс снят; xray перестроен без wg-inbound)", nil
 }
 
 // daemonRestart spawns a detached "restart after a short delay" so this

@@ -519,6 +519,7 @@ const helpText = `/menu — меню с кнопками (проще всего)
 /proxy0 <router> protocol socks5|http — какой вход отдаёт Proxy-интерфейс
 /proxy0 <router> interface Proxy0|Proxy1|… — какой Proxy-интерфейс Keenetic вести
 /proxy0 <router> mss auto|off|1200..1452 — клампинг MSS на пути Proxy0 (лечит залипание видео)
+/proxy0 <router> wg on|off|show — WG-транспорт: интерфейс WireGuard на роутере в локальный xray
 /restart <router> — перезапустить демон
 /ensure_core <router> — доустановить ядро xray, если его нет
 /update_core <router> [vX.Y.Z|stable] — обновить/переключить ядро xray (перезапустит xray)
@@ -684,7 +685,7 @@ func (b *TelegramBot) dispatchWatchdog(ctx context.Context, args []string) strin
 // dispatchProxy0 routes /proxy0 <router> [show|on|off|protocol <socks5|http>|interface <ProxyN>|mss <auto|off|N>];
 // default is show.
 func (b *TelegramBot) dispatchProxy0(ctx context.Context, args []string) string {
-	usage := "формат: /proxy0 <роутер> [show|on|off|protocol socks5|http|interface Proxy0|mss auto|off|1200..1452]"
+	usage := "формат: /proxy0 <роутер> [show|on|off|protocol socks5|http|interface Proxy0|mss auto|off|1200..1452|wg on|off|show]"
 	if len(args) < 1 {
 		return usage
 	}
@@ -711,6 +712,17 @@ func (b *TelegramBot) dispatchProxy0(ctx context.Context, args []string) string 
 			return usage
 		}
 		return b.runRouterCommand(ctx, args[:1], ActionSetMSS, []string{args[2]})
+	case "wg":
+		switch {
+		case len(args) == 2 || args[2] == "show":
+			return b.runRouterCommand(ctx, args[:1], ActionWGTransportShow, nil)
+		case args[2] == "on":
+			return b.runRouterCommand(ctx, args[:1], ActionWGTransportOn, nil)
+		case args[2] == "off":
+			return b.runRouterCommand(ctx, args[:1], ActionWGTransportOff, nil)
+		default:
+			return usage
+		}
 	default:
 		return usage
 	}

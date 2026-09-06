@@ -100,3 +100,34 @@ Applies only while `Proxy0` is on; removed on `proxy0 off`; `iptables`
 is installed via `opkg` if missing; the daemon re-asserts the rule every
 2 minutes in case the firmware flushes it. In the bot: the `📶 MSS`
 presets on `⚙️ Порты и транспорт`, or `/proxy0 <router> mss auto|off|N`.
+
+## Routing through WireGuard instead of Proxy0
+
+`routes ... --iface=` also accepts a `WireguardN` name, not just
+`ProxyN`. Two ways to have one:
+
+- **Your own Keenetic WireGuard tunnel.** If you already run a WG client
+  interface to a VPS (configured in the Keenetic web UI), just point a
+  list at it: `routes set <list> --iface=Wireguard2`. The tool writes
+  `dns-proxy route object-group … Wireguard2 auto` and nothing else --
+  the tunnel itself is yours to manage.
+
+- **The in-router WG transport** (`transport wg on`). This stands up a
+  `WireguardN` interface *to the local xray* -- `LAN → WireguardN → xray
+  wireguard inbound → VLESS/xhttp out` -- as an alternative router→xray
+  hop to Proxy0/SOCKS. The tool owns this interface end to end: it picks
+  the lowest free `WireguardN`, generates the xray-side X25519 keypair +
+  a pre-shared key, lets KeeneticOS generate its own keypair and reads
+  the public key back, and wires the peer. The interface is marked
+  `description keenetic-xray-wg`; **only** that interface is ever read or
+  removed, so your hand-made WG tunnels are untouched. It gets MTU 1280
+  and KeeneticOS's `ip tcp adjust-mss pmtu`, so the PMTU stall above
+  doesn't apply here. Coexists with `Proxy0`. `transport wg off` (or a
+  package purge) removes the interface; the daemon re-asserts it on
+  start. Bot: `🔌 WG-транспорт` under `⚙️ Порты и транспорт`, or
+  `/proxy0 <router> wg on|off|show`.
+
+  It is a lateral choice, not an upgrade: WireGuard adds ChaCha20 over a
+  localhost hop and ~60 bytes of encapsulation. Reach for it when you
+  want the cleaner Keenetic routing integration (policies, `ip route`,
+  `dns-proxy route` all target a real interface), not for raw speed.

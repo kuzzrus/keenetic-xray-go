@@ -296,6 +296,102 @@ func TestGenerateXrayConfig_ListenHost(t *testing.T) {
 	}
 }
 
+func TestGenerateXrayConfig_WGInbound(t *testing.T) {
+	priv, pub, _ := GenerateWGKeypair()
+	_, keeneticPub, _ := GenerateWGKeypair()
+	psk, _ := GenerateWGPSK()
+
+	base := XrayConfigOptions{SOCKSPort: 1080, HTTPPort: 1081, Outbound: validProfile()}
+
+	// No WG option -> two inbounds, no wireguard.
+	data, err := GenerateXrayConfig(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := inboundProtocols(t, data); len(got) != 2 || contains(got, "wireguard") {
+		t.Fatalf("without WG: protocols = %v", got)
+	}
+
+	// With WG option -> a third inbound.
+	withWG := base
+	withWG.WG = &WGInboundOptions{
+		ListenHost: "0.0.0.0", Port: DefaultWGPort, SecretKey: priv, MTU: 1280,
+		PeerPublicKey: keeneticPub, PeerPSK: psk,
+	}
+	data, err = GenerateXrayConfig(withWG)
+	if err != nil {
+		t.Fatalf("with WG: %v", err)
+	}
+	var cfg struct {
+		Inbounds []map[string]any `json:"inbounds"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Inbounds) != 3 {
+		t.Fatalf("want 3 inbounds, got %d", len(cfg.Inbounds))
+	}
+	wg := cfg.Inbounds[2]
+	if wg["protocol"] != "wireguard" || wg["tag"] != "wg-in" || wg["listen"] != "0.0.0.0" {
+		t.Fatalf("wg inbound shell = %#v", wg)
+	}
+	s := wg["settings"].(map[string]any)
+	if s["secretKey"] != priv || s["kernelMode"] != false || s["mtu"].(float64) != 1280 {
+		t.Errorf("wg settings = %#v", s)
+	}
+	peer := s["peers"].([]any)[0].(map[string]any)
+	if peer["publicKey"] != keeneticPub || peer["preSharedKey"] != psk {
+		t.Errorf("wg peer = %#v", peer)
+	}
+	if ips := peer["allowedIPs"].([]any); len(ips) != 1 || ips[0] != "0.0.0.0/0" {
+		t.Errorf("allowedIPs = %#v", peer["allowedIPs"])
+	}
+	_ = pub
+
+	// PSK omitted when empty; bad key rejected.
+	withWG.WG.PeerPSK = ""
+	if data, err = GenerateXrayConfig(withWG); err != nil {
+		t.Fatal(err)
+	} else {
+		var c2 struct {
+			Inbounds []map[string]any `json:"inbounds"`
+		}
+		_ = json.Unmarshal(data, &c2)
+		p := c2.Inbounds[2]["settings"].(map[string]any)["peers"].([]any)[0].(map[string]any)
+		if _, ok := p["preSharedKey"]; ok {
+			t.Error("preSharedKey present despite empty PSK")
+		}
+	}
+	withWG.WG.SecretKey = "truncated"
+	if _, err := GenerateXrayConfig(withWG); err == nil {
+		t.Error("expected error for a bad WG secret key")
+	}
+}
+
+func inboundProtocols(t *testing.T, data []byte) []string {
+	t.Helper()
+	var cfg struct {
+		Inbounds []map[string]any `json:"inbounds"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, in := range cfg.Inbounds {
+		out = append(out, in["protocol"].(string))
+	}
+	return out
+}
+
+func contains(ss []string, s string) bool {
+	for _, x := range ss {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
 func TestGenerateXrayConfig_Errors(t *testing.T) {
 	t.Run("no ports", func(t *testing.T) {
 		_, err := GenerateXrayConfig(XrayConfigOptions{Outbound: validProfile()})

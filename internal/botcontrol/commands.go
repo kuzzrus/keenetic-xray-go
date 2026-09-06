@@ -327,6 +327,14 @@ func (h *RouterHandler) doctor(ctx context.Context) string {
 		}
 	}
 
+	if mss := h.Config.Proxy0.MSSClampValue(); h.Config.Proxy0.Enabled && mss > 0 && keenetic.Available() && keenetic.IptablesPresent() {
+		check(keenetic.MSSClampInPlace(ctx, mss), fmt.Sprintf("MSS-клампинг %d на месте", mss))
+	}
+
+	if w := h.Config.WGTransport; w.Enabled && w.Iface != "" && keenetic.Available() {
+		check(keenetic.WGInterfaceUp(ctx, w.Iface), "WG-транспорт "+w.Iface+" поднят")
+	}
+
 	if h.OptPath != "" {
 		if free, err := diskspace.FreeBytes(h.OptPath); err == nil {
 			fmt.Fprintf(&b, "ℹ️ свободно на %s: %d МБ\n", h.OptPath, free/1024/1024)

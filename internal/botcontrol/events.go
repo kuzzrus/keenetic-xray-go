@@ -49,6 +49,102 @@ func FailoverEvents(ctx context.Context, in <-chan failover.Event) <-chan Event 
 	return out
 }
 
+// stuckWatchInterval is how often WatchStuckPrimary re-checks the
+// snapshot. Overridden in tests.
+var stuckWatchInterval = time.Minute
+
+// WatchStuckPrimary forwards `in` unchanged and, on a 1-minute ticker,
+// emits ONE "primary_stuck" advisory when production has been carrying
+// traffic on backup for longer than `after` without primary recovering
+// -- the operator otherwise only learns this by opening /doctor. Re-armed
+// the moment primary is live again. after <= 0 disables the watch (in is
+// still forwarded verbatim).
+func WatchStuckPrimary(ctx context.Context, snap func(context.Context) (failover.Snapshot, bool), after time.Duration, in <-chan Event) <-chan Event {
+	out := make(chan Event, cap(in)+1)
+	go func() {
+		defer close(out)
+
+		var tick <-chan time.Time
+		if after > 0 {
+			t := time.NewTicker(stuckWatchInterval)
+			defer t.Stop()
+			tick = t.C
+		}
+		warned := false
+
+		send := func(ev Event) bool {
+			select {
+			case out <- ev:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		}
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev, ok := <-in:
+				if !ok {
+					return
+				}
+				if !send(ev) {
+					return
+				}
+			case <-tick:
+				s, ok := snap(ctx)
+				if !ok {
+					continue
+				}
+				if s.LiveRole == failover.RolePrimary {
+					warned = false
+					continue
+				}
+				if warned {
+					continue
+				}
+				since, ok := backupSince(s)
+				if !ok || time.Since(since) < after {
+					continue
+				}
+				warned = true
+				send(Event{
+					Kind: "primary_stuck",
+					Text: fmt.Sprintf("⚠️ primary недоступен уже %s — трафик держит backup. "+
+						"Детали: /doctor. Закрепить backup: /switch <роутер> backup, "+
+						"либо поменять местами источники в 🔗 Источники.", shortDur(time.Since(since))),
+					Time: time.Now(),
+				})
+			}
+		}
+	}()
+	return out
+}
+
+// backupSince is when production was last pointed at backup: the `.At` of
+// the most recent transition leaving StateActivePrimary, unless the
+// history shows a return to primary after it. Falls back to the daemon
+// start time (history truncated / on backup since boot).
+func backupSince(s failover.Snapshot) (time.Time, bool) {
+	if s.LiveRole != failover.RoleBackup {
+		return time.Time{}, false
+	}
+	for i := len(s.Transitions) - 1; i >= 0; i-- {
+		tr := s.Transitions[i]
+		if tr.To == failover.StateActivePrimary {
+			break
+		}
+		if tr.From == failover.StateActivePrimary {
+			return tr.At, true
+		}
+	}
+	if !s.StartedAt.IsZero() {
+		return s.StartedAt, true
+	}
+	return time.Time{}, false
+}
+
 // renderFailoverEvent turns one daemon event into a forwardable Event, or
 // reports forward=false for the transient state changes that are just
 // process narration. leftPrimaryAt is read/written across calls to time

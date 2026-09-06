@@ -168,7 +168,9 @@ func cmdDaemon(args []string) error {
 		if err != nil {
 			return fmt.Errorf("agent is enabled but misconfigured: %w", err)
 		}
-		opts.Events = botcontrol.FailoverEvents(ctx, d.Events())
+		opts.Events = botcontrol.WatchStuckPrimary(ctx, d.Snapshot,
+			cfg.Failover.PrimaryStuckWarnAfter(),
+			botcontrol.FailoverEvents(ctx, d.Events()))
 		handler := &botcontrol.RouterHandler{
 			Daemon: d, Config: cfg, ConfigPath: configPath(),
 			XrayBinary: xrayBinaryPath(), OptPath: optPath(),

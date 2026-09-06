@@ -3,11 +3,82 @@ package botcontrol
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/failover"
 )
+
+func TestWatchStuckPrimary(t *testing.T) {
+	old := stuckWatchInterval
+	stuckWatchInterval = 20 * time.Millisecond
+	t.Cleanup(func() { stuckWatchInterval = old })
+
+	t0 := time.Now().Add(-10 * time.Minute)
+	var role atomic.Int32 // failover.Role -- the watcher reads it from another goroutine
+	role.Store(int32(failover.RoleBackup))
+	snap := func(context.Context) (failover.Snapshot, bool) {
+		return failover.Snapshot{
+			LiveRole:  failover.Role(role.Load()),
+			StartedAt: time.Now().Add(-time.Hour),
+			Transitions: []failover.Transition{
+				{At: t0, From: failover.StateActivePrimary, To: failover.StateCooldown},
+			},
+		}, true
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	in := make(chan Event, 4)
+	out := WatchStuckPrimary(ctx, snap, 5*time.Minute, in)
+
+	// Input passes through untouched.
+	in <- Event{Kind: "failover", Text: "x"}
+	if ev := recvEvent(t, out); ev.Kind != "failover" {
+		t.Fatalf("passthrough = %+v", ev)
+	}
+
+	// On backup 10min > 5min threshold -> one advisory.
+	ev := recvEvent(t, out)
+	if ev.Kind != "primary_stuck" || !strings.Contains(ev.Text, "primary недоступен") {
+		t.Fatalf("advisory = %+v", ev)
+	}
+
+	// No repeat while still stuck.
+	select {
+	case dup := <-out:
+		t.Fatalf("second advisory emitted: %+v", dup)
+	case <-time.After(120 * time.Millisecond):
+	}
+
+	// Recover to primary, then drop again -> re-armed, fires once more.
+	role.Store(int32(failover.RolePrimary))
+	time.Sleep(80 * time.Millisecond)
+	role.Store(int32(failover.RoleBackup))
+	if ev := recvEvent(t, out); ev.Kind != "primary_stuck" {
+		t.Fatalf("re-armed advisory = %+v", ev)
+	}
+}
+
+func TestWatchStuckPrimary_DisabledWhenZero(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	in := make(chan Event, 2)
+	out := WatchStuckPrimary(ctx, func(context.Context) (failover.Snapshot, bool) {
+		return failover.Snapshot{LiveRole: failover.RoleBackup, StartedAt: time.Now().Add(-24 * time.Hour)}, true
+	}, 0, in)
+
+	in <- Event{Kind: "daemon_start", Text: "y"}
+	if ev := recvEvent(t, out); ev.Kind != "daemon_start" {
+		t.Fatalf("passthrough with watch off = %+v", ev)
+	}
+	select {
+	case ev := <-out:
+		t.Fatalf("advisory emitted with after=0: %+v", ev)
+	case <-time.After(120 * time.Millisecond):
+	}
+}
 
 func TestFailoverEvents_RendersAndCloses(t *testing.T) {
 	in := make(chan failover.Event, 4)

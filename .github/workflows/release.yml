@@ -88,3 +88,33 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "${GITHUB_REF_NAME}" dist/*.ipk --clobber
+
+      # goreleaser has changelog disabled and runs in append mode, so the
+      # release body it creates is empty. Fill it from the squash-merge
+      # commit subjects since the previous v* tag (they're already
+      # Conventional-Commit style), grouped feat / fix / other.
+      - name: Release notes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          TAG="${GITHUB_REF_NAME}"
+          PREV=$(git describe --tags --abbrev=0 --match 'v*' "${TAG}^" 2>/dev/null || true)
+          RANGE="${PREV:+${PREV}..}${TAG}"
+          all=$(git log --no-merges --pretty='%s' "$RANGE")
+          feats=$(printf '%s\n' "$all" | grep -E '^feat' || true)
+          fixes=$(printf '%s\n' "$all" | grep -E '^fix' || true)
+          other=$(printf '%s\n' "$all" | grep -vE '^(feat|fix|docs|test|chore|ci)(\(|:)' || true)
+          {
+            if [ -n "$PREV" ]; then echo "Изменения с ${PREV}:"; else echo "Изменения:"; fi
+            if [ -z "${feats}${fixes}${other}" ] && [ -n "$all" ]; then
+              # только docs/test/chore -- перечислим как есть, а не пустое тело
+              echo; printf '%s\n' "$all" | awk '{print "- " $0}'
+            fi
+            if [ -n "$feats" ]; then echo; echo "### Новое"; printf '%s\n' "$feats" | awk '{print "- " $0}'; fi
+            if [ -n "$fixes" ]; then echo; echo "### Исправления"; printf '%s\n' "$fixes" | awk '{print "- " $0}'; fi
+            if [ -n "$other" ]; then echo; echo "### Прочее"; printf '%s\n' "$other" | awk '{print "- " $0}'; fi
+            echo
+            echo "_Установка/обновление: \`keenetic-xray_*_<arch>.ipk\` (UPX-упакован). Отдельные \`keenetic-xray-linux-<arch>\` — распакованные бинари на случай отката._"
+          } > "${RUNNER_TEMP}/notes.md"
+          gh release edit "$TAG" --notes-file "${RUNNER_TEMP}/notes.md"

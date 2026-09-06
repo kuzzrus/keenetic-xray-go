@@ -1,7 +1,9 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -385,6 +387,28 @@ func TestConfigSave_CreatesConfigDir(t *testing.T) {
 	}
 	if _, err := Load(path); err != nil {
 		t.Fatalf("Load back: %v", err)
+	}
+}
+
+func TestConfigSave_AtomicNoTempLeft(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	// Several saves in a row -- no ".config-*.json.tmp" should linger, and
+	// the file stays loadable throughout.
+	for i := 0; i < 5; i++ {
+		if err := Default().Save(path); err != nil {
+			t.Fatalf("save %d: %v", i, err)
+		}
+	}
+	ents, _ := os.ReadDir(dir)
+	for _, e := range ents {
+		if strings.HasPrefix(e.Name(), ".config-") {
+			t.Errorf("leftover temp file: %s", e.Name())
+		}
+	}
+	if _, err := Load(path); err != nil {
+		t.Fatalf("config unreadable after repeated atomic saves: %v", err)
 	}
 }
 

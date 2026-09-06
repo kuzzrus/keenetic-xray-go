@@ -87,7 +87,7 @@ func TestRouterHandler_SubSetURLThenRefresh(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sub_refresh: %v", err)
 	}
-	if !strings.Contains(out, "refreshed: 2 profiles") {
+	if !strings.Contains(out, "подписка: 2 профилей") {
 		t.Errorf("out = %q", out)
 	}
 
@@ -532,38 +532,6 @@ func TestRouterHandler_DaemonRestart(t *testing.T) {
 	}
 }
 
-func TestPickProfile(t *testing.T) {
-	ps := []config.Profile{
-		{Remark: "🇷🇺 RU-1"}, {Remark: "🇳🇱 NL-1"}, {Remark: "🇩🇪 DE-1"},
-	}
-	cases := []struct {
-		sel     string
-		want    string
-		wantErr bool
-	}{
-		{"", "🇷🇺 RU-1", false},
-		{"first", "🇷🇺 RU-1", false},
-		{"1", "🇳🇱 NL-1", false},
-		{"9", "", true},
-		{"nl", "🇳🇱 NL-1", false},
-		{"de-1", "🇩🇪 DE-1", false},
-		{"xx", "", true},
-		{"1", "🇳🇱 NL-1", false},
-	}
-	for _, c := range cases {
-		got, err := pickProfile(ps, c.sel)
-		if c.wantErr {
-			if err == nil {
-				t.Errorf("pickProfile(%q): want error", c.sel)
-			}
-			continue
-		}
-		if err != nil || got.Remark != c.want {
-			t.Errorf("pickProfile(%q) = %q, %v; want %q", c.sel, got.Remark, err, c.want)
-		}
-	}
-}
-
 func TestRouterHandler_SetSlotSource(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
@@ -615,6 +583,50 @@ func TestRouterHandler_SetSlotSource(t *testing.T) {
 	}
 	if saved.BackupSource == nil || saved.BackupSource.Selector != "DE" {
 		t.Errorf("saved BackupSource = %+v", saved.BackupSource)
+	}
+}
+
+// TestRouterHandler_SubRefresh_RefetchesSlotSources is the regression
+// test for a live incident: a slot fed by its own PrimarySource/
+// BackupSource is deliberately left alone by a shared-subscription
+// refresh, but there was no other way to re-fetch it -- so a provider's
+// node changes (and the xhttp_extra parsing added in v0.12.0) never
+// landed without re-pasting the URL by hand. sub_refresh now re-resolves
+// each independent slot source too.
+func TestRouterHandler_SubRefresh_RefetchesSlotSources(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+
+	// The source starts serving a link WITHOUT the xhttp extra blob...
+	extra := ""
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintf(w, "vless://11111111-2222-3333-4444-555555555555@a.example:443?type=xhttp&security=none&mode=auto%s#RU-1\n", extra)
+	}))
+	defer backend.Close()
+
+	cfg := config.Default()
+	h := &RouterHandler{Config: cfg, ConfigPath: cfgPath}
+	if _, err := h.Handle(context.Background(), Command{Action: ActionSetPrimarySource, Args: []string{backend.URL}}); err != nil {
+		t.Fatalf("set_primary_source: %v", err)
+	}
+	if len(cfg.Profiles[0].XHTTPExtra) != 0 {
+		t.Fatal("precondition: profile should have no extra yet")
+	}
+
+	// ...then the provider adds it. A refresh must pick it up.
+	extra = "&extra=%7B%22xmux%22%3A%7B%22maxConcurrency%22%3A%2216-32%22%7D%7D"
+	out, err := h.Handle(context.Background(), Command{Action: ActionSubRefresh})
+	if err != nil {
+		t.Fatalf("sub_refresh: %v", err)
+	}
+	if !strings.Contains(out, "источник (основной) ← RU-1") {
+		t.Errorf("out = %q", out)
+	}
+	if len(cfg.Profiles) != 1 || len(cfg.Profiles[0].XHTTPExtra) == 0 {
+		t.Errorf("slot source not re-fetched: profiles=%d extra=%q", len(cfg.Profiles), cfg.Profiles[0].XHTTPExtra)
+	}
+	if cfg.PrimaryIndex != 0 {
+		t.Errorf("PrimaryIndex = %d, want 0", cfg.PrimaryIndex)
 	}
 }
 

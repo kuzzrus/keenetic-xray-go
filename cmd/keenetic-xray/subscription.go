@@ -51,32 +51,61 @@ func subscriptionRefresh() error {
 	if err != nil {
 		return err
 	}
-	if cfg.Subscription == nil || cfg.Subscription.URL == "" {
-		return fmt.Errorf("no subscription URL set -- run `keenetic-xray subscription set-url <url>` first")
+	hasShared := cfg.Subscription != nil && cfg.Subscription.URL != ""
+	hasSlots := cfg.PrimarySource != nil || cfg.BackupSource != nil
+	if !hasShared && !hasSlots {
+		return fmt.Errorf("no subscription URL or slot sources set -- run `keenetic-xray subscription set-url <url>` first")
+	}
+	ctx := context.Background()
+
+	if hasShared {
+		var primaryKey, backupKey string
+		if p := cfg.Primary(); p != nil {
+			primaryKey = p.Remark
+		}
+		if b := cfg.Backup(); b != nil {
+			backupKey = b.Remark
+		}
+		result, err := subscription.Refresh(ctx, cfg.Subscription.URL, primaryKey, backupKey)
+		if err != nil {
+			return fmt.Errorf("refreshing subscription: %w", err)
+		}
+		for _, w := range subscription.ApplyResult(cfg, result) {
+			fmt.Println("warning:", w)
+		}
+		fmt.Printf("subscription: %d profiles\n", len(result.Profiles))
 	}
 
-	var primaryKey, backupKey string
-	if p := cfg.Primary(); p != nil {
-		primaryKey = p.Remark
-	}
-	if b := cfg.Backup(); b != nil {
-		backupKey = b.Remark
-	}
-
-	result, err := subscription.Refresh(context.Background(), cfg.Subscription.URL, primaryKey, backupKey)
-	if err != nil {
-		return fmt.Errorf("refreshing subscription: %w", err)
-	}
-
-	warnings := subscription.ApplyResult(cfg, result)
-	for _, w := range warnings {
-		fmt.Println("warning:", w)
+	// Re-fetch independently-sourced slots too -- a shared-subscription
+	// refresh deliberately leaves them alone.
+	for _, s := range []struct {
+		name    string
+		src     *config.SlotSource
+		primary bool
+	}{
+		{"primary", cfg.PrimarySource, true},
+		{"backup", cfg.BackupSource, false},
+	} {
+		if s.src == nil {
+			continue
+		}
+		prof, err := subscription.ResolveSource(ctx, s.src.URL, s.src.Selector)
+		if err != nil {
+			fmt.Printf("warning: source (%s): %v\n", s.name, err)
+			continue
+		}
+		idx := cfg.UpsertProfile(prof)
+		if s.primary {
+			cfg.PrimaryIndex = idx
+		} else {
+			cfg.BackupIndex = idx
+		}
+		fmt.Printf("source (%s) <- %s\n", s.name, prof.Remark)
 	}
 
 	if err := cfg.Save(configPath()); err != nil {
 		return err
 	}
-	fmt.Printf("refreshed: %d profiles\n", len(cfg.Profiles))
 	applyDaemonChange(nil, false)
 	return nil
 }

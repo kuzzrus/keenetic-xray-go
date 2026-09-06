@@ -233,15 +233,18 @@ func (h *RouterHandler) status(ctx context.Context) string {
 		b.WriteString("⚠️ primary и backup — один профиль, failover не сработает\n")
 	}
 
-	sp := h.Config.Failover.SOCKSPort
-	if portListening(sp) {
-		fmt.Fprintf(&b, "xray: слушает :%d\n", sp)
-	} else {
-		fmt.Fprintf(&b, "xray: НЕ слушает :%d ⚠️\n", sp)
+	// xray listens on both local inbounds at once; show each with its
+	// state so a Proxy0 pointed at the "wrong" one is obvious.
+	fmt.Fprintf(&b, "xray: %s", portState(h.Config.Failover.SOCKSPort, "socks5"))
+	if hp := h.Config.Failover.HTTPPort; hp != 0 {
+		fmt.Fprintf(&b, ", %s", portState(hp, "http"))
 	}
+	b.WriteByte('\n')
 
+	// Router -> xray transports. Proxy0 and the WG transport can both be
+	// on at once, so render whichever are configured.
 	if h.Config.Proxy0.Enabled {
-		b.WriteString("proxy0: вкл")
+		fmt.Fprintf(&b, "proxy0: вкл → %s/%s", h.Config.Proxy0.IfaceName(), h.Config.Proxy0.ProtoName())
 		if keenetic.Available() {
 			if host, port, ok, err := keenetic.Proxy0Upstream(ctx, h.Config.Proxy0.Interface); err == nil && ok {
 				fmt.Fprintf(&b, " → %s:%d", host, port)
@@ -250,6 +253,17 @@ func (h *RouterHandler) status(ctx context.Context) string {
 		b.WriteByte('\n')
 	} else {
 		b.WriteString("proxy0: выкл\n")
+	}
+	if w := h.Config.WGTransport; w.Enabled {
+		fmt.Fprintf(&b, "wg-транспорт: вкл → %s :%d", w.Iface, w.WGPort())
+		if keenetic.Available() && w.Iface != "" {
+			if keenetic.WGInterfaceUp(ctx, w.Iface) {
+				b.WriteString(" (поднят)")
+			} else {
+				b.WriteString(" (не поднят ⚠️)")
+			}
+		}
+		b.WriteByte('\n')
 	}
 
 	if s := h.Config.Subscription; s != nil && s.URL != "" {
@@ -344,6 +358,15 @@ func (h *RouterHandler) roleRemark(role failover.Role) string {
 		return "?"
 	}
 	return p.Remark
+}
+
+// portState renders "слушает :PORT (label)" or "НЕ слушает :PORT (label) ⚠️"
+// for one of xray's local inbounds.
+func portState(port int, label string) string {
+	if portListening(port) {
+		return fmt.Sprintf("слушает :%d (%s)", port, label)
+	}
+	return fmt.Sprintf("НЕ слушает :%d (%s) ⚠️", port, label)
 }
 
 // portListening reports whether something accepts TCP on 127.0.0.1:port.

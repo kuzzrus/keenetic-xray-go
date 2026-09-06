@@ -150,6 +150,25 @@ func TestApplyWGTransport_DropsStalePeer(t *testing.T) {
 	}
 }
 
+func TestWGInterfaceUp(t *testing.T) {
+	up := "               id: Wireguard4\n            state: up\n        connected: yes\n"
+	down := "               id: Wireguard4\n            state: down\n"
+	fakeNdmc(t, map[string]string{"show interface Wireguard4": up})
+	if !WGInterfaceUp(context.Background(), "Wireguard4") {
+		t.Error("WGInterfaceUp = false for state: up")
+	}
+	fakeNdmc(t, map[string]string{"show interface Wireguard4": down})
+	if WGInterfaceUp(context.Background(), "Wireguard4") {
+		t.Error("WGInterfaceUp = true for state: down")
+	}
+	// Unknown interface: ndmcRun's fake returns "" for unmapped `show`,
+	// so no `state:` line -> down.
+	fakeNdmc(t, map[string]string{})
+	if WGInterfaceUp(context.Background(), "Wireguard9") {
+		t.Error("WGInterfaceUp = true for a missing interface")
+	}
+}
+
 func TestClearWGTransport(t *testing.T) {
 	// Nothing of ours -> no-op.
 	sent := fakeNdmc(t, map[string]string{"show running-config": wgRC})

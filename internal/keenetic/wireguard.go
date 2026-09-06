@@ -246,6 +246,25 @@ func ApplyWGTransport(ctx context.Context, spec WGTransportSpec) (ifacePubKey st
 	return pub, nil
 }
 
+// WGInterfaceUp reports whether iface exists and is administratively up
+// (`state:` is anything other than "down"). The daemon's reconcile loop
+// uses this as a cheap "is it still there" check before deciding whether
+// to rebuild the interface -- a dead peer (no handshake) is a network
+// problem, not config drift, so "up" is enough.
+func WGInterfaceUp(ctx context.Context, iface string) bool {
+	out, err := ndmcRun(ctx, "show interface "+iface)
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(line)
+		if len(f) >= 2 && f[0] == "state:" {
+			return f[1] != "down"
+		}
+	}
+	return false
+}
+
 // ShowWGTransport returns a short human summary of our WG interface's
 // live state, or a note if it isn't set up.
 func ShowWGTransport(ctx context.Context, iface string) (string, error) {

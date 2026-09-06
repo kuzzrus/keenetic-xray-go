@@ -433,6 +433,85 @@ func TestCountPrimaryDrops(t *testing.T) {
 	}
 }
 
+func TestRouterHandler_Routes(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "c.json")
+	h := &RouterHandler{Config: config.Default(), ConfigPath: cfgPath}
+	ctx := context.Background()
+
+	// Create a list; one private subnet is rejected, the rest accepted.
+	out, err := h.Handle(ctx, Command{Action: ActionRoutesAdd, Args: []string{
+		"media", "netflix.com, youtube.com\n192.168.0.0/16 1.2.3.0/24",
+	}})
+	if err != nil {
+		t.Fatalf("routes_add: %v", err)
+	}
+	if !strings.Contains(out, "+3 записей") || !strings.Contains(out, "отклонено 1") {
+		t.Errorf("routes_add reply = %q", out)
+	}
+	saved, _ := config.Load(cfgPath)
+	if len(saved.Routing.Lists) != 1 || saved.Routing.Lists[0].Name != "media" {
+		t.Fatalf("saved lists = %+v", saved.Routing.Lists)
+	}
+	if got := strings.Join(saved.Routing.Lists[0].Entries, ","); got != "1.2.3.0/24,netflix.com,youtube.com" {
+		t.Errorf("entries = %q", got)
+	}
+
+	// Add to the same list (dedupe youtube.com).
+	if _, err := h.Handle(ctx, Command{Action: ActionRoutesAdd, Args: []string{"media", "youtube.com disneyplus.com"}}); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(h.Config.Routing.Lists[0].Entries); n != 4 {
+		t.Errorf("after re-add: %d entries, want 4 (disneyplus.com only)", n)
+	}
+
+	// Remove entries.
+	if _, err := h.Handle(ctx, Command{Action: ActionRoutesDel, Args: []string{"media", "netflix.com"}}); err != nil {
+		t.Fatal(err)
+	}
+	if slicesContains(h.Config.Routing.Lists[0].Entries, "netflix.com") {
+		t.Error("netflix.com should be gone")
+	}
+
+	// Toggle off / on.
+	if _, err := h.Handle(ctx, Command{Action: ActionRoutesToggle, Args: []string{"media", "off"}}); err != nil {
+		t.Fatal(err)
+	}
+	if !h.Config.Routing.Lists[0].Disabled {
+		t.Error("list should be Disabled after off")
+	}
+
+	// List text.
+	txt, _ := h.Handle(ctx, Command{Action: ActionRoutesList})
+	if !strings.Contains(txt, "📁 media") || !strings.Contains(txt, "⛔") {
+		t.Errorf("routes_list = %q", txt)
+	}
+
+	// Remove the whole list.
+	if _, err := h.Handle(ctx, Command{Action: ActionRoutesRemoveList, Args: []string{"media"}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.Config.Routing.Lists) != 0 {
+		t.Errorf("list not removed: %+v", h.Config.Routing.Lists)
+	}
+
+	// Bad name / missing list errors.
+	if _, err := h.Handle(ctx, Command{Action: ActionRoutesAdd, Args: []string{"", "a.io"}}); err == nil {
+		t.Error("empty list name should error")
+	}
+	if _, err := h.Handle(ctx, Command{Action: ActionRoutesDel, Args: []string{"nope", "a.io"}}); err == nil {
+		t.Error("del on a missing list should error")
+	}
+}
+
+func slicesContains(xs []string, want string) bool {
+	for _, x := range xs {
+		if x == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestRouterHandler_DaemonRestart(t *testing.T) {
 	h := &RouterHandler{Config: config.Default()}
 

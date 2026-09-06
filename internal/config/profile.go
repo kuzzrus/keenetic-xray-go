@@ -6,9 +6,11 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -226,6 +228,208 @@ type Config struct {
 	// xraycore.DefaultTag without an import cycle, so the ""-resolution
 	// happens at the call sites (cmd, botcontrol) that already use it.
 	XrayCoreTag string `json:"xray_core_tag,omitempty"`
+
+	// Routing holds named lists of domains/subnets that Keenetic's
+	// DNS-based routing (KeeneticOS 5.0+) should send through the Proxy0
+	// interface -- i.e. through the tunnel -- while everything else stays
+	// direct. internal/keenetic applies each list as an `object-group
+	// fqdn` plus a `dns-proxy route`. Empty -> the daemon touches none of
+	// the router's routing config.
+	Routing RoutingConfig `json:"routing,omitempty"`
+}
+
+// RoutingConfig is the persisted set of DNS-route lists. Each list maps
+// to one router-side object-group; the whole set is reconciled onto the
+// router by internal/keenetic.ApplyRoutes.
+type RoutingConfig struct {
+	Lists []RouteList `json:"lists,omitempty"`
+}
+
+// RouteList is one named group of domains/subnets to route through a
+// Proxy interface. Name is what the operator typed; the object-group on
+// the router is "keenetic-xray-" + SanitizeRouteListName(Name), so this
+// project's lists never collide with ones made by hand in the Keenetic
+// web UI.
+type RouteList struct {
+	Name      string   `json:"name"`
+	Entries   []string `json:"entries"`             // normalized domains + IPv4 + CIDR
+	Interface string   `json:"interface,omitempty"` // "" -> Proxy0.IfaceName()
+	Exclusive bool     `json:"exclusive,omitempty"` // add "reject": matched traffic is dropped, not leaked direct, when the interface is down
+	Disabled  bool     `json:"disabled,omitempty"`  // keep the list but stop routing it
+}
+
+// MaxRouteEntriesPerList caps one list. Generous -- the point is to stop
+// a paste of a whole geosite dump, not to be stingy.
+const MaxRouteEntriesPerList = 256
+
+var (
+	routeDomainRe = regexp.MustCompile(`^([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,62}$`)
+	routeIPish    = regexp.MustCompile(`^[0-9]{1,3}(?:\.[0-9]{1,3}){3}(?:/[0-9]{1,2})?$`)
+)
+
+// RouteEntryKind distinguishes the two things a route list can hold, for
+// counting in status messages.
+type RouteEntryKind int
+
+const (
+	RouteDomain RouteEntryKind = iota
+	RouteSubnet
+)
+
+// ClassifyRouteEntry validates and normalizes one route-list entry --
+// a domain, a bare IPv4, or an IPv4 CIDR -- returning its kind and the
+// canonical form to store. Rejections carry a Russian reason suitable
+// for showing the operator directly.
+func ClassifyRouteEntry(s string) (RouteEntryKind, string, error) {
+	e := strings.ToLower(strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(s), ".")))
+	switch {
+	case e == "":
+		return 0, "", fmt.Errorf("пустая запись")
+	case strings.Contains(e, "*"):
+		return 0, "", fmt.Errorf("%q: маска * не нужна — Keenetic включает поддомены сам", s)
+	case strings.Contains(e, ":"):
+		return 0, "", fmt.Errorf("%q: IPv6 в v1 не поддерживается (укажи IPv4-адрес или подсеть)", s)
+	}
+
+	if routeIPish.MatchString(e) {
+		return classifyRouteIP(e, s)
+	}
+
+	if routeDomainRe.MatchString(e) {
+		return RouteDomain, e, nil
+	}
+	if strings.ContainsFunc(e, func(r rune) bool { return r > 127 }) {
+		return 0, "", fmt.Errorf("%q: IDN не поддерживается — введи домен в punycode (xn--…)", s)
+	}
+	return 0, "", fmt.Errorf("%q: не похоже ни на домен, ни на IPv4/подсеть", s)
+}
+
+func classifyRouteIP(e, orig string) (RouteEntryKind, string, error) {
+	cidr := e
+	if !strings.Contains(cidr, "/") {
+		cidr += "/32"
+	}
+	ip, ipnet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return 0, "", fmt.Errorf("%q: некорректный IPv4/подсеть", orig)
+	}
+	ones, _ := ipnet.Mask.Size()
+	if ones == 0 {
+		return 0, "", fmt.Errorf("%q: 0.0.0.0/0 отправит в туннель весь трафик — укажи конкретные подсети", orig)
+	}
+	if v4 := ip.To4(); v4 == nil {
+		return 0, "", fmt.Errorf("%q: только IPv4", orig)
+	}
+	if isReservedV4(ipnet.IP) {
+		return 0, "", fmt.Errorf("%q: приватная/служебная подсеть — её не маршрутизируют в туннель", orig)
+	}
+	if ones == 32 {
+		return RouteSubnet, ipnet.IP.String(), nil
+	}
+	return RouteSubnet, ipnet.String(), nil
+}
+
+// isReservedV4 reports whether the network base address is in a range
+// that must never be routed through the tunnel (own LAN, loopback,
+// link-local, multicast).
+func isReservedV4(ip net.IP) bool {
+	v4 := ip.To4()
+	if v4 == nil {
+		return true
+	}
+	switch {
+	case v4[0] == 10:
+		return true
+	case v4[0] == 127:
+		return true
+	case v4[0] == 169 && v4[1] == 254:
+		return true
+	case v4[0] == 172 && v4[1] >= 16 && v4[1] <= 31:
+		return true
+	case v4[0] == 192 && v4[1] == 168:
+		return true
+	case v4[0] >= 224: // multicast + reserved
+		return true
+	}
+	return false
+}
+
+// SanitizeRouteListName reduces a list name to the lowercase
+// [a-z0-9-] form used for the router object-group name (after the
+// "keenetic-xray-" prefix). "" means the name has nothing usable and
+// must be rejected.
+func SanitizeRouteListName(name string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '-' || r == '_' || r == ' ':
+			b.WriteByte('-')
+		}
+	}
+	s := strings.Trim(b.String(), "-")
+	for strings.Contains(s, "--") {
+		s = strings.ReplaceAll(s, "--", "-")
+	}
+	if len(s) > 24 {
+		s = strings.Trim(s[:24], "-")
+	}
+	return s
+}
+
+// ValidRouteListName reports whether name is acceptable: 1..32 chars, no
+// control characters, and at least one [a-z0-9] once sanitized (so it can
+// name a router object-group).
+func ValidRouteListName(name string) bool {
+	n := strings.TrimSpace(name)
+	if n == "" || len([]rune(n)) > 32 {
+		return false
+	}
+	for _, r := range n {
+		if r < 0x20 {
+			return false
+		}
+	}
+	return SanitizeRouteListName(name) != ""
+}
+
+// Validate checks every route list: a usable name, distinct sanitized
+// (router-side) names, a valid interface, and entries that pass
+// ClassifyRouteEntry, within the per-list cap.
+func (rc RoutingConfig) Validate() error {
+	seen := map[string]string{} // sanitized name -> original, for collision reporting
+	for _, l := range rc.Lists {
+		if !ValidRouteListName(l.Name) {
+			return fmt.Errorf("routing list %q: name must be 1..32 chars with some latin/digits", l.Name)
+		}
+		san := SanitizeRouteListName(l.Name)
+		if prev, ok := seen[san]; ok {
+			return fmt.Errorf("routing lists %q and %q map to the same router name %q -- rename one", prev, l.Name, san)
+		}
+		seen[san] = l.Name
+
+		if l.Interface != "" && !ValidProxyIface(l.Interface) {
+			return fmt.Errorf("routing list %q: interface %q: want a name like Proxy0", l.Name, l.Interface)
+		}
+		if len(l.Entries) > MaxRouteEntriesPerList {
+			return fmt.Errorf("routing list %q: %d entries, max %d", l.Name, len(l.Entries), MaxRouteEntriesPerList)
+		}
+		for _, e := range l.Entries {
+			if _, _, err := ClassifyRouteEntry(e); err != nil {
+				return fmt.Errorf("routing list %q: %w", l.Name, err)
+			}
+		}
+	}
+	return nil
+}
+
+// RouteIface resolves this list's target Proxy interface name.
+func (l RouteList) RouteIface() string {
+	if l.Interface != "" {
+		return l.Interface
+	}
+	return "Proxy0"
 }
 
 // xrayTagRe is the shape of an XTLS/Xray-core release tag: vMAJOR.MINOR
@@ -325,6 +529,9 @@ func (c *Config) Validate() error {
 	}
 	if !ValidXrayCoreTag(c.XrayCoreTag) {
 		return fmt.Errorf("xray_core_tag %q: want a release tag like v26.7.28", c.XrayCoreTag)
+	}
+	if err := c.Routing.Validate(); err != nil {
+		return err
 	}
 	return nil
 }

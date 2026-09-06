@@ -119,6 +119,7 @@ keenetic-xray variant {show|set mini|set full}
 keenetic-xray agent {configure <url> <router-id> <fingerprint> <token>|enable|disable|status}
 keenetic-xray proxy0 {show|set [--lan-ip=192.168.x.1] [--protocol=socks5|http] [--interface=Proxy0]|off}
 keenetic-xray failover {show|set <key> <value>}
+keenetic-xray routes {list|show [name]|new <name> [entries…]|add <name> <entries…>|del <name> <entries…>|rm <name>|enable <name>|disable <name>|set <name> [--iface=] [--exclusive]|apply}
 ```
 
 `proxy0 set` points Keenetic's `Proxy0` at the local inbound and flips the
@@ -172,6 +173,21 @@ fills a gap. It fetches from our own `xray-core/<tag>` releases and
 verifies the download in a temp file before swapping it in, so a bad
 fetch leaves the running core alone; a chosen tag persists in
 `config.json` (`xray_core_tag`).
+
+`📍 Маршруты` on a card (or `keenetic-xray routes …` / `/routes <router>
+…`) manages **named lists of domains and subnets that go through the
+tunnel** while everything else stays direct -- selective routing, on
+**KeeneticOS 5.0+**, via the router's own DNS-based routes (`object-group
+fqdn` + `dns-proxy route` targeting `Proxy0`). Each list is
+`routes new <name> <entries…>`, then `add` / `del` / `enable` / `disable`
+/ `rm`; `--exclusive` drops matched traffic instead of leaking it direct
+when the tunnel is down. Lists are stored in `config.json` and re-applied
+on daemon start. Router requirements: the router must be the client's DNS
+server (not a public/DoH resolver set on the device), the client must be
+on the *default* connection policy, and a domain's first hit may go
+direct until the router has seen its DNS answer. This project's lists are
+namespaced `keenetic-xray-*` and never touch ones you built in the
+Keenetic web UI. See `docs/routing.md`.
 
 `menu` is a numbered control panel for running the router from an SSH
 session without the Telegram bot: status, `doctor`, profile list,

@@ -39,6 +39,62 @@ var lookNdmc = func() error {
 // present). Callers should treat a false result as "skip, not an error".
 func Available() bool { return lookNdmc() == nil }
 
+// OSVersion parses `show version` and returns the KeeneticOS
+// major/minor/patch from its "title:" field (e.g. "5.1.3"). Used to gate
+// the DNS-based routes feature, which needs KeeneticOS 5.0+.
+func OSVersion(ctx context.Context) (major, minor, patch int, err error) {
+	out, err := ndmcRun(ctx, "show version")
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("show version: %w", err)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(line)
+		if len(f) == 2 && f[0] == "title:" {
+			return parseDottedTriple(f[1])
+		}
+	}
+	return 0, 0, 0, fmt.Errorf("no \"title:\" field in `show version` output")
+}
+
+// OSAtLeast reports whether the router's KeeneticOS is >= major.minor.
+// A failure to read the version is returned as an error, not a false --
+// callers decide whether "unknown" should block or warn.
+func OSAtLeast(ctx context.Context, major, minor int) (bool, error) {
+	gotMaj, gotMin, _, err := OSVersion(ctx)
+	if err != nil {
+		return false, err
+	}
+	if gotMaj != major {
+		return gotMaj > major, nil
+	}
+	return gotMin >= minor, nil
+}
+
+func parseDottedTriple(s string) (a, b, c int, err error) {
+	parts := strings.SplitN(strings.TrimSpace(s), ".", 3)
+	dst := []*int{&a, &b, &c}
+	for i := 0; i < 3; i++ {
+		if i >= len(parts) {
+			break
+		}
+		n, e := strconv.Atoi(digitsPrefix(parts[i]))
+		if e != nil {
+			return 0, 0, 0, fmt.Errorf("version %q: unparseable component %q", s, parts[i])
+		}
+		*dst[i] = n
+	}
+	return a, b, c, nil
+}
+
+func digitsPrefix(s string) string {
+	for i, r := range s {
+		if r < '0' || r > '9' {
+			return s[:i]
+		}
+	}
+	return s
+}
+
 // LANIP returns the router's LAN IPv4. override (e.g. from a config field
 // or KEENETIC_XRAY_LAN_IP) wins outright, including a deliberate
 // non-standard value. Otherwise it asks ndmc for each LAN interface in

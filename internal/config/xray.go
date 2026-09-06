@@ -27,9 +27,11 @@ func (o XrayConfigOptions) listenHost() string {
 // GenerateXrayConfig renders an Xray-core JSON config. There is
 // deliberately no `routing` block with geosite/geoip rules — this project
 // ships no geodata, so the single "proxy" outbound (the first entry,
-// Xray's default when nothing else matches) carries all traffic.
-// Whole-LAN redirection to the local inbound is Keenetic's own
-// Policy-Based Routing, outside this project's scope.
+// Xray's default when nothing else matches) carries all traffic that
+// reaches xray. Deciding *which* traffic reaches it is Keenetic's job:
+// point the whole LAN at Proxy0, or route selected domains/subnets there
+// with `keenetic-xray routes` (internal/keenetic drives Keenetic's own
+// DNS-based routing) — either way xray itself stays a dumb single tunnel.
 func GenerateXrayConfig(opts XrayConfigOptions) ([]byte, error) {
 	if opts.SOCKSPort == 0 && opts.HTTPPort == 0 {
 		return nil, fmt.Errorf("at least one of SOCKSPort or HTTPPort must be set")

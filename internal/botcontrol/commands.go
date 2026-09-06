@@ -159,6 +159,18 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 		return h.watchdogLog()
 	case ActionSetPorts:
 		return h.setPorts(ctx, cmd.Args)
+	case ActionRoutesList:
+		return h.routesListText(), nil
+	case ActionRoutesShow:
+		return h.routesShow(ctx, cmd.Args)
+	case ActionRoutesAdd:
+		return h.routesAdd(ctx, cmd.Args)
+	case ActionRoutesDel:
+		return h.routesDel(ctx, cmd.Args)
+	case ActionRoutesRemoveList:
+		return h.routesRemoveList(ctx, cmd.Args)
+	case ActionRoutesToggle:
+		return h.routesToggle(ctx, cmd.Args)
 	default:
 		return "", fmt.Errorf("unknown action %q", cmd.Action)
 	}

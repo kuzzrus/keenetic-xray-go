@@ -10,6 +10,7 @@ import (
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 	"github.com/kuzzrus/keenetic-xray-go/internal/install"
+	"github.com/kuzzrus/keenetic-xray-go/internal/keenetic"
 	"github.com/kuzzrus/keenetic-xray-go/internal/xraycore"
 )
 
@@ -145,5 +146,16 @@ func cmdPostinstSetup() error {
 
 func cmdPrermCleanup(args []string) error {
 	purge := len(args) > 0 && args[0] == "--purge"
+	if purge && keenetic.Available() {
+		// Remove this project's DNS-route object-groups + routes (only the
+		// keenetic-xray-* prefixed ones -- the operator's own web-UI lists
+		// are never touched). Best-effort: a router that can't do this
+		// still gets the package removed.
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := keenetic.ClearRoutes(ctx); err != nil {
+			fmt.Println("warning: could not clear DNS routes:", err)
+		}
+	}
 	return install.PrermCleanup(installPaths(), purge)
 }

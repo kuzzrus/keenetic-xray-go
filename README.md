@@ -1,116 +1,201 @@
 # keenetic-xray-go
 
-A single Xray (VLESS) failover installer and manager for Keenetic routers
-running Entware, targeting **mipsel** and **aarch64** only.
+Установщик и менеджер Xray (VLESS) с автоматическим failover для роутеров
+Keenetic с Entware. Собирается только под **mipsel** и **aarch64**.
 
-Status: install, configure, run automatic failover, and remote control via
-a Telegram bot all work end to end. See `docs/architecture.md` for how it
-fits together, `docs/full-vs-mini.md` for the Mini/Full variant split, and
-`docs/bot-control-design.md` for the remote-control design.
+Один бинарь (`keenetic-xray`), один `.ipk` на архитектуру. Установка,
+настройка, автоматический failover и удалённое управление из Telegram-бота
+работают от начала до конца.
 
-## What this is
+Подробнее: [`docs/architecture.md`](docs/architecture.md) — как всё
+устроено, [`docs/full-vs-mini.md`](docs/full-vs-mini.md) — разница
+вариантов Mini/Full, [`docs/bot-control-design.md`](docs/bot-control-design.md)
+— дизайн удалённого управления, [`docs/routing.md`](docs/routing.md) —
+маршрутизация по доменам.
 
-- One Go binary (`keenetic-xray`), one `.ipk` per architecture — no
-  generated multi-script installer pipeline.
-- Automatic failover between a primary and backup VLESS profile, health
-  checked with a real HTTP request through the live proxy (not bare
-  ICMP), with an isolated pre-test before failing back to primary.
-- Accepts either a raw `vless://` link or a subscription URL, both from
-  the CLI (`keenetic-xray setup`) and the remote bot. The parser keeps
-  the link's `extra=` xhttp tuning blob (xmux connection reuse, `sc*`,
-  padding) verbatim — dropping it makes every new connection redo the
-  full xhttp + REALITY handshake. `keenetic-xray transport mode
-  stream-up` globally overrides an `xhttp` `mode` (share links often ship
-  the slower `auto`); the override lives in `config.json` so a
-  subscription refresh keeps it.
-- Installs the Xray core itself: by default a size-optimised (UPX-packed,
-  ~7–10 MB vs ~30 MB unpacked) build published from this project's own
-  releases and pinned to an upstream tag (see `packaging/xray-core/`),
-  with `opkg install xray-core` from the Entware feed as the fallback.
-  `install.sh --xray-core=entware` forces the feed;
-  `--xray-core-tag=vX.Y.Z` opts one router onto a specific (e.g. newer,
-  pre-release) build; later, `keenetic-xray internal ensure-xray-core
-  --tag=…` or the bot's `🧩 Ядро xray` do the same and persist it.
-  `keenetic-xray doctor` reports which core is active. Ships no
-  geoip/geosite routing data — routing which traffic goes through the
-  proxy is Keenetic's own Policy-Based Routing. `keenetic-xray proxy0`
-  does the one router-side step needed to make that possible: it detects
-  the router's LAN IP (never a loopback) and points Keenetic's `Proxy0`
-  interface at the local Xray inbound, verifying the change stuck.
-- Optional remote control via a Telegram bot (Full variant only): a
-  separate `keenetic-xray-control-server` binary runs on a VPS, and each
-  router polls it for queued commands (`/status`, `/switch`,
-  subscription management) — see `docs/bot-control-design.md`.
+---
 
-## Installing
+## Что под капотом
 
-Run this on the router (over SSH) — it detects the router's architecture
-via `opkg` itself and installs the matching `.ipk` from the latest
-release. Pass your `vless://` link or subscription URL and it configures
-itself with nothing else to run — profile selection, Keenetic `Proxy0`
-wiring, and the daemon all set up in one go:
+**Ядро — xray-core.** Ставится само: по умолчанию — size-оптимизированная
+(UPX, ~7–10 МБ против ~30 МБ) сборка из релизов этого проекта, привязанная
+к upstream-тегу; запасной путь — `opkg install xray-core` из фида Entware.
+`install.sh --xray-core=entware` форсит фид, `--xray-core-tag=vX.Y.Z`
+сажает один роутер на конкретную (например, пререлизную) сборку. Позже —
+`keenetic-xray internal ensure-xray-core --tag=…` или кнопка `🧩 Ядро xray`
+в боте; выбор пишется в `config.json` и переживает обновление пакета.
 
-```sh
+**Failover — конечный автомат.** Два профиля, primary и backup. Проверка
+живости — настоящий HTTP-запрос через рабочий прокси (не голый ICMP), с
+ретраями и списком запасных URL. Перед возвратом на primary —
+изолированный пре-тест на отдельном порту, чтобы не дёргать боевой
+трафик. Состояния: `ActivePrimary → Cooldown → TestingRecovery →
+ConfirmingRecovery`. Флап (частые переключения) душится: цикл
+«упал-вернулся» — это два сообщения в чат, а не пять; после ~4
+переключений за 15 минут бот присылает одно «⚠️ primary флапает» и держит
+остальные 30 минут. Обратный случай — primary тихо лежит, а backup всё
+тянет — легко пропустить, поэтому после `primary_stuck_warn_hours` (по
+умолчанию 3, `0` — выкл) на backup без восстановления бот присылает один
+совет.
+
+**Источник профилей.** Сырая `vless://` ссылка или URL подписки — и из CLI
+(`keenetic-xray setup`), и из бота. Парсер сохраняет блоб `extra=` из
+ссылки (xmux, `sc*`, padding) как есть — без него каждое новое соединение
+переигрывает полный xhttp + REALITY хендшейк. `keenetic-xray transport
+mode stream-up` глобально переопределяет `xhttp` `mode` (в ссылках часто
+медленный `auto`); override лежит в `config.json` и переживает обновление
+подписки. primary и backup можно кормить из независимых источников
+(`🔗 Источники` в боте).
+
+**Как трафик попадает в туннель.** Проекту не нужны geoip/geosite —
+маршрутизацию делает сам Keenetic. Есть три пути «роутер → xray», они
+сосуществуют:
+
+- **Proxy0** (`keenetic-xray proxy0 set`) — Keenetic-интерфейс `Proxy0`
+  наводится на локальный вход xray (SOCKS5 или HTTP). Дальше устройства/
+  политики назначаются на `Proxy0` в вебе роутера. Тул детектит LAN-IP
+  роутера (никогда не loopback) и проверяет, что настройка встала.
+- **WG-транспорт** (`keenetic-xray transport wg on`) — на роутере
+  поднимается интерфейс `WireguardN` в локальный `wireguard`-инбаунд
+  xray: `LAN → WireguardN → xray → туннель`. Ключи (X25519 + PSK)
+  генерятся сами; свой ключ Keenetic генерит и отдаёт публичный. Метка
+  `description keenetic-xray-wg` — ручные WG-туннели не трогаются. MTU
+  1280 и встроенный `ip tcp adjust-mss pmtu` — видео на этом пути не
+  залипает.
+- **Маршруты по доменам** (`keenetic-xray routes …`, KeeneticOS 5.0+) —
+  именованные списки доменов/подсетей уходят в туннель через `Proxy0`
+  (или `WireguardN`), остальное — напрямую. Под капотом `object-group
+  fqdn keenetic-xray-*` + `dns-proxy route`. Списки namespace'нуты и
+  никогда не трогают заведённые в вебе роутера.
+
+**MSS-клампинг.** Устройство в LAN согласует MSS ~1460 под MTU роутера
+1500, но такие пакеты не влезают в путь `Proxy0 → xray → xhttp/REALITY` —
+получается «чёрная дыра» PMTU, видео (Reels/Shorts) виснет на ~20 секунд.
+`keenetic-xray transport mss auto` (= 1360) ставит одно правило `iptables`
+mangle с меткой `keenetic-xray-mss` (пресеты 1400 / 1280 / off). Действует,
+только пока `Proxy0` включён; `iptables` доустанавливается через `opkg`.
+
+**Самолечение.** Прошивка при перестройке файрвола иногда сносит наши
+правила и настройки интерфейсов. Демон возвращает их два способа: хук
+`/opt/etc/ndm/netfilter.d/50-keenetic-xray.sh` (в `.ipk`), который `ndm`
+дёргает на каждой пересборке файрвола → SIGUSR1 демону → мгновенная
+сверка; плюс запасной опрос раз в 2 минуты. Сверяются Proxy0, маршруты,
+MSS-правило и WG-интерфейс.
+
+**Целостность конфига.** `config.json` пишется атомарно (временный файл →
+`fsync` → `rename`), потеря питания в момент записи не бьёт файл.
+
+**Удалённое управление (только Full).** Отдельный бинарь
+`keenetic-xray-control-server` на VPS: очередь команд из Telegram-бота,
+роутеры опрашивают его по self-signed TLS с пиннингом отпечатка.
+
+**Mini vs Full.** Mini не запускает polling-агента (нет бота), в остальном
+идентичен. На диске занимают одинаково.
+
+---
+
+## Установка
+
+На роутере, по SSH. Скрипт сам определяет архитектуру через `opkg` и
+ставит подходящий `.ipk` из последнего релиза. Передай ссылку/подписку —
+и он настроится сам (профили, `Proxy0`, демон):
+
+```bash
 curl -fsSL https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/install.sh | sh -s -- --sub="https://provider.example/sub/token"
 ```
 
-Without a link, it installs and then drops straight into the interactive
-setup wizard over the same SSH session -- primary link, backup link (each
-independently, like `🔗 Источники` in the bot), SOCKS/HTTP port numbers,
-then Proxy0:
+Без ссылки — поставит и сразу откроет интерактивный мастер в этой же
+SSH-сессии (primary, backup, порты SOCKS/HTTP, затем Proxy0):
 
-```sh
+```bash
 curl -fsSL https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/install.sh | sh
 ```
 
-`curl`, not `wget`: some Keenetic routers ship a busybox `wget` that
-can't fetch `https://` at all (`not an http or ftp url`). If `curl` is
-missing, `opkg update && opkg install curl` first. Add `--no-proxy0` to
-skip the automatic `Proxy0` wiring, `--xray-core=entware` to use the
-Entware feed for the core, or `--xray-core-tag=vX.Y.Z` to pin a specific
-vendored core build.
+`curl`, не `wget`: busybox-`wget` на части Keenetic не умеет `https://`
+вообще. Нет `curl` — сначала `opkg update && opkg install curl`.
 
-### Manual install
+Флаги: `--no-proxy0` — не трогать `Proxy0`, `--xray-core=entware` — ядро
+из фида Entware, `--xray-core-tag=vX.Y.Z` — конкретная сборка ядра.
 
-If you'd rather install a specific `.ipk` yourself: grab the one
-matching your router's architecture from the
-[latest release](https://github.com/kuzzrus/keenetic-xray-go/releases/latest)
-— no package feed to add first, `opkg` can install straight from a URL:
+### Вручную
 
-```sh
-opkg install https://github.com/kuzzrus/keenetic-xray-go/releases/download/v0.1.1/keenetic-xray_0.1.1-1_aarch64-3.10.ipk   # newer, ARM-based models
-opkg install https://github.com/kuzzrus/keenetic-xray-go/releases/download/v0.1.1/keenetic-xray_0.1.1-1_mipsel-3.4.ipk     # older, MIPS-based models
+Скачать нужный по архитектуре `.ipk` из
+[последнего релиза](https://github.com/kuzzrus/keenetic-xray-go/releases/latest)
+— фид добавлять не нужно, `opkg` ставит и по URL:
+
+```bash
+opkg install https://github.com/kuzzrus/keenetic-xray-go/releases/download/v0.1.1/keenetic-xray_0.1.1-1_aarch64-3.10.ipk   # ARM-модели
+opkg install https://github.com/kuzzrus/keenetic-xray-go/releases/download/v0.1.1/keenetic-xray_0.1.1-1_mipsel-3.4.ipk     # MIPS-модели
 ```
 
-If your `opkg` build doesn't handle the release CDN's HTTPS redirect
-(same busybox-`wget`-can't-do-`https://` limitation as above — `opkg`
-downloads through `wget` internally, so it fails the same way), download
-first with `curl` and install the local file instead:
+Если `opkg` не тянет HTTPS-редирект CDN (та же беда busybox-`wget`) —
+скачай `curl`'ом и поставь локальный файл:
 
-```sh
+```bash
 curl -fsSL -o /opt/keenetic-xray.ipk https://github.com/kuzzrus/keenetic-xray-go/releases/download/v0.1.1/keenetic-xray_0.1.1-1_aarch64-3.10.ipk
 opkg install /opt/keenetic-xray.ipk
 ```
 
-(Substitute the filename/version for whatever's on the
-[latest release](https://github.com/kuzzrus/keenetic-xray-go/releases/latest)
-page once newer versions ship — `install.sh` above does this for you
-automatically.)
+(Подставь актуальные имя/версию со страницы релизов — `install.sh` это
+делает сам.)
 
-Either way, the package's postinst fetches the Xray core (vendored build
-by default, Entware feed as fallback — see the bullet above). Once
-installed:
+В любом случае postinst пакета вытянет ядро xray. Дальше:
 
-```sh
-keenetic-xray setup     # paste a vless:// link or a subscription URL
-keenetic-xray menu      # interactive control panel (manage the router over SSH)
-keenetic-xray daemon    # run the failover daemon in the foreground
+```bash
+keenetic-xray setup     # вставить vless:// ссылку или URL подписки
 ```
 
-(An init.d script starts the daemon automatically on boot/install --
-`daemon` above is for running it in the foreground, e.g. to watch logs.)
+**Обновление:** повторить `curl … | sh` (или кнопка `🔁 Обновить агент` в
+боте). `.ipk` с v0.16.0 UPX-упакован; отдельные `keenetic-xray-linux-<arch>`
+в релизе — распакованные бинари на случай, если UPX-стаб не заведётся на
+конкретном ядре.
 
-## CLI reference
+---
+
+## Запуск
+
+Демон стартует сам — init.d-скрипт при установке и на каждой загрузке
+роутера. Руками нужно редко:
+
+```bash
+keenetic-xray daemon    # демон failover на переднем плане (посмотреть логи)
+keenetic-xray menu      # нумерованная панель управления по SSH без бота
+```
+
+`menu` — статус, `doctor`, список профилей, обновить подписку, повторить
+`setup`, включить/выключить `Proxy0`, перезапустить демон, хвост логов.
+Каждый пункт — это отдельная подкоманда (см. CLI ниже), меню просто
+удобная точка входа.
+
+**Вотчдог.** Cron-запись, которая перезапускает демон, если он не
+запущен — `rc.func` Entware сам этого не делает. Ставится включённой.
+`keenetic-xray watchdog {show|enable|disable|log}` (или `🐕 Вотчдог` в
+боте). `log` показывает только события перезапуска — пустой лог значит,
+что вмешиваться не приходилось.
+
+---
+
+## Диагностика
+
+```bash
+keenetic-xray status    # профили, вариант, порты, состояние Proxy0/WG, возраст подписки
+keenetic-xray doctor    # проверки: есть профили, конфиг валиден, ядро запускается,
+                        # xray слушает порты, upstream Proxy0 совпадает, свободное место,
+                        # MSS-правило на месте, WG-интерфейс поднят, история health-check
+```
+
+В боте те же `/status <роутер>` и `/doctor <роутер>` (без аргумента —
+обзор всех роутеров). `/doctor` дополнительно показывает историю
+health-check: сколько ✅/❌ за последние N проверок, причины отказов
+(таймаут / отказ / DNS / HTTP 5xx) и задержку — видно, *почему* флапает.
+`/status` — счётчик переключений за час.
+
+Живой лог демона по SSH: в busybox Keenetic нет `logread`; смотри вывод
+init.d-скрипта или гоняй `keenetic-xray daemon` на переднем плане.
+
+---
+
+## CLI
 
 ```
 keenetic-xray version
@@ -129,214 +214,99 @@ keenetic-xray routes {list|show [name]|new <name> [entries…]|add <name> <entri
 keenetic-xray transport {show|mode auto|packet-up|stream-up|stream-one|mode-clear|mss <1200..1452|auto|off>|wg {show|on|off}}
 ```
 
-`proxy0 set` points Keenetic's `Proxy0` at the local inbound and flips the
-daemon to bind `0.0.0.0` (so `Proxy0` can reach it) instead of loopback;
-the daemon re-asserts it on every start. `setup` offers this
-interactively. Then assign devices or policies to `Proxy0` in the
-Keenetic UI. `--protocol=http` targets the HTTP inbound instead of SOCKS
-(xray listens on both regardless); `--interface=Proxy1` drives a
-different Keenetic Proxy interface (the old one is brought down first).
-Both are also bot actions -- `⚙️ Порты и транспорт` on a router card, or
-`/proxy0 <router> protocol http` / `/proxy0 <router> interface Proxy1`.
+Ключи `failover set`: `check_interval_seconds`, `failures_required`,
+`recovery_successes_required`, `cooldown_cycles`, `rollback_backoff_seconds`,
+`check_retries`, `check_retry_delay_seconds`, `primary_stuck_warn_hours`,
+`health_check_url`. `set` применяется на лету — сигналит живому демону
+перечитать `config.json`, рестарт не нужен.
 
-`transport mss` clamps the TCP MSS of connections the router forwards
-into the tunnel -- the fix for a PMTU black hole. A LAN client negotiates
-MSS ~1460 against the router's 1500 MTU, but those full-size segments
-don't fit the `Proxy0 → xray → xhttp/REALITY` path, so large transfers
-(video: Reels, Shorts) stall ~20 s on retransmit, sometimes to a black
-screen. `mss auto` (= 1360) writes one `iptables` mangle rule tagged
-`keenetic-xray-mss`; `1400` is a milder clamp, `1280` has the most
-headroom if stalls return, `off` removes it. It only applies while
-`Proxy0` is on, is removed on `proxy0 off`, and `iptables` is pulled in
-via `opkg` if the router doesn't have it. The router firmware sometimes
-flushes the rule when it rebuilds the firewall. The daemon re-asserts
-this (and Proxy0, the routes, the WG interface) two ways: a `netfilter.d`
-hook (`/opt/etc/ndm/netfilter.d/50-keenetic-xray.sh`, shipped in the
-`.ipk`) that `ndm` runs on every firewall rebuild and which SIGUSR1s the
-daemon for an immediate drift-check, plus a 2-minute fallback poll. Also
-a bot action -- the `📶 MSS` presets on `⚙️ Порты и транспорт`, or
-`/proxy0 <router> mss auto|off|N`.
+Те же операции есть в боте на карточке роутера: `⚙️ Порты и транспорт`
+(порты, SOCKS5/HTTP, интерфейс, пресеты MSS, WG-транспорт), `📍 Маршруты`
+(списки доменов кнопками), `🧩 Ядро xray`, `🐕 Вотчдог`, `🔗 Источники`,
+переключение primary/backup.
 
-`transport wg on` stands up an in-router WireGuard carrier as an
-alternative to Proxy0/SOCKS for the router→xray hop: `LAN → WireguardN →
-xray wireguard inbound → tunnel`. It picks the lowest free `WireguardN`,
-generates the xray-side X25519 keypair + a pre-shared key (kept in
-`config.json`), lets KeeneticOS generate its own keypair and reads the
-public key back, then wires the two together (`description
-keenetic-xray-wg` marks the interface -- hand-made WG tunnels are never
-touched). The interface gets MTU 1280 and KeeneticOS's own
-`ip tcp adjust-mss pmtu`, so video doesn't stall on this path. It
-coexists with `Proxy0`; point traffic at it per list with
-`routes set <list> --iface=Wireguard4` or with a Keenetic policy. The
-daemon re-asserts it on start; `transport wg off` removes the interface.
-Bot: `🔌 WG-транспорт` under `⚙️ Порты и транспорт`, or
-`/proxy0 <router> wg on|off|show`.
+---
 
-`failover show`/`set` read or tune the health-check thresholds -- useful
-when primary is a single flaky server and the defaults switch too
-eagerly. Keys: `check_interval_seconds`, `failures_required`,
-`recovery_successes_required`, `cooldown_cycles`,
-`rollback_backoff_seconds`, `check_retries`, `check_retry_delay_seconds`,
-`primary_stuck_warn_hours`, `health_check_url`. `set` applies live -- it
-signals a running daemon to reload `config.json`, no restart needed
-(falls back to the old restart-to-apply guidance if the daemon isn't
-reachable).
+## Удалённое управление (Telegram-бот)
 
-A flapping primary doesn't bury the chat: one drop-and-recover cycle is
-two messages (not five), and once a router crosses ~4 switches in 15
-minutes the bot posts one "⚠️ primary флапает" notice and holds further
-failover/recovery messages for 30 minutes. The opposite case -- primary
-quietly *staying* down while backup carries everything -- is easy to miss,
-so after `primary_stuck_warn_hours` (default 3, `0` disables) on backup
-without a recovery the daemon pushes one advisory pointing at `/doctor`
-and the fix. `/status` shows the switch count for the last hour;
-`/doctor` shows the recent health-check history (ok/fail split, failures
-by class — timeout / refused / DNS / HTTP 5xx — and latency) plus, when
-they're on, whether the MSS-clamp rule and the WG-transport interface are
-actually live.
+`keenetic-xray-control-server` — отдельный бинарь на VPS, независимый от
+установщика роутера. Очередь команд из бота, раздача polling-агентам по
+self-signed TLS с пиннингом отпечатка. Дизайн —
+[`docs/bot-control-design.md`](docs/bot-control-design.md).
 
-`watchdog show`/`enable`/`disable`/`log` control a cron entry that
-restarts the daemon if it's ever not running -- Entware's `rc.func`
-doesn't do this on its own, unlike the control-server's systemd unit
-(`Restart=on-failure`). Installed enabled by default. `enable` makes
-sure a cron daemon actually exists first, installing Entware's `cron`
-package via `opkg` if needed, rather than writing an entry nothing will
-read. `log` shows restart events only (not routine ticks), so an empty
-log means it's never had to step in -- also in the bot, `🐕 Вотчдог` on
-a router card.
+Установка на systemd-хост (от root):
 
-Changing the SOCKS/HTTP inbound ports later (not just at `setup` time)
-is a bot action too -- `⚙️ Порты и транспорт` on a router card (or
-`/ports <router> <socks> <http>`) -- applied live, and if Proxy0 is
-already on, its upstream binding is re-pointed to match so LAN traffic
-doesn't keep hitting the old port. That same screen switches the Proxy
-protocol (SOCKS5/HTTP) and interface (`Proxy0`, `Proxy1`, …).
-
-`🧩 Ядро xray` on a card (or `/update_core <router> [vX.Y.Z|stable]`)
-reinstalls the Xray core and restarts xray onto it -- the "upgrade a
-working-but-old core" path, distinct from `/ensure_core` which only
-fills a gap. It fetches from our own `xray-core/<tag>` releases and
-verifies the download in a temp file before swapping it in, so a bad
-fetch leaves the running core alone; a chosen tag persists in
-`config.json` (`xray_core_tag`).
-
-`📍 Маршруты` on a card (or `keenetic-xray routes …` / `/routes <router>
-…`) manages **named lists of domains and subnets that go through the
-tunnel** while everything else stays direct -- selective routing, on
-**KeeneticOS 5.0+**, via the router's own DNS-based routes (`object-group
-fqdn` + `dns-proxy route` targeting `Proxy0`). Each list is
-`routes new <name> <entries…>`, then `add` / `del` / `enable` / `disable`
-/ `rm`; `--exclusive` drops matched traffic instead of leaking it direct
-when the tunnel is down. Lists are stored in `config.json` and re-applied
-on daemon start. Router requirements: the router must be the client's DNS
-server (not a public/DoH resolver set on the device), the client must be
-on the *default* connection policy, and a domain's first hit may go
-direct until the router has seen its DNS answer. This project's lists are
-namespaced `keenetic-xray-*` and never touch ones you built in the
-Keenetic web UI. See `docs/routing.md`.
-
-`menu` is a numbered control panel for running the router from an SSH
-session without the Telegram bot: status, `doctor`, profile list,
-refresh the subscription, re-run `setup` to change the source, toggle
-`Proxy0`, restart the daemon, tail the logs. Every item is also a
-subcommand above -- the menu is just the discoverable front door.
-
-`status`/`doctor` currently report saved configuration only (`config.json`),
-not live daemon state (uptime, current role, transition history) -- reading
-that still has no CLI↔daemon channel. Applying a change is different:
-`setup`/`subscription`/`proxy0`/`failover set` all signal a running daemon
-to reload live (see above). `agent enable` requires the Full variant; see
-`docs/bot-control-design.md`.
-
-## Remote control (Telegram bot)
-
-`keenetic-xray-control-server` is a separate binary that runs on a VPS,
-independent of the router installer. It queues commands from a Telegram
-bot and serves them to polling router agents over self-signed,
-fingerprint-pinned TLS. See `docs/bot-control-design.md` for the full
-design.
-
-Install it on a systemd host (as root):
-
-```sh
+```bash
 curl -fsSL https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/server-install.sh | sudo sh
 ```
 
-This downloads the latest release binary for the host's architecture,
-installs a hardened systemd unit, and runs an interactive wizard
-(`keenetic-xray-control-server setup`) that writes
-`/etc/keenetic-xray-control-server/config.json` (bot token, chat
-allowlist, and the public URL routers dial) and generates the
-certificate. To reconfigure later, run `keenetic-xray-control-server
-setup` again and `systemctl restart keenetic-xray-control-server`.
+Скачивает бинарь под архитектуру хоста, ставит hardened systemd-юнит и
+гоняет мастер (`keenetic-xray-control-server setup`), который пишет
+`/etc/keenetic-xray-control-server/config.json` (токен бота, allowlist
+чатов, публичный URL для роутеров) и генерит сертификат. Перенастроить —
+`setup` ещё раз + `systemctl restart keenetic-xray-control-server`.
 
-To **update** later, re-run the same `curl … | sudo sh` — or use the
-bot's **⬆️ Обновить сервер** menu button, which does it through a
-systemd path-unit + root helper the installer also sets up. The button's
-own reply is just "queued" (the process doing the replying gets killed
-mid-restart); the new process DMs every allowed chat "✅ Сервер
-обновлён: vX → vY" once it's actually up, by comparing its own version
-against what the last run recorded -- silent on a plain restart that
-isn't an update.
+**Обновление:** повторить `curl … | sudo sh`, либо кнопка
+`⬆️ Обновить сервер` в меню (через systemd path-unit + root-хелпер,
+которые ставит установщик). После апдейта новый процесс сам пишет в
+разрешённые чаты «✅ Сервер обновлён: vX → vY».
 
-Routers are then managed from the Telegram chat itself — no restart, no
-config edit. `/menu` opens a button UI (main menu → router list →
-per-router card with status / primary·backup switch / subscription /
-agent-install / delete). `➕ Добавить роутер` (or `/add_router
-home-router Дом`) registers one: the bot generates a bearer token,
-stores it, and replies with the exact
-`keenetic-xray agent configure <url> <id> <fingerprint> <token>` line to
-run on that router.
+Роутеры дальше управляются из чата. `/menu` — кнопочный UI (меню → список
+роутеров → карточка). `➕ Добавить роутер` (или `/add_router home-router
+Дом`) регистрирует роутер: бот генерит токен и отдаёт готовую строку
+`keenetic-xray agent configure <url> <id> <fingerprint> <token>` для
+запуска на роутере.
 
 <details>
-<summary>Manual setup (no installer)</summary>
+<summary>Без установщика</summary>
 
-Build or download `keenetic-xray-control-server`, write
-`/etc/keenetic-xray-control-server/config.json` by hand (mode 0600) —
-`docs/bot-control-design.md` has the format — and run it directly:
+Собрать/скачать `keenetic-xray-control-server`, руками написать
+`/etc/keenetic-xray-control-server/config.json` (0600, формат — в
+`docs/bot-control-design.md`) и запустить:
 
-```sh
+```bash
 KEENETIC_XRAY_CS_CONFIG=/etc/keenetic-xray-control-server/config.json \
   keenetic-xray-control-server
 ```
 
-`keenetic-xray-control-server setup` still works without the installer: it
-only writes the config and generates the certificate, it doesn't touch
-systemd.
+`keenetic-xray-control-server setup` работает и без установщика — пишет
+только конфиг и сертификат, systemd не трогает.
 </details>
 
-## Relationship to `keenetic_xray_installer`
+---
 
-This is a separate, from-scratch project by the same author. It does not
-share code with `keenetic_xray_installer`; that project remains a useful
-reference for proven patterns (build flags, CI shape, failover safety
-design) but nothing here is copied from it.
+## Сборка
 
-## Building
-
-```sh
+```bash
 go build -o keenetic-xray ./cmd/keenetic-xray
 go build -o keenetic-xray-control-server ./cmd/keenetic-xray-control-server
 ```
 
-Cross-compiling for the router architectures:
+Кросс-компиляция под роутер:
 
-```sh
+```bash
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64  go build -trimpath -ldflags "-s -w" -o dist/keenetic-xray-linux-arm64  ./cmd/keenetic-xray
 CGO_ENABLED=0 GOOS=linux GOARCH=mipsle GOMIPS=softfloat go build -trimpath -ldflags "-s -w" -o dist/keenetic-xray-linux-mipsle ./cmd/keenetic-xray
 ```
 
-`keenetic-xray-control-server` targets ordinary VPS architectures
-(`linux/amd64`, `linux/arm64`), not the router pair above -- it never runs
-on a router.
+`keenetic-xray-control-server` собирается под обычные VPS-архитектуры
+(`linux/amd64`, `linux/arm64`), на роутере не работает.
 
-Building a `.ipk` locally (see `docs/architecture.md` for why this script
-exists instead of relying solely on goreleaser's `nfpm` integration):
+Локальная сборка `.ipk` (зачем скрипт, а не только goreleaser/nfpm — в
+`docs/architecture.md`):
 
-```sh
+```bash
 sh packaging/build-ipk.sh <version> aarch64-3.10 dist/keenetic-xray-linux-arm64 keenetic-xray_<version>_aarch64-3.10.ipk
 ```
 
-## License
+---
 
-MIT — see `LICENSE`.
+## Отношение к `keenetic_xray_installer`
+
+Отдельный проект с нуля, тот же автор. Код не общий; `keenetic_xray_installer`
+остаётся полезным референсом по проверенным решениям (флаги сборки, форма
+CI, дизайн безопасности failover), но ничего не скопировано.
+
+## Лицензия
+
+MIT — см. [`LICENSE`](LICENSE).

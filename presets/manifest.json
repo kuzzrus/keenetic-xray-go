@@ -1,0 +1,1315 @@
+{
+  "version": 1,
+  "generated": "2026-09-06",
+  "presets": [
+    {
+      "name": "adobe",
+      "service": "adobe",
+      "title": "Adobe",
+      "category": "Работа и инструменты",
+      "kind": "domains",
+      "count": 200,
+      "rev": "59b8a5991288",
+      "sources": [
+        "Geo-Aggregator: adobe"
+      ]
+    },
+    {
+      "name": "akamai",
+      "service": "akamai",
+      "title": "Akamai",
+      "category": "CDN и инфраструктура",
+      "kind": "domains",
+      "count": 78,
+      "rev": "6869779657ec",
+      "sources": [
+        "Geo-Aggregator: akamai"
+      ]
+    },
+    {
+      "name": "anthropic",
+      "service": "anthropic",
+      "title": "Anthropic / Claude",
+      "category": "Искусственный интеллект",
+      "kind": "domains",
+      "count": 8,
+      "rev": "5e0a2bbee5ee",
+      "sources": [
+        "Geo-Aggregator: anthropic"
+      ]
+    },
+    {
+      "name": "anthropic-ip",
+      "service": "anthropic",
+      "title": "Anthropic / Claude",
+      "category": "Искусственный интеллект",
+      "kind": "cidr",
+      "count": 15,
+      "rev": "2c2778ec0209",
+      "sources": [
+        "lord-alfred/ipranges: cloudflare"
+      ]
+    },
+    {
+      "name": "anydesk",
+      "service": "anydesk",
+      "title": "AnyDesk / удалёнка",
+      "category": "Работа и инструменты",
+      "kind": "domains",
+      "count": 7,
+      "rev": "265e022f5a16",
+      "sources": [
+        "Geo-Aggregator: category-remote-control"
+      ]
+    },
+    {
+      "name": "apple-music",
+      "service": "apple-music",
+      "title": "Apple Music",
+      "category": "Музыка",
+      "kind": "domains",
+      "count": 17,
+      "rev": "a2788b3601bf",
+      "sources": [
+        "Geo-Aggregator: apple-music"
+      ]
+    },
+    {
+      "name": "atlassian",
+      "service": "atlassian",
+      "title": "Atlassian (Jira/Confluence/Trello)",
+      "category": "Работа и инструменты",
+      "kind": "domains",
+      "count": 11,
+      "rev": "9df66015172c",
+      "sources": [
+        "Geo-Aggregator: atlassian"
+      ]
+    },
+    {
+      "name": "aws",
+      "service": "aws",
+      "title": "Amazon AWS",
+      "category": "CDN и инфраструктура",
+      "kind": "domains",
+      "count": 54,
+      "rev": "0ce7140d4cc0",
+      "sources": [
+        "Geo-Aggregator: aws"
+      ]
+    },
+    {
+      "name": "azure",
+      "service": "azure",
+      "title": "Microsoft Azure",
+      "category": "CDN и инфраструктура",
+      "kind": "domains",
+      "count": 88,
+      "rev": "6bc67cec14c6",
+      "sources": [
+        "Geo-Aggregator: azure"
+      ]
+    },
+    {
+      "name": "bbc",
+      "service": "bbc",
+      "title": "BBC",
+      "category": "Видео",
+      "kind": "domains",
+      "count": 27,
+      "rev": "738f28f62bba",
+      "sources": [
+        "Geo-Aggregator: bbc"
+      ]
+    },
+    {
+      "name": "binance",
+      "service": "binance",
+      "title": "Binance",
+      "category": "Финансы и крипта",
+      "kind": "domains",
+      "count": 45,
+      "rev": "97e9c11331eb",
+      "sources": [
+        "Geo-Aggregator: binance"
+      ]
+    },
+    {
+      "name": "blizzard",
+      "service": "blizzard",
+      "title": "Blizzard",
+      "category": "Игры",
+      "kind": "domains",
+      "count": 25,
+      "rev": "c86c5861e6ff",
+      "sources": [
+        "Geo-Aggregator: blizzard"
+      ]
+    },
+    {
+      "name": "bluesky",
+      "service": "bluesky",
+      "title": "Bluesky",
+      "category": "Соцсети",
+      "kind": "domains",
+      "count": 3,
+      "rev": "7cd4ff1be834",
+      "sources": [
+        "Geo-Aggregator: bluesky"
+      ]
+    },
+    {
+      "name": "bybit",
+      "service": "bybit",
+      "title": "Bybit",
+      "category": "Финансы и крипта",
+      "kind": "domains",
+      "count": 16,
+      "rev": "f9d643599b78",
+      "sources": [
+        "Geo-Aggregator: bybit"
+      ]
+    },
+    {
+      "name": "canva",
+      "service": "canva",
+      "title": "Canva",
+      "category": "Работа и инструменты",
+      "kind": "domains",
+      "count": 6,
+      "rev": "09af23036cbc",
+      "sources": [
+        "Geo-Aggregator: canva"
+      ]
+    },
+    {
+      "name": "cloudflare",
+      "service": "cloudflare",
+      "title": "Cloudflare",
+      "category": "CDN и инфраструктура",
+      "kind": "domains",
+      "count": 73,
+      "rev": "3460aca0c68f",
+      "sources": [
+        "Geo-Aggregator: cloudflare"
+      ]
+    },
+    {
+      "name": "cloudflare-ip",
+      "service": "cloudflare",
+      "title": "Cloudflare",
+      "category": "CDN и инфраструктура",
+      "kind": "cidr",
+      "count": 15,
+      "rev": "2c2778ec0209",
+      "sources": [
+        "lord-alfred/ipranges: cloudflare"
+      ]
+    },
+    {
+      "name": "crates",
+      "service": "crates",
+      "title": "crates.io",
+      "category": "Разработка",
+      "kind": "domains",
+      "count": 4,
+      "rev": "6915de7e24d8",
+      "sources": [
+        "Geo-Aggregator: rust"
+      ]
+    },
+    {
+      "name": "deepseek",
+      "service": "deepseek",
+      "title": "DeepSeek",
+      "category": "Искусственный интеллект",
+      "kind": "domains",
+      "count": 2,
+      "rev": "0416269db75f",
+      "sources": [
+        "Geo-Aggregator: deepseek"
+      ]
+    },
+    {
+      "name": "deezer",
+      "service": "deezer",
+      "title": "Deezer",
+      "category": "Музыка",
+      "kind": "domains",
+      "count": 2,
+      "rev": "3155eece25f3",
+      "sources": [
+        "Geo-Aggregator: deezer"
+      ]
+    },
+    {
+      "name": "digitalocean",
+      "service": "digitalocean",
+      "title": "DigitalOcean",
+      "category": "CDN и инфраструктура",
+      "kind": "domains",
+      "count": 6,
+      "rev": "0f3c9bbd9b6d",
+      "sources": [
+        "Geo-Aggregator: digitalocean"
+      ]
+    },
+    {
+      "name": "discord",
+      "service": "discord",
+      "title": "Discord",
+      "category": "Мессенджеры",
+      "kind": "domains",
+      "count": 28,
+      "rev": "7822c854ac28",
+      "sources": [
+        "Geo-Aggregator: discord"
+      ]
+    },
+    {
+      "name": "discord-ip",
+      "service": "discord",
+      "title": "Discord",
+      "category": "Мессенджеры",
+      "kind": "cidr",
+      "count": 15,
+      "rev": "2c2778ec0209",
+      "sources": [
+        "lord-alfred/ipranges: cloudflare"
+      ]
+    },
+    {
+      "name": "disney",
+      "service": "disney",
+      "title": "Disney+",
+      "category": "Видео",
+      "kind": "domains",
+      "count": 200,
+      "rev": "a597424a911a",
+      "sources": [
+        "Geo-Aggregator: disney"
+      ]
+    },
+    {
+      "name": "docker",
+      "service": "docker",
+      "title": "Docker Hub",
+      "category": "Разработка",
+      "kind": "domains",
+      "count": 6,
+      "rev": "6af4a0061c93",
+      "sources": [
+        "Geo-Aggregator: docker"
+      ]
+    },
+    {
+      "name": "dropbox",
+      "service": "dropbox",
+      "title": "Dropbox",
+      "category": "Работа и инструменты",
+      "kind": "domains",
+      "count": 16,
+      "rev": "08810925fc44",
+      "sources": [
+        "Geo-Aggregator: dropbox"
+      ]
+    },
+    {
+      "name": "ea",
+      "service": "ea",
+      "title": "EA / Origin",
+      "category": "Игры",
+      "kind": "domains",
+      "count": 163,
+      "rev": "17622195830d",
+      "sources": [
+        "Geo-Aggregator: ea"
+      ]
+    },
+    {
+      "name": "elevenlabs",
+      "service": "elevenlabs",
+      "title": "ElevenLabs",
+      "category": "Искусственный интеллект",
+      "kind": "domains",
+      "count": 2,
+      "rev": "547e05bf2c47",
+      "sources": [
+        "Geo-Aggregator: elevenlabs"
+      ]
+    },
+    {
+      "name": "epic-games",
+      "service": "epic-games",
+      "title": "Epic Games",
+      "category": "Игры",
+      "kind": "domains",
+      "count": 32,
+      "rev": "e76fa55040f3",
+      "sources": [
+        "Geo-Aggregator: epicgames"
+      ]
+    },
+    {
+      "name": "facebook",
+      "service": "facebook",
+      "title": "Facebook",
+      "category": "Соцсети",
+      "kind": "domains",
+      "count": 200,
+      "rev": "a1b11b8bc7a5",
+      "sources": [
+        "Geo-Aggregator: facebook"
+      ]
+    },
+    {
+      "name": "facebook-ip",
+      "service": "facebook",
+      "title": "Facebook",
+      "category": "Соцсети",
+      "kind": "cidr",
+      "count": 27,
+      "rev": "d34b8703516b",
+      "sources": [
+        "lord-alfred/ipranges: facebook"
+      ]
+    },
+    {
+      "name": "fastly",
+      "service": "fastly",
+      "title": "Fastly",
+      "category": "CDN и инфраструктура",
+      "kind": "domains",
+      "count": 7,
+      "rev": "edc9fcbe21cd",
+      "sources": [
+        "Geo-Aggregator: fastly"
+      ]
+    },
+    {
+      "name": "figma",
+      "service": "figma",
+      "title": "Figma",
+      "category": "Работа и инструменты",
+      "kind": "domains",
+      "count": 1,
+      "rev": "acb4ffda1a66",
+      "sources": [
+        "Geo-Aggregator: figma"
+      ]
+    },
+    {
+      "name": "github",
+      "service": "github",
+      "title": "GitHub",
+      "category": "Разработка",
+      "kind": "domains",
+      "count": 64,
+      "rev": "994e5b1429c5",
+      "sources": [
+        "Geo-Aggregator: github"
+      ]
+    },
+    {
+      "name": "gitlab",
+      "service": "gitlab",
+      "title": "GitLab",
+      "category": "Разработка",
+      "kind": "domains",
+      "count": 5,
+      "rev": "2d4d4262d323",
+      "sources": [
+        "Geo-Aggregator: gitlab"
+      ]
+    },
+    {
+      "name": "gog",
+      "service": "gog",
+      "title": "GOG",
+      "category": "Игры",
+      "kind": "domains",
+      "count": 8,
+      "rev": "64d518ed9399",
+      "sources": [
+        "Geo-Aggregator: gog"
+      ]
+    },
+    {
+      "name": "google",
+      "service": "google",
+      "title": "Google",
+      "category": "Работа и инструменты",
+      "kind": "domains",
+      "count": 200,
+      "rev": "461299fab3cb",
+      "sources": [
+        "Geo-Aggregator: google"
+      ]
+    },
+    {
+      "name": "google-ai",
+      "service": "google-ai",
+      "title": "Google Gemini",
+      "category": "Искусственный интеллект",
+      "kind": "domains",
+      "count": 41,
+      "rev": "e48e969eeabb",
+      "sources": [
+        "Geo-Aggregator: google-gemini"
+      ]
+    },
+    {
+      "name": "google-ai-ip",
+      "service": "google-ai",
+      "title": "Google Gemini",
+      "category": "Искусственный интеллект",
+      "kind": "cidr",
+      "count": 97,
+      "rev": "41641abadac6",
+      "sources": [
+        "lord-alfred/ipranges: google"
+      ]
+    },
+    {
+      "name": "google-ip",
+      "service": "google",
+      "title": "Google",
+      "category": "Работа и инструменты",
+      "kind": "cidr",
+      "count": 97,
+      "rev": "41641abadac6",
+      "sources": [
+        "lord-alfred/ipranges: google"
+      ]
+    },
+    {
+      "name": "hashicorp",
+      "service": "hashicorp",
+      "title": "HashiCorp",
+      "category": "Разработка",
+      "kind": "domains",
+      "count": 8,
+      "rev": "d73c032878bb",
+      "sources": [
+        "Geo-Aggregator: hashicorp"
+      ]
+    },
+    {
+      "name": "hbo",
+      "service": "hbo",
+      "title": "HBO Max",
+      "category": "Видео",
+      "kind": "domains",
+      "count": 62,
+      "rev": "1400efb8a83b",
+      "sources": [
+        "Geo-Aggregator: hbo"
+      ]
+    },
+    {
+      "name": "homebrew",
+      "service": "homebrew",
+      "title": "Homebrew",
+      "category": "Разработка",
+      "kind": "domains",
+      "count": 2,
+      "rev": "fae78f80cb7b",
+      "sources": [
+        "Geo-Aggregator: homebrew"
+      ]
+    },
+    {
+      "name": "huggingface",
+      "service": "huggingface",
+      "title": "Hugging Face",
+      "category": "Искусственный интеллект",
+      "kind": "domains",
+      "count": 3,
+      "rev": "8ef573aa1cfe",
+      "sources": [
+        "Geo-Aggregator: huggingface"
+      ]
+    },
+    {
+      "name": "hulu",
+      "service": "hulu",
+      "title": "Hulu",
+      "category": "Видео",
+      "kind": "domains",
+      "count": 48,
+      "rev": "86a546d0314a",
+      "sources": [
+        "Geo-Aggregator: hulu"
+      ]
+    },
+    {
+      "name": "instagram",
+      "service": "instagram",
+      "title": "Instagram",
+      "category": "Соцсети",
+      "kind": "domains",
+      "count": 74,
+      "rev": "9c1e572fbee3",
+      "sources": [
+        "Geo-Aggregator: instagram"
+      ]
+    },
+    {
+      "name": "instagram-ip",
+      "service": "instagram",
+      "title": "Instagram",
+      "category": "Соцсети",
+      "kind": "cidr",
+      "count": 27,
+      "rev": "d34b8703516b",
+      "sources": [
+        "lord-alfred/ipranges: facebook"
+      ]
+    },
+    {
+      "name": "itchio",
+      "service": "itchio",
+      "title": "itch.io",
+      "category": "Игры",
+      "kind": "domains",
+      "count": 2,
+      "rev": "8a83bf35ca46",
+      "sources": [
+        "Geo-Aggregator: itchio"
+      ]
+    },
+    {
+      "name": "jetbrains",
+      "service": "jetbrains",
+      "title": "JetBrains",
+      "category": "Разработка",
+      "kind": "domains",
+      "count": 23,
+      "rev": "019555eefa40",
+      "sources": [
+        "Geo-Aggregator: jetbrains"
+      ]
+    },
+    {
+      "name": "jsdelivr",
+      "service": "jsdelivr",
+      "title": "jsDelivr",
+      "category": "CDN и инфраструктура",
+      "kind": "domains",
+      "count": 3,
+      "rev": "7bea18a3f9aa",
+      "sources": [
+        "Geo-Aggregator: jsdelivr"
+      ]
+    },
+    {
+      "name": "kraken",
+      "service": "kraken",
+      "title": "Kraken",
+      "category": "Финансы и крипта",
+      "kind": "domains",
+      "count": 2,
+      "rev": "8d7d8011b1e6",
+      "sources": [
+        "Geo-Aggregator: kraken"
+      ]
+    },
+    {
+      "name": "linkedin",
+      "service": "linkedin",
+      "title": "LinkedIn",
+      "category": "Соцсети",
+      "kind": "domains",
+      "count": 10,
+      "rev": "eb2cfbdcc9f1",
+      "sources": [
+        "Geo-Aggregator: linkedin"
+      ]
+    },
+    {
+      "name": "matrix",
+      "service": "matrix",
+      "title": "Element (Matrix)",
+      "category": "Мессенджеры",
+      "kind": "domains",
+      "count": 9,
+      "rev": "cb98aa098837",
+      "sources": [
+        "Geo-Aggregator: matrix"
+      ]
+    },
+    {
+      "name": "messenger",
+      "service": "messenger",
+      "title": "Facebook Messenger",
+      "category": "Мессенджеры",
+      "kind": "domains",
+      "count": 4,
+      "rev": "cdd12d7e54f6",
+      "sources": [
+        "Geo-Aggregator: messenger"
+      ]
+    },
+    {
+      "name": "messenger-ip",
+      "service": "messenger",
+      "title": "Facebook Messenger",
+      "category": "Мессенджеры",
+      "kind": "cidr",
+      "count": 27,
+      "rev": "d34b8703516b",
+      "sources": [
+        "lord-alfred/ipranges: facebook"
+      ]
+    },
+    {
+      "name": "microsoft",
+      "service": "microsoft",
+      "title": "Microsoft",
+      "category": "Работа и инструменты",
+      "kind": "domains",
+      "count": 200,
+      "rev": "3224f9ad43a5",
+      "sources": [
+        "Geo-Aggregator: microsoft"
+      ]
+    },
+    {
+      "name": "minecraft",
+      "service": "minecraft",
+      "title": "Minecraft",
+      "category": "Игры",
+      "kind": "domains",
+      "count": 6,
+      "rev": "a09c4c2797b6",
+      "sources": [
+        "Geo-Aggregator: mojang"
+      ]
+    },
+    {
+      "name": "netflix",
+      "service": "netflix",
+      "title": "Netflix",
+      "category": "Видео",
+      "kind": "domains",
+      "count": 25,
+      "rev": "111b0c4aeb23",
+      "sources": [
+        "Geo-Aggregator: netflix"
+      ]
+    },
+    {
+      "name": "netlify",
+      "service": "netlify",
+      "title": "Netlify",
+      "category": "CDN и инфраструктура",
+      "kind": "domains",
+      "count": 10,
+      "rev": "101c08bf7285",
+      "sources": [
+        "Geo-Aggregator: netlify"
+      ]
+    },
+    {
+      "name": "nintendo",
+      "service": "nintendo",
+      "title": "Nintendo",
+      "category": "Игры",
+      "kind": "domains",
+      "count": 110,
+      "rev": "eb3f88351fed",
+      "sources": [
+        "Geo-Aggregator: nintendo"
+      ]
+    },
+    {
+      "name": "notion",
+      "service": "notion",
+      "title": "Notion",
+      "category": "Работа и инструменты",
+      "kind": "domains",
+      "count": 7,
+      "rev": "8a47827c3468",
+      "sources": [
+        "Geo-Aggregator: notion"
+      ]
+    },
+    {
+      "name": "npm",
+      "service": "npm",
+      "title": "npm",
+      "category": "Разработка",
+      "kind": "domains",
+      "count": 3,
+      "rev": "6bc0c9b05d22",
+      "sources": [
+        "Geo-Aggregator: npmjs"
+      ]
+    },
+    {
+      "name": "okx",
+      "service": "okx",
+      "title": "OKX",
+      "category": "Финансы и крипта",
+      "kind": "domains",
+      "count": 10,
+      "rev": "61cd510d69d0",
+      "sources": [
+        "Geo-Aggregator: okx"
+      ]
+    },
+    {
+      "name": "openai",
+      "service": "openai",
+      "title": "OpenAI / ChatGPT",
+      "category": "Искусственный интеллект",
+      "kind": "domains",
+      "count": 23,
+      "rev": "2cf26653826e",
+      "sources": [
+        "Geo-Aggregator: openai"
+      ]
+    },
+    {
+      "name": "oracle",
+      "service": "oracle",
+      "title": "Oracle Cloud",
+      "category": "CDN и инфраструктура",
+      "kind": "domains",
+      "count": 17,
+      "rev": "58ccfa8c3850",
+      "sources": [
+        "Geo-Aggregator: oracle"
+      ]
+    },
+    {
+      "name": "paypal",
+      "service": "paypal",
+      "title": "PayPal",
+      "category": "Финансы и крипта",
+      "kind": "domains",
+      "count": 200,
+      "rev": "c8facf42edfd",
+      "sources": [
+        "Geo-Aggregator: paypal"
+      ]
+    },
+    {
+      "name": "perplexity",
+      "service": "perplexity",
+      "title": "Perplexity",
+      "category": "Искусственный интеллект",
+      "kind": "domains",
+      "count": 5,
+      "rev": "3fb7cb664a4b",
+      "sources": [
+        "Geo-Aggregator: perplexity"
+      ]
+    },
+    {
+      "name": "perplexity-ip",
+      "service": "perplexity",
+      "title": "Perplexity",
+      "category": "Искусственный интеллект",
+      "kind": "cidr",
+      "count": 4,
+      "rev": "e0b40624a37f",
+      "sources": [
+        "lord-alfred/ipranges: perplexity"
+      ]
+    },
+    {
+      "name": "pinterest",
+      "service": "pinterest",
+      "title": "Pinterest",
+      "category": "Соцсети",
+      "kind": "domains",
+      "count": 51,
+      "rev": "c5933b0d31c5",
+      "sources": [
+        "Geo-Aggregator: pinterest"
+      ]
+    },
+    {
+      "name": "playstation",
+      "service": "playstation",
+      "title": "PlayStation",
+      "category": "Игры",
+      "kind": "domains",
+      "count": 3,
+      "rev": "85be175086b3",
+      "sources": [
+        "Geo-Aggregator: playstation"
+      ]
+    },
+    {
+      "name": "plex",
+      "service": "plex",
+      "title": "Plex",
+      "category": "Видео",
+      "kind": "domains",
+      "count": 4,
+      "rev": "578540e5aec6",
+      "sources": [
+        "Geo-Aggregator: plex"
+      ]
+    },
+    {
+      "name": "poe",
+      "service": "poe",
+      "title": "Poe",
+      "category": "Искусственный интеллект",
+      "kind": "domains",
+      "count": 2,
+      "rev": "4cdddbec25b0",
+      "sources": [
+        "Geo-Aggregator: poe"
+      ]
+    },
+    {
+      "name": "primevideo",
+      "service": "primevideo",
+      "title": "Prime Video",
+      "category": "Видео",
+      "kind": "domains",
+      "count": 21,
+      "rev": "84130065f285",
+      "sources": [
+        "Geo-Aggregator: primevideo"
+      ]
+    },
+    {
+      "name": "pypi",
+      "service": "pypi",
+      "title": "PyPI",
+      "category": "Разработка",
+      "kind": "domains",
+      "count": 6,
+      "rev": "412b5ff47890",
+      "sources": [
+        "Geo-Aggregator: python"
+      ]
+    },
+    {
+      "name": "quora",
+      "service": "quora",
+      "title": "Quora",
+      "category": "Соцсети",
+      "kind": "domains",
+      "count": 6,
+      "rev": "ebc773f8f6d3",
+      "sources": [
+        "Geo-Aggregator: quora"
+      ]
+    },
+    {
+      "name": "reddit",
+      "service": "reddit",
+      "title": "Reddit",
+      "category": "Соцсети",
+      "kind": "domains",
+      "count": 12,
+      "rev": "53d89b6a9195",
+      "sources": [
+        "Geo-Aggregator: reddit"
+      ]
+    },
+    {
+      "name": "riot",
+      "service": "riot",
+      "title": "Riot Games",
+      "category": "Игры",
+      "kind": "domains",
+      "count": 52,
+      "rev": "f779a5f6c039",
+      "sources": [
+        "Geo-Aggregator: riot"
+      ]
+    },
+    {
+      "name": "roblox",
+      "service": "roblox",
+      "title": "Roblox",
+      "category": "Игры",
+      "kind": "domains",
+      "count": 48,
+      "rev": "faa5cfe6943d",
+      "sources": [
+        "Geo-Aggregator: roblox"
+      ]
+    },
+    {
+      "name": "rockstar",
+      "service": "rockstar",
+      "title": "Rockstar",
+      "category": "Игры",
+      "kind": "domains",
+      "count": 7,
+      "rev": "62735ce34592",
+      "sources": [
+        "Geo-Aggregator: rockstar"
+      ]
+    },
+    {
+      "name": "signal",
+      "service": "signal",
+      "title": "Signal",
+      "category": "Мессенджеры",
+      "kind": "domains",
+      "count": 8,
+      "rev": "1699f04140d9",
+      "sources": [
+        "Geo-Aggregator: signal"
+      ]
+    },
+    {
+      "name": "slack",
+      "service": "slack",
+      "title": "Slack",
+      "category": "Работа и инструменты",
+      "kind": "domains",
+      "count": 11,
+      "rev": "7471b43e5cf1",
+      "sources": [
+        "Geo-Aggregator: slack"
+      ]
+    },
+    {
+      "name": "soundcloud",
+      "service": "soundcloud",
+      "title": "SoundCloud",
+      "category": "Музыка",
+      "kind": "domains",
+      "count": 3,
+      "rev": "170e4f45cf97",
+      "sources": [
+        "Geo-Aggregator: soundcloud"
+      ]
+    },
+    {
+      "name": "spotify",
+      "service": "spotify",
+      "title": "Spotify",
+      "category": "Музыка",
+      "kind": "domains",
+      "count": 28,
+      "rev": "9ab136b8db9d",
+      "sources": [
+        "Geo-Aggregator: spotify"
+      ]
+    },
+    {
+      "name": "stackoverflow",
+      "service": "stackoverflow",
+      "title": "Stack Overflow",
+      "category": "Разработка",
+      "kind": "domains",
+      "count": 25,
+      "rev": "abadb6a22055",
+      "sources": [
+        "Geo-Aggregator: stackexchange"
+      ]
+    },
+    {
+      "name": "steam",
+      "service": "steam",
+      "title": "Steam",
+      "category": "Игры",
+      "kind": "domains",
+      "count": 55,
+      "rev": "b838a73d1491",
+      "sources": [
+        "Geo-Aggregator: steam"
+      ]
+    },
+    {
+      "name": "stripe",
+      "service": "stripe",
+      "title": "Stripe",
+      "category": "Финансы и крипта",
+      "kind": "domains",
+      "count": 5,
+      "rev": "245e69b41050",
+      "sources": [
+        "Geo-Aggregator: stripe"
+      ]
+    },
+    {
+      "name": "teamviewer",
+      "service": "teamviewer",
+      "title": "TeamViewer",
+      "category": "Работа и инструменты",
+      "kind": "domains",
+      "count": 4,
+      "rev": "a4d6bbc64c82",
+      "sources": [
+        "Geo-Aggregator: teamviewer"
+      ]
+    },
+    {
+      "name": "telegram",
+      "service": "telegram",
+      "title": "Telegram",
+      "category": "Мессенджеры",
+      "kind": "domains",
+      "count": 21,
+      "rev": "f6192e5d6802",
+      "sources": [
+        "Geo-Aggregator: telegram"
+      ]
+    },
+    {
+      "name": "telegram-ip",
+      "service": "telegram",
+      "title": "Telegram",
+      "category": "Мессенджеры",
+      "kind": "cidr",
+      "count": 7,
+      "rev": "73181fa3cae1",
+      "sources": [
+        "lord-alfred/ipranges: telegram",
+        "core.telegram.org"
+      ]
+    },
+    {
+      "name": "threads",
+      "service": "threads",
+      "title": "Threads",
+      "category": "Соцсети",
+      "kind": "domains",
+      "count": 2,
+      "rev": "8d2cfa670d3e",
+      "sources": [
+        "Geo-Aggregator: threads"
+      ]
+    },
+    {
+      "name": "threads-ip",
+      "service": "threads",
+      "title": "Threads",
+      "category": "Соцсети",
+      "kind": "cidr",
+      "count": 27,
+      "rev": "d34b8703516b",
+      "sources": [
+        "lord-alfred/ipranges: facebook"
+      ]
+    },
+    {
+      "name": "tidal",
+      "service": "tidal",
+      "title": "Tidal",
+      "category": "Музыка",
+      "kind": "domains",
+      "count": 3,
+      "rev": "38e609ac94d6",
+      "sources": [
+        "Geo-Aggregator: tidal"
+      ]
+    },
+    {
+      "name": "tiktok",
+      "service": "tiktok",
+      "title": "TikTok",
+      "category": "Видео",
+      "kind": "domains",
+      "count": 36,
+      "rev": "b1960de67980",
+      "sources": [
+        "Geo-Aggregator: tiktok"
+      ]
+    },
+    {
+      "name": "tumblr",
+      "service": "tumblr",
+      "title": "Tumblr",
+      "category": "Соцсети",
+      "kind": "domains",
+      "count": 1,
+      "rev": "aea54e9bd44c",
+      "sources": [
+        "Geo-Aggregator: tumblr"
+      ]
+    },
+    {
+      "name": "twitch",
+      "service": "twitch",
+      "title": "Twitch",
+      "category": "Видео",
+      "kind": "domains",
+      "count": 34,
+      "rev": "d9db8fc3a2fe",
+      "sources": [
+        "Geo-Aggregator: twitch"
+      ]
+    },
+    {
+      "name": "ubisoft",
+      "service": "ubisoft",
+      "title": "Ubisoft",
+      "category": "Игры",
+      "kind": "domains",
+      "count": 32,
+      "rev": "398c751cf481",
+      "sources": [
+        "Geo-Aggregator: ubisoft"
+      ]
+    },
+    {
+      "name": "vercel",
+      "service": "vercel",
+      "title": "Vercel",
+      "category": "CDN и инфраструктура",
+      "kind": "domains",
+      "count": 27,
+      "rev": "00cd5f401043",
+      "sources": [
+        "Geo-Aggregator: vercel"
+      ]
+    },
+    {
+      "name": "viber",
+      "service": "viber",
+      "title": "Viber",
+      "category": "Мессенджеры",
+      "kind": "domains",
+      "count": 6,
+      "rev": "0dabe6bbbba4",
+      "sources": [
+        "Geo-Aggregator: viber"
+      ]
+    },
+    {
+      "name": "vimeo",
+      "service": "vimeo",
+      "title": "Vimeo",
+      "category": "Видео",
+      "kind": "domains",
+      "count": 17,
+      "rev": "a2c55891631e",
+      "sources": [
+        "Geo-Aggregator: vimeo"
+      ]
+    },
+    {
+      "name": "whatsapp",
+      "service": "whatsapp",
+      "title": "WhatsApp",
+      "category": "Мессенджеры",
+      "kind": "domains",
+      "count": 13,
+      "rev": "020da820bf61",
+      "sources": [
+        "Geo-Aggregator: whatsapp"
+      ]
+    },
+    {
+      "name": "whatsapp-ip",
+      "service": "whatsapp",
+      "title": "WhatsApp",
+      "category": "Мессенджеры",
+      "kind": "cidr",
+      "count": 27,
+      "rev": "d34b8703516b",
+      "sources": [
+        "lord-alfred/ipranges: facebook"
+      ]
+    },
+    {
+      "name": "wise",
+      "service": "wise",
+      "title": "Wise",
+      "category": "Финансы и крипта",
+      "kind": "domains",
+      "count": 2,
+      "rev": "2ae4311f1f7d",
+      "sources": [
+        "Geo-Aggregator: wise"
+      ]
+    },
+    {
+      "name": "x-twitter",
+      "service": "x-twitter",
+      "title": "X (Twitter)",
+      "category": "Соцсети",
+      "kind": "domains",
+      "count": 27,
+      "rev": "ec0aa9a57517",
+      "sources": [
+        "Geo-Aggregator: x"
+      ]
+    },
+    {
+      "name": "x-twitter-ip",
+      "service": "x-twitter",
+      "title": "X (Twitter)",
+      "category": "Соцсети",
+      "kind": "cidr",
+      "count": 17,
+      "rev": "998a337dda3b",
+      "sources": [
+        "lord-alfred/ipranges: twitter"
+      ]
+    },
+    {
+      "name": "xai",
+      "service": "xai",
+      "title": "xAI / Grok",
+      "category": "Искусственный интеллект",
+      "kind": "domains",
+      "count": 4,
+      "rev": "37d9fb72383a",
+      "sources": [
+        "Geo-Aggregator: xai"
+      ]
+    },
+    {
+      "name": "xbox",
+      "service": "xbox",
+      "title": "Xbox",
+      "category": "Игры",
+      "kind": "domains",
+      "count": 43,
+      "rev": "24cce1bfe922",
+      "sources": [
+        "Geo-Aggregator: xbox"
+      ]
+    },
+    {
+      "name": "youtube",
+      "service": "youtube",
+      "title": "YouTube",
+      "category": "Видео",
+      "kind": "domains",
+      "count": 173,
+      "rev": "23652d99b0eb",
+      "sources": [
+        "Geo-Aggregator: youtube"
+      ]
+    },
+    {
+      "name": "youtube-ip",
+      "service": "youtube",
+      "title": "YouTube",
+      "category": "Видео",
+      "kind": "cidr",
+      "count": 97,
+      "rev": "41641abadac6",
+      "sources": [
+        "lord-alfred/ipranges: google"
+      ]
+    },
+    {
+      "name": "zoom",
+      "service": "zoom",
+      "title": "Zoom",
+      "category": "Работа и инструменты",
+      "kind": "domains",
+      "count": 2,
+      "rev": "82dc73ef86db",
+      "sources": [
+        "Geo-Aggregator: zoom"
+      ]
+    }
+  ]
+}

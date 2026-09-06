@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -387,6 +388,41 @@ func TestConfigSave_CreatesConfigDir(t *testing.T) {
 	}
 	if _, err := Load(path); err != nil {
 		t.Fatalf("Load back: %v", err)
+	}
+}
+
+func TestConfigSchemaVersion(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	// Save always stamps the current version.
+	if err := Default().Save(path); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(path); !strings.Contains(string(b), `"schema_version": `+strconv.Itoa(CurrentSchemaVersion)) {
+		t.Errorf("saved config missing schema_version:\n%s", b)
+	}
+
+	// A pre-versioning file (no field -> 0) loads and is migrated forward.
+	old := `{"variant":"full","primary_index":-1,"backup_index":-1}`
+	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load of a v0 config: %v", err)
+	}
+	if c.SchemaVersion != CurrentSchemaVersion {
+		t.Errorf("v0 config not migrated: SchemaVersion = %d", c.SchemaVersion)
+	}
+
+	// A file from a newer schema is refused, not silently misread.
+	future := `{"schema_version":999,"variant":"full","primary_index":-1,"backup_index":-1}`
+	if err := os.WriteFile(path, []byte(future), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Error("Load of a newer-schema config should error")
 	}
 }
 

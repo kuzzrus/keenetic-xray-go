@@ -389,13 +389,22 @@ func (p Proxy0Config) ProtoName() string {
 	return p.Protocol
 }
 
+// CurrentSchemaVersion is bumped whenever config.json's shape changes in
+// a way an old file needs help with. Load runs migrateConfig to bring an
+// older file forward; a file from a *newer* schema is refused rather than
+// silently misread.
+const CurrentSchemaVersion = 1
+
 // Config is the full persisted /opt/etc/keenetic-xray/config.json shape.
 type Config struct {
-	Variant      string        `json:"variant"` // "mini" | "full"
-	Profiles     []Profile     `json:"profiles"`
-	PrimaryIndex int           `json:"primary_index"` // -1 if unset
-	BackupIndex  int           `json:"backup_index"`  // -1 if unset
-	Subscription *Subscription `json:"subscription,omitempty"`
+	// SchemaVersion is 0 in any file written before this field existed;
+	// migrateConfig treats 0 as "the pre-versioning shape".
+	SchemaVersion int           `json:"schema_version,omitempty"`
+	Variant       string        `json:"variant"` // "mini" | "full"
+	Profiles      []Profile     `json:"profiles"`
+	PrimaryIndex  int           `json:"primary_index"` // -1 if unset
+	BackupIndex   int           `json:"backup_index"`  // -1 if unset
+	Subscription  *Subscription `json:"subscription,omitempty"`
 	// PrimarySource / BackupSource feed the two slots from independent
 	// links or subscriptions (set via the bot's 🔗 Источники). Optional;
 	// a single shared Subscription still works the old way.
@@ -659,12 +668,13 @@ func ValidXrayCoreTag(s string) bool {
 // off` turn it back off.
 func Default() *Config {
 	return &Config{
-		Variant:      VariantFull,
-		PrimaryIndex: -1,
-		BackupIndex:  -1,
-		Failover:     DefaultFailoverConfig(),
-		Agent:        AgentConfig{Enabled: false},
-		Proxy0:       Proxy0Config{Enabled: true},
+		SchemaVersion: CurrentSchemaVersion,
+		Variant:       VariantFull,
+		PrimaryIndex:  -1,
+		BackupIndex:   -1,
+		Failover:      DefaultFailoverConfig(),
+		Agent:         AgentConfig{Enabled: false},
+		Proxy0:        Proxy0Config{Enabled: true},
 	}
 }
 
@@ -682,10 +692,25 @@ func Load(path string) (*Config, error) {
 	}
 
 	cfg := Default()
+	cfg.SchemaVersion = 0 // Default() sets nothing; a file without the field is v0
 	if err := json.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
+	if cfg.SchemaVersion > CurrentSchemaVersion {
+		return nil, fmt.Errorf("%s: schema_version %d is newer than this build understands (%d) -- update keenetic-xray",
+			path, cfg.SchemaVersion, CurrentSchemaVersion)
+	}
+	migrateConfig(cfg)
 	return cfg, nil
+}
+
+// migrateConfig brings a config loaded from an older schema forward,
+// field by field, then stamps CurrentSchemaVersion. Each step is
+// idempotent -- running it on an already-current config is a no-op.
+func migrateConfig(c *Config) {
+	// v0 -> v1: schema_version introduced; no shape change, just the stamp.
+	// (Future migrations: `if c.SchemaVersion < 2 { ... }`, in order.)
+	c.SchemaVersion = CurrentSchemaVersion
 }
 
 // Save writes the config as indented JSON to path with 0600 permissions
@@ -697,6 +722,7 @@ func (c *Config) Save(path string) error {
 	if err := c.Validate(); err != nil {
 		return fmt.Errorf("refusing to save invalid config: %w", err)
 	}
+	c.SchemaVersion = CurrentSchemaVersion // whatever it was loaded as, it's current now
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encoding config: %w", err)

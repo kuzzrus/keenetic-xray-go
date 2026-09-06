@@ -15,7 +15,8 @@ import (
 //
 // `conntrack` isn't on Keenetic by default and this project does not
 // pull it in: FlushConntrack is a no-op when the binary is absent, and
-// the caveat simply stands. `opkg install conntrack-tools` enables it.
+// the caveat simply stands. `opkg install conntrack` enables it (Entware
+// names the package `conntrack`, not `conntrack-tools`).
 
 var (
 	conntrackRun = func(ctx context.Context, args ...string) error {

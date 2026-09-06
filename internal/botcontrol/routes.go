@@ -244,7 +244,7 @@ func (h *RouterHandler) applyRoutes(ctx context.Context, okMsg string) (string, 
 	}
 	out := okMsg + fmt.Sprintf("\nроутер: +%d/-%d записей, групп +%d/-%d", rep.EntriesAdded, rep.EntriesRemoved, len(rep.GroupsCreated), len(rep.GroupsRemoved))
 	// Move connections already open to a now-matched IP into the tunnel
-	// immediately (no-op unless conntrack-tools is installed).
+	// immediately (no-op unless `opkg install conntrack`).
 	if changed := rep.EntriesAdded + rep.EntriesRemoved + len(rep.GroupsCreated) + len(rep.GroupsRemoved) + len(rep.RoutesSet) + len(rep.RoutesCleared); changed > 0 && keenetic.ConntrackPresent() {
 		if err := keenetic.FlushConntrack(cctx); err == nil {
 			out += "\nconntrack сброшен"

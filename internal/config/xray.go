@@ -15,6 +15,7 @@ type XrayConfigOptions struct {
 	HTTPPort   int     // local HTTP inbound port; 0 disables it
 	ListenHost string  // inbound bind address; "" -> "127.0.0.1". Set to "0.0.0.0" so Keenetic's Proxy0 can reach the inbound over the LAN.
 	Outbound   Profile // the profile to route all traffic through
+	XHTTPMode  string  // "" -> keep the profile's own mode; otherwise force this xhttp mode (Config.XHTTPMode)
 }
 
 func (o XrayConfigOptions) listenHost() string {
@@ -60,7 +61,7 @@ func GenerateXrayConfig(opts XrayConfigOptions) ([]byte, error) {
 		})
 	}
 
-	outbound, err := buildOutbound(opts.Outbound)
+	outbound, err := buildOutbound(opts.Outbound, opts.XHTTPMode)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +83,7 @@ func GenerateXrayConfig(opts XrayConfigOptions) ([]byte, error) {
 	return data, nil
 }
 
-func buildOutbound(p Profile) (xrayOutbound, error) {
+func buildOutbound(p Profile, xhttpMode string) (xrayOutbound, error) {
 	user := map[string]any{
 		"id":         p.UUID,
 		"encryption": firstNonEmpty(p.Encryption, "none"),
@@ -101,7 +102,7 @@ func buildOutbound(p Profile) (xrayOutbound, error) {
 		},
 	}
 
-	stream, err := buildStreamSettings(p)
+	stream, err := buildStreamSettings(p, xhttpMode)
 	if err != nil {
 		return xrayOutbound{}, err
 	}
@@ -114,7 +115,7 @@ func buildOutbound(p Profile) (xrayOutbound, error) {
 	}, nil
 }
 
-func buildStreamSettings(p Profile) (map[string]any, error) {
+func buildStreamSettings(p Profile, xhttpMode string) (map[string]any, error) {
 	stream := map[string]any{
 		"network": p.Network,
 	}
@@ -186,15 +187,31 @@ func buildStreamSettings(p Profile) (map[string]any, error) {
 		}
 		stream["httpSettings"] = httpSettings
 	case "xhttp":
+		// Seed from the share link's `extra` blob (xmux + sc* + padding
+		// tuning) so those keys reach xray verbatim; then the dedicated
+		// path/host/mode fields win over anything `extra` also carried.
 		xhttpSettings := map[string]any{}
+		if len(p.XHTTPExtra) > 0 {
+			var extra map[string]any
+			if err := json.Unmarshal(p.XHTTPExtra, &extra); err != nil {
+				return nil, fmt.Errorf("xhttp_extra: %w", err)
+			}
+			for k, v := range extra {
+				xhttpSettings[k] = v
+			}
+		}
 		if p.Path != "" {
 			xhttpSettings["path"] = p.Path
 		}
 		if p.Host != "" {
 			xhttpSettings["host"] = p.Host
 		}
-		if p.Mode != "" {
-			xhttpSettings["mode"] = p.Mode
+		mode := p.Mode
+		if xhttpMode != "" {
+			mode = xhttpMode // Config.XHTTPMode global override
+		}
+		if mode != "" {
+			xhttpSettings["mode"] = mode
 		}
 		stream["xhttpSettings"] = xhttpSettings
 	default:

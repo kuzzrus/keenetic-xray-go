@@ -220,6 +220,36 @@ func TestConfigValidate_XrayCoreTag(t *testing.T) {
 	}
 }
 
+func TestConfigValidate_XHTTPMode(t *testing.T) {
+	c := Default()
+	for _, ok := range []string{"", "auto", "packet-up", "stream-up", "stream-one"} {
+		c.XHTTPMode = ok
+		if err := c.Validate(); err != nil {
+			t.Errorf("xhttp_mode %q: unexpected error %v", ok, err)
+		}
+	}
+	c.XHTTPMode = "turbo"
+	if err := c.Validate(); err == nil {
+		t.Error("xhttp_mode \"turbo\": expected an error")
+	}
+}
+
+func TestProfileValidate_XHTTPExtra(t *testing.T) {
+	p := validProfile()
+	p.XHTTPExtra = []byte(`{"xmux":{"maxConcurrency":"16-32"}}`)
+	if err := p.Validate(); err != nil {
+		t.Errorf("valid xhttp_extra rejected: %v", err)
+	}
+	p.XHTTPExtra = []byte(`["not","an","object"]`)
+	if err := p.Validate(); err == nil {
+		t.Error("xhttp_extra that isn't a JSON object should be rejected")
+	}
+	p.XHTTPExtra = []byte(`{broken`)
+	if err := p.Validate(); err == nil {
+		t.Error("invalid-JSON xhttp_extra should be rejected")
+	}
+}
+
 func TestConfigSave_CreatesConfigDir(t *testing.T) {
 	// Save on a fresh box, before postinst-setup has made the dir.
 	path := filepath.Join(t.TempDir(), "etc", "keenetic-xray", "config.json")

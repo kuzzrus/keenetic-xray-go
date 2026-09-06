@@ -2,6 +2,7 @@ package config
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -183,6 +184,28 @@ func TestParseVLESSURI_Errors(t *testing.T) {
 	}
 }
 
+func TestParseVLESSURI_XHTTPExtra(t *testing.T) {
+	// A share link carrying the xhttp tuning blob (xmux etc.) in `extra=`.
+	uri := "vless://u@cdn.example:443?type=xhttp&security=reality&pbk=P&sid=S&sni=cdn.example&mode=auto" +
+		"&extra=%7B%22xmux%22%3A%7B%22maxConcurrency%22%3A%2216-32%22%7D%7D#x"
+	p, err := ParseVLESSURI(uri)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !strings.Contains(string(p.XHTTPExtra), `"maxConcurrency":"16-32"`) {
+		t.Errorf("XHTTPExtra = %q, want the xmux blob", p.XHTTPExtra)
+	}
+
+	// A non-JSON `extra` is dropped, not fatal.
+	bad, err := ParseVLESSURI("vless://u@h:443?type=xhttp&security=none&extra=not-json#x")
+	if err != nil {
+		t.Fatalf("parse with junk extra should not error: %v", err)
+	}
+	if bad.XHTTPExtra != nil {
+		t.Errorf("junk extra should be dropped, got %q", bad.XHTTPExtra)
+	}
+}
+
 func TestProfileURI_RoundTrip(t *testing.T) {
 	uris := []string{
 		"vless://11111111-2222-3333-4444-555555555555@example.com:443?type=tcp&security=none#My%20Server",
@@ -190,6 +213,7 @@ func TestProfileURI_RoundTrip(t *testing.T) {
 		"vless://uuid-2@10.0.0.1:443?type=grpc&security=reality&pbk=PUBKEY&sid=SHORTID&spx=%2F&flow=xtls-rprx-vision&serviceName=grpcsvc#reality-grpc",
 		"vless://uuid-6@cdn.example.net:443?type=xhttp&security=tls&sni=cdn.example.net&fp=chrome&path=%2Fxhttp&host=cdn.example.net&mode=stream-up#xhttp-tls",
 		"vless://uuid-7@h2.example:443?type=http&security=tls&sni=h2.example&path=%2Fh2#h2",
+		"vless://uuid-8@cdn.example:443?type=xhttp&security=reality&pbk=PK&sid=SID&sni=cdn.example&path=%2F&mode=auto&extra=%7B%22xmux%22%3A%7B%22maxConcurrency%22%3A%2216-32%22%7D%2C%22scMaxEachPostBytes%22%3A1000000%7D#xhttp-xmux",
 	}
 
 	for _, uri := range uris {

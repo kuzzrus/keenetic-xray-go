@@ -40,6 +40,15 @@ type Profile struct {
 	ServiceName string `json:"service_name,omitempty"` // grpc
 	HeaderType  string `json:"header_type,omitempty"`  // tcp
 	Mode        string `json:"mode,omitempty"`         // xhttp: packet-up | stream-up | stream-one
+
+	// XHTTPExtra is the raw JSON from a share link's `extra=` parameter --
+	// the xhttp transport-tuning blob that carries `xmux` (connection
+	// reuse), `scMaxEachPostBytes`, `scMinPostsIntervalMs`, `xPaddingBytes`
+	// and so on. Dropping it makes every new connection redo the full
+	// xhttp + REALITY handshake. GenerateXrayConfig merges these keys into
+	// `xhttpSettings` verbatim, so new upstream tuning fields work without
+	// a code change here.
+	XHTTPExtra json.RawMessage `json:"xhttp_extra,omitempty"`
 }
 
 // Validate checks that a Profile has the fields required to generate a
@@ -70,6 +79,12 @@ func (p *Profile) Validate() error {
 		}
 		if p.SNI == "" {
 			return fmt.Errorf("reality security requires sni (the server name to present in the TLS handshake)")
+		}
+	}
+	if len(p.XHTTPExtra) > 0 {
+		var obj map[string]any
+		if err := json.Unmarshal(p.XHTTPExtra, &obj); err != nil {
+			return fmt.Errorf("xhttp_extra must be a JSON object: %w", err)
 		}
 	}
 	return nil
@@ -236,6 +251,23 @@ type Config struct {
 	// fqdn` plus a `dns-proxy route`. Empty -> the daemon touches none of
 	// the router's routing config.
 	Routing RoutingConfig `json:"routing,omitempty"`
+
+	// XHTTPMode, when set, forces the xhttp transport mode on every
+	// xhttp profile regardless of what its share link said -- a global
+	// override that survives a subscription refresh (unlike editing a
+	// profile). "" keeps each link's own mode. One of
+	// auto|packet-up|stream-up|stream-one.
+	XHTTPMode string `json:"xhttp_mode,omitempty"`
+}
+
+// ValidXHTTPMode reports whether s is an acceptable XHTTPMode: empty
+// (keep the link's) or one of xray's four xhttp modes.
+func ValidXHTTPMode(s string) bool {
+	switch s {
+	case "", "auto", "packet-up", "stream-up", "stream-one":
+		return true
+	}
+	return false
 }
 
 // RoutingConfig is the persisted set of DNS-route lists. Each list maps
@@ -532,6 +564,9 @@ func (c *Config) Validate() error {
 	}
 	if err := c.Routing.Validate(); err != nil {
 		return err
+	}
+	if !ValidXHTTPMode(c.XHTTPMode) {
+		return fmt.Errorf("xhttp_mode %q: want auto|packet-up|stream-up|stream-one", c.XHTTPMode)
 	}
 	return nil
 }

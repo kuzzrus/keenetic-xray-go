@@ -120,6 +120,42 @@ func TestGenerateXrayConfig_XHTTPTLS(t *testing.T) {
 	}
 }
 
+func TestGenerateXrayConfig_XHTTPExtraAndModeOverride(t *testing.T) {
+	p := validProfile()
+	p.Network = "xhttp"
+	p.Security = "reality"
+	p.SNI = "cdn.example.com"
+	p.PublicKey = "pk"
+	p.ShortID = "sid"
+	p.Path = "/xhttp"
+	p.Mode = "auto"
+	p.XHTTPExtra = json.RawMessage(`{"xmux":{"maxConcurrency":"16-32","cMaxReuseTimes":"64-128"},"scMaxEachPostBytes":1000000,"xPaddingBytes":"100-1000"}`)
+
+	data, err := GenerateXrayConfig(XrayConfigOptions{SOCKSPort: 1080, Outbound: p, XHTTPMode: "stream-up"})
+	if err != nil {
+		t.Fatalf("GenerateXrayConfig: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	xs := decoded["outbounds"].([]any)[0].(map[string]any)["streamSettings"].(map[string]any)["xhttpSettings"].(map[string]any)
+
+	if xs["path"] != "/xhttp" {
+		t.Errorf("path = %v", xs["path"])
+	}
+	if xs["mode"] != "stream-up" {
+		t.Errorf("mode = %v, want the XHTTPMode override to beat the profile's auto", xs["mode"])
+	}
+	if xs["scMaxEachPostBytes"] != float64(1000000) || xs["xPaddingBytes"] != "100-1000" {
+		t.Errorf("extra tuning not merged: %#v", xs)
+	}
+	xmux, ok := xs["xmux"].(map[string]any)
+	if !ok || xmux["maxConcurrency"] != "16-32" || xmux["cMaxReuseTimes"] != "64-128" {
+		t.Errorf("xmux not merged: %#v", xs["xmux"])
+	}
+}
+
 func TestGenerateXrayConfig_GRPCReality(t *testing.T) {
 	p := validProfile()
 	p.Network = "grpc"

@@ -61,6 +61,8 @@ func run(args []string) error {
 		return cmdWatchdog(rest)
 	case "routes":
 		return cmdRoutes(rest)
+	case "transport":
+		return cmdTransport(rest)
 	case "internal":
 		return cmdInternal(rest)
 	default:
@@ -94,7 +96,8 @@ commands:
   failover {show|set <key> <value>}              tune health-check thresholds (applies live)
   watchdog {show|enable|disable|log}              cron entry that restarts the daemon if it's not running
   routes {list|show [name]|new <name> [entries…]|add <name> <entries…>|del <name> <entries…>|rm <name>|enable|disable <name>|set <name> [--iface=] [--exclusive]|apply}
-                                                  KeeneticOS 5.0+ DNS-based routing: send named lists of domains/subnets through Proxy0`)
+                                                  KeeneticOS 5.0+ DNS-based routing: send named lists of domains/subnets through Proxy0
+  transport {show|mode auto|packet-up|stream-up|stream-one|mode-clear}   force the xhttp transport mode on all profiles (applies live)`)
 }
 
 func cmdDaemon(args []string) error {

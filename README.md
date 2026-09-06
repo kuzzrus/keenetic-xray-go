@@ -16,7 +16,13 @@ fits together, `docs/full-vs-mini.md` for the Mini/Full variant split, and
   checked with a real HTTP request through the live proxy (not bare
   ICMP), with an isolated pre-test before failing back to primary.
 - Accepts either a raw `vless://` link or a subscription URL, both from
-  the CLI (`keenetic-xray setup`) and the remote bot.
+  the CLI (`keenetic-xray setup`) and the remote bot. The parser keeps
+  the link's `extra=` xhttp tuning blob (xmux connection reuse, `sc*`,
+  padding) verbatim — dropping it makes every new connection redo the
+  full xhttp + REALITY handshake. `keenetic-xray transport mode
+  stream-up` globally overrides an `xhttp` `mode` (share links often ship
+  the slower `auto`); the override lives in `config.json` so a
+  subscription refresh keeps it.
 - Installs the Xray core itself: by default a size-optimised (UPX-packed,
   ~7–10 MB vs ~30 MB unpacked) build published from this project's own
   releases and pinned to an upstream tag (see `packaging/xray-core/`),
@@ -120,6 +126,7 @@ keenetic-xray agent {configure <url> <router-id> <fingerprint> <token>|enable|di
 keenetic-xray proxy0 {show|set [--lan-ip=192.168.x.1] [--protocol=socks5|http] [--interface=Proxy0]|off}
 keenetic-xray failover {show|set <key> <value>}
 keenetic-xray routes {list|show [name]|new <name> [entries…]|add <name> <entries…>|del <name> <entries…>|rm <name>|enable <name>|disable <name>|set <name> [--iface=] [--exclusive]|apply}
+keenetic-xray transport {show|mode auto|packet-up|stream-up|stream-one|mode-clear}
 ```
 
 `proxy0 set` points Keenetic's `Proxy0` at the local inbound and flips the

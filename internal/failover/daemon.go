@@ -178,6 +178,7 @@ func (a *realActions) SwitchLiveTo(ctx context.Context, role Role) error {
 		HTTPPort:   a.cfg.Failover.HTTPPort,
 		ListenHost: listen,
 		Outbound:   *profile,
+		XHTTPMode:  a.cfg.XHTTPMode,
 	})
 	if err != nil {
 		return fmt.Errorf("generating production config: %w", err)
@@ -202,6 +203,7 @@ func (a *realActions) StartIsolatedPretest(ctx context.Context) error {
 	data, err := config.GenerateXrayConfig(config.XrayConfigOptions{
 		SOCKSPort: a.cfg.Failover.PretestPort,
 		Outbound:  *primary,
+		XHTTPMode: a.cfg.XHTTPMode,
 	})
 	if err != nil {
 		return fmt.Errorf("generating pretest config: %w", err)

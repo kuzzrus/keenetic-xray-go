@@ -137,6 +137,8 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 		return h.proxy0Off(ctx)
 	case ActionProxy0Config:
 		return h.proxy0Config(ctx, cmd.Args)
+	case ActionSetMSS:
+		return h.setMSS(ctx, cmd.Args)
 	case ActionDaemonRestart:
 		return h.daemonRestart()
 	case ActionEnsureCore:
@@ -526,12 +528,13 @@ func (h *RouterHandler) proxy0Show(ctx context.Context) string {
 	host, port, ok, err := keenetic.Proxy0Upstream(ctx, h.Config.Proxy0.Interface)
 	switch {
 	case err != nil:
-		fmt.Fprintf(&b, "upstream: ошибка чтения (%v)", err)
+		fmt.Fprintf(&b, "upstream: ошибка чтения (%v)\n", err)
 	case ok:
-		fmt.Fprintf(&b, "upstream: %s:%d", host, port)
+		fmt.Fprintf(&b, "upstream: %s:%d\n", host, port)
 	default:
-		b.WriteString("upstream: не задан")
+		b.WriteString("upstream: не задан\n")
 	}
+	fmt.Fprintf(&b, "MSS-клампинг: %s", h.Config.Proxy0.MSSClampText())
 	return b.String()
 }
 
@@ -629,6 +632,47 @@ func (h *RouterHandler) proxy0Config(ctx context.Context, args []string) (string
 		return "", err
 	}
 	return summary + "\n" + out, nil
+}
+
+// setMSS sets Proxy0.MSSClamp and, while Proxy0 is on, (re)installs the
+// forwarded-TCP MSS-clamp rule -- the PMTU black-hole fix. args[0] is
+// "auto" | "off" | a 1200..1452 decimal. Pulls in iptables via opkg if
+// the router doesn't have it.
+func (h *RouterHandler) setMSS(ctx context.Context, args []string) (string, error) {
+	if len(args) != 1 {
+		return "", fmt.Errorf("usage: set_mss <auto|off|1200..1452>")
+	}
+	v, err := config.ParseMSSClampArg(args[0])
+	if err != nil {
+		return "", err
+	}
+	h.Config.Proxy0.MSSClamp = v
+	if err := h.Config.Save(h.ConfigPath); err != nil {
+		return "", err
+	}
+	summary := "MSS-клампинг (Proxy0): " + h.Config.Proxy0.MSSClampText()
+
+	if !h.Config.Proxy0.Enabled {
+		return summary + "\nсохранено — применится при включении proxy0", nil
+	}
+	mss := h.Config.Proxy0.MSSClampValue()
+	if mss <= 0 {
+		if err := keenetic.ClearMSSClamp(ctx); err != nil {
+			return "", fmt.Errorf("снятие правила: %w", err)
+		}
+		return summary + "\nправило снято", nil
+	}
+	var note string
+	if !keenetic.IptablesPresent() {
+		if err := keenetic.EnsureIptables(ctx); err != nil {
+			return "", fmt.Errorf("iptables недоступен: %w", err)
+		}
+		note = "\niptables установлен через opkg"
+	}
+	if err := keenetic.SetMSSClamp(ctx, mss); err != nil {
+		return "", err
+	}
+	return summary + note + fmt.Sprintf("\nправило установлено: forwarded TCP MSS → %d", mss), nil
 }
 
 // daemonRestart spawns a detached "restart after a short delay" so this

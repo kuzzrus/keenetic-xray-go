@@ -36,7 +36,13 @@ const (
 	// args[1]=Keenetic interface ("Proxy0"|"Proxy1"|...|""=keep). Saves
 	// and, if Proxy0 is already on, re-points it (bringing the old
 	// interface down first when that changed).
-	ActionProxy0Config  = "proxy0_config"
+	ActionProxy0Config = "proxy0_config"
+	// ActionSetMSS: args[0] = "auto" | "off" | a 1200..1452 decimal. Sets
+	// Proxy0.MSSClamp and, while Proxy0 is on, (re)installs the
+	// forwarded-TCP MSS-clamp rule -- the PMTU black-hole fix that keeps
+	// video from stalling through the tunnel. Installs iptables via opkg
+	// if the router doesn't have it.
+	ActionSetMSS        = "set_mss"
 	ActionDaemonRestart = "daemon_restart"
 	ActionEnsureCore    = "ensure_core"
 	// ActionUpdateCore: args[0] = "" (reinstall the pinned tag), a

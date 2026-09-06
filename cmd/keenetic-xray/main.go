@@ -97,7 +97,8 @@ commands:
   watchdog {show|enable|disable|log}              cron entry that restarts the daemon if it's not running
   routes {list|show [name]|new <name> [entries…]|add <name> <entries…>|del <name> <entries…>|rm <name>|enable|disable <name>|set <name> [--iface=] [--exclusive]|apply}
                                                   KeeneticOS 5.0+ DNS-based routing: send named lists of domains/subnets through Proxy0
-  transport {show|mode auto|packet-up|stream-up|stream-one|mode-clear}   force the xhttp transport mode on all profiles (applies live)`)
+  transport {show|mode auto|packet-up|stream-up|stream-one|mode-clear|mss <1200..1452|auto|off>}
+                                                  force the xhttp transport mode, or clamp the forwarded-TCP MSS on the Proxy0 path (PMTU black-hole fix)`)
 }
 
 func cmdDaemon(args []string) error {
@@ -157,6 +158,8 @@ func cmdDaemon(args []string) error {
 	logf := func(format string, a ...any) { fmt.Printf(format+"\n", a...) }
 	applyProxy0AtStartup(cfg, logf)
 	applyRoutesAtStartup(cfg, logf)
+	applyMSSClamp(cfg, logf)
+	go mssKeepalive(ctx, logf)
 
 	if cfg.Agent.Enabled {
 		opts, err := loadAgentOptions(cfg)

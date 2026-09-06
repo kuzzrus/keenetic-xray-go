@@ -29,3 +29,35 @@ func TestCmdTransport_ModeOverride(t *testing.T) {
 		t.Error("an unknown mode should error")
 	}
 }
+
+func TestCmdTransport_MSSClamp(t *testing.T) {
+	cfgFile := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("KEENETIC_XRAY_CONFIG", cfgFile)
+	// Proxy0 is disabled by default, so `transport mss` only persists the
+	// value and never touches iptables here.
+
+	if err := run([]string{"transport", "mss", "1400"}); err != nil {
+		t.Fatalf("transport mss 1400: %v", err)
+	}
+	if cfg, _ := config.Load(cfgFile); cfg.Proxy0.MSSClamp != 1400 {
+		t.Errorf("MSSClamp = %d, want 1400", cfg.Proxy0.MSSClamp)
+	}
+
+	if err := run([]string{"transport", "mss", "off"}); err != nil {
+		t.Fatalf("transport mss off: %v", err)
+	}
+	if cfg, _ := config.Load(cfgFile); cfg.Proxy0.MSSClamp != -1 {
+		t.Errorf("MSSClamp = %d, want -1 (off)", cfg.Proxy0.MSSClamp)
+	}
+
+	if err := run([]string{"transport", "mss", "auto"}); err != nil {
+		t.Fatalf("transport mss auto: %v", err)
+	}
+	if cfg, _ := config.Load(cfgFile); cfg.Proxy0.MSSClamp != 0 {
+		t.Errorf("MSSClamp = %d, want 0 (auto)", cfg.Proxy0.MSSClamp)
+	}
+
+	if err := run([]string{"transport", "mss", "9000"}); err == nil {
+		t.Error("an out-of-range MSS should error")
+	}
+}

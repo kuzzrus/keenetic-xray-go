@@ -122,6 +122,15 @@ func portsTransportScreenText(id string) string {
 		"• Порты — сменить номера локальных входов SOCKS/HTTP.\n" +
 		"• SOCKS5 / HTTP — какой протокол отдаёт Proxy-интерфейс.\n" +
 		"• Интерфейс — Proxy0 (по умолчанию), Proxy1, Proxy2 …\n\n" +
+		"📶 MSS-клампинг. Устройство в LAN согласует MSS ~1460 под MTU роутера 1500, " +
+		"но такие полноразмерные пакеты не влезают в туннель Proxy0 → xray → xhttp/reality. " +
+		"Получается «чёрная дыра» PMTU: крупные загрузки и видео (Reels, Shorts) залипают на ~20 секунд, " +
+		"иногда до чёрного экрана. Клампинг прописывает роутеру правило iptables, которое режет MSS " +
+		"проходящего трафика до безопасного значения.\n" +
+		"Работает только пока Proxy0 включён; при выключении Proxy0 правило снимается. " +
+		"iptables ставится через opkg, если его нет. Прошивка иногда сбрасывает правило при переконфигурации " +
+		"файрвола — демон раз в 2 минуты проверяет и возвращает его.\n" +
+		"Авто = 1360. 1400 — мягче; 1280 — с запасом, если залипания возвращаются; Выкл — как было.\n\n" +
 		"Текущие значения — в 📊 Показать."
 }
 
@@ -130,6 +139,8 @@ func portsTransportScreenKB(id string) inlineKeyboard {
 		{{Text: "✏️ Порты SOCKS/HTTP", CallbackData: "ptwiz:" + id}},
 		{{Text: "SOCKS5", CallbackData: "ptpr:" + id + ":socks5"}, {Text: "HTTP", CallbackData: "ptpr:" + id + ":http"}},
 		{{Text: "✏️ Интерфейс Keenetic", CallbackData: "ptif:" + id}},
+		{{Text: "📶 MSS: Авто", CallbackData: "ptmss:" + id + ":auto"}, {Text: "1400", CallbackData: "ptmss:" + id + ":1400"}},
+		{{Text: "1280", CallbackData: "ptmss:" + id + ":1280"}, {Text: "MSS: Выкл", CallbackData: "ptmss:" + id + ":off"}},
 		{{Text: "📊 Показать", CallbackData: "act:proxy0_show:" + id}, {Text: "⬅️ Назад", CallbackData: "router:" + id}},
 	}}
 }
@@ -321,6 +332,14 @@ func (b *TelegramBot) handleCallback(ctx context.Context, cb tgCallbackQuery) {
 			return
 		}
 		b.enqueueCardArgs(ctx, cb, id, ActionProxy0Config, []string{proto, ""})
+	case strings.HasPrefix(data, "ptmss:"):
+		rest := strings.TrimPrefix(data, "ptmss:")
+		id, val, ok := strings.Cut(rest, ":")
+		if !ok {
+			b.editCB(ctx, cb, "плохая кнопка", mainMenuKB())
+			return
+		}
+		b.enqueueCardArgs(ctx, cb, id, ActionSetMSS, []string{val})
 	case strings.HasPrefix(data, "corem:"):
 		id := strings.TrimPrefix(data, "corem:")
 		if !b.Store.HasRouter(id) {

@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -27,8 +28,25 @@ var newDoTTLSConfig = func(sni string) *tls.Config {
 	return &tls.Config{ServerName: sni, MinVersion: tls.VersionTLS12}
 }
 
-// ProbeTimeout bounds a single DoT or DoH check.
+// ProbeTimeout bounds a single DoT or DoH check on a capable host.
 const ProbeTimeout = 3 * time.Second
+
+// probeBudget scales the DNS latency probe to the host CPU. A weak
+// MIPS/ARMv7 router does TLS handshakes in software an order of
+// magnitude slower than an arm64/amd64 box (no AES/SHA acceleration),
+// so 20+ handshakes in flight there just thrash the scheduler and every
+// probe overruns its deadline -- the table then reads "timeout" for
+// resolvers that are actually reachable. On those arches: only a few in
+// flight, a provider's DoT and DoH run one after the other, and a
+// longer per-probe budget.
+func probeBudget() (concurrency int, timeout time.Duration, sequential bool) {
+	switch runtime.GOARCH {
+	case "mips", "mipsle", "mips64", "mips64le", "arm", "386":
+		return 3, 6 * time.Second, true
+	default:
+		return 12, ProbeTimeout, false
+	}
+}
 
 // Timing is the outcome of one endpoint probe.
 type Timing struct {
@@ -76,8 +94,9 @@ func (r Result) Best() time.Duration {
 // concurrently and returns the results sorted: working ones first by
 // best latency, dead ones last in catalogue order.
 func ProbeAll(ctx context.Context, ps []Provider) []Result {
+	conc, _, _ := probeBudget()
 	out := make([]Result, len(ps))
-	sem := make(chan struct{}, 12)
+	sem := make(chan struct{}, conc)
 	done := make(chan int, len(ps))
 	for i, p := range ps {
 		go func(i int, p Provider) {
@@ -105,28 +124,38 @@ func ProbeAll(ctx context.Context, ps []Provider) []Result {
 	return out
 }
 
-// ProbeProvider probes p's first DoT and first DoH endpoint (in
-// parallel).
+// ProbeProvider probes p's first DoT and first DoH endpoint. On a
+// capable host the two run in parallel; on a weak arch (see
+// probeBudget) they run one after the other to halve the peak
+// handshake load.
 func ProbeProvider(ctx context.Context, p Provider) Result {
 	r := Result{Provider: p}
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
+	_, timeout, sequential := probeBudget()
+
+	dot := func() {
 		if len(p.DoT) == 0 {
 			r.DoT = Timing{Err: "нет DoT"}
 			return
 		}
-		r.DoT = time1(func() error { return probeDoT(ctx, p.DoT[0].IP, p.DoT[0].SNI) })
-	}()
-	go func() {
-		defer wg.Done()
+		r.DoT = time1(func() error { return probeDoT(ctx, p.DoT[0].IP, p.DoT[0].SNI, timeout) })
+	}
+	doh := func() {
 		if len(p.DoH) == 0 {
 			r.DoH = Timing{Err: "нет DoH"}
 			return
 		}
-		r.DoH = time1(func() error { return probeDoH(ctx, p.DoH[0].URL) })
-	}()
+		r.DoH = time1(func() error { return probeDoH(ctx, p.DoH[0].URL, timeout) })
+	}
+
+	if sequential {
+		dot()
+		doh()
+		return r
+	}
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); dot() }()
+	go func() { defer wg.Done(); doh() }()
 	wg.Wait()
 	return r
 }
@@ -142,8 +171,8 @@ func time1(fn func() error) Timing {
 // probeDoT dials <ip>:853, does a TLS handshake with the given SNI, sends
 // one A query for probeName over DNS-over-TCP framing and checks the
 // reply header.
-func probeDoT(ctx context.Context, ip, sni string) error {
-	return probeDoTAddr(ctx, net.JoinHostPort(ip, "853"), sni, ProbeTimeout)
+func probeDoT(ctx context.Context, ip, sni string, timeout time.Duration) error {
+	return probeDoTAddr(ctx, net.JoinHostPort(ip, "853"), sni, timeout)
 }
 
 func probeDoTAddr(ctx context.Context, addr, sni string, timeout time.Duration) error {
@@ -191,8 +220,8 @@ func probeDoTAddr(ctx context.Context, addr, sni string, timeout time.Duration) 
 // probeDoH POSTs one A query for probeName as application/dns-message and
 // checks the reply header. The DoH host is resolved via the system
 // resolver (the current one -- this is just a reachability check).
-func probeDoH(ctx context.Context, url string) error {
-	ctx, cancel := context.WithTimeout(ctx, ProbeTimeout)
+func probeDoH(ctx context.Context, url string, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	q, id := dnsQuery(probeName)
@@ -204,7 +233,7 @@ func probeDoH(ctx context.Context, url string) error {
 	req.Header.Set("Accept", "application/dns-message")
 	req.Header.Set("User-Agent", "keenetic-xray dns-probe")
 
-	hc := &http.Client{Timeout: ProbeTimeout}
+	hc := &http.Client{Timeout: timeout}
 	resp, err := hc.Do(req)
 	if err != nil {
 		return err

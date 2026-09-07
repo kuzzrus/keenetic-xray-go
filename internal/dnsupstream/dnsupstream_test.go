@@ -161,7 +161,7 @@ func TestProbeDoH_AgainstFakeServer(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if err := probeDoH(context.Background(), srv.URL); err != nil {
+	if err := probeDoH(context.Background(), srv.URL, ProbeTimeout); err != nil {
 		t.Fatalf("probeDoH against a good fake server: %v", err)
 	}
 
@@ -169,7 +169,7 @@ func TestProbeDoH_AgainstFakeServer(t *testing.T) {
 		w.WriteHeader(http.StatusTeapot)
 	}))
 	defer bad.Close()
-	if err := probeDoH(context.Background(), bad.URL); err == nil {
+	if err := probeDoH(context.Background(), bad.URL, ProbeTimeout); err == nil {
 		t.Error("expected an error from an HTTP 418 server")
 	}
 }

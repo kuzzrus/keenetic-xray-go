@@ -68,16 +68,23 @@ chmod 0755 "$WORK/control/postinst" "$WORK/control/prerm"
 tar --owner=0 --group=0 --numeric-owner -czf "$WORK/control.tar.gz" \
     -C "$WORK/control" .
 
-mkdir -p "$WORK/data/opt/sbin" "$WORK/data/opt/etc/init.d" "$WORK/data/opt/etc/ndm/netfilter.d"
+mkdir -p "$WORK/data/opt/sbin" "$WORK/data/opt/etc/init.d" \
+    "$WORK/data/opt/etc/ndm/netfilter.d" \
+    "$WORK/data/opt/etc/ndm/ifipchanged.d" \
+    "$WORK/data/opt/etc/ndm/ifstatechanged.d"
 cp "$BINARY_ABS" "$WORK/data/opt/sbin/$PKG_NAME"
 chmod 0755 "$WORK/data/opt/sbin/$PKG_NAME"
 cp "$SCRIPT_DIR/init.d/S99keenetic-xray" "$WORK/data/opt/etc/init.d/S99keenetic-xray"
 chmod 0755 "$WORK/data/opt/etc/init.d/S99keenetic-xray"
-# ndm runs this on every firewall rebuild -> SIGUSR1 the daemon so it
+# ndm runs these hooks on the matching event -> SIGUSR1 the daemon so it
 # re-asserts its Proxy0 / MSS / routes / WG config immediately instead of
-# waiting for the 2-minute reconcile tick. opkg removes it with the package.
-cp "$SCRIPT_DIR/ndm/netfilter.d/50-keenetic-xray.sh" "$WORK/data/opt/etc/ndm/netfilter.d/50-keenetic-xray.sh"
-chmod 0755 "$WORK/data/opt/etc/ndm/netfilter.d/50-keenetic-xray.sh"
+# waiting for the 2-minute reconcile tick: netfilter.d on every firewall
+# rebuild, ifipchanged.d when the (LAN) IP moves, ifstatechanged.d when a
+# tracked interface comes back up. opkg removes them with the package.
+for _hook in netfilter.d ifipchanged.d ifstatechanged.d; do
+    cp "$SCRIPT_DIR/ndm/$_hook/50-keenetic-xray.sh" "$WORK/data/opt/etc/ndm/$_hook/50-keenetic-xray.sh"
+    chmod 0755 "$WORK/data/opt/etc/ndm/$_hook/50-keenetic-xray.sh"
+done
 tar --owner=0 --group=0 --numeric-owner -czf "$WORK/data.tar.gz" \
     -C "$WORK/data" .
 

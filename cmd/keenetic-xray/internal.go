@@ -148,8 +148,11 @@ func cmdPrermCleanup(args []string) error {
 	purge := len(args) > 0 && args[0] == "--purge"
 	// opkg removes packaged files with the package, but a stale copy left
 	// by a botched removal would keep SIGUSR1'ing a non-existent PID --
-	// drop the netfilter.d hook explicitly on any prerm.
-	_ = os.Remove(netfilterHookPath())
+	// drop the ndm hooks (netfilter.d + ifipchanged.d + ifstatechanged.d)
+	// explicitly on any prerm.
+	for _, h := range ndmHookPaths() {
+		_ = os.Remove(h)
+	}
 	if purge && keenetic.Available() {
 		// Remove this project's DNS-route object-groups + routes (only the
 		// keenetic-xray-* prefixed ones -- the operator's own web-UI lists

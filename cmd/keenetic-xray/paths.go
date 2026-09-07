@@ -80,6 +80,24 @@ func netfilterHookPath() string {
 	return envOr("KEENETIC_XRAY_NETFILTER_HOOK", "/opt/etc/ndm/netfilter.d/50-keenetic-xray.sh")
 }
 
+// ndmHookPaths is every ndm hook script the package installs -- the
+// firewall-rebuild one plus the ifipchanged / ifstatechanged siblings
+// (see packaging/ndm/*). opkg deletes them with the package; prerm
+// cleanup drops them too in case a botched removal leaves a copy behind
+// SIGUSR1'ing a dead PID. The KEENETIC_XRAY_NETFILTER_HOOK override
+// still names the firewall hook so existing tests keep working; the
+// other two derive from the same directory root.
+func ndmHookPaths() []string {
+	nf := netfilterHookPath()
+	ndmRoot := filepath.Dir(filepath.Dir(nf)) // .../ndm/netfilter.d -> .../ndm
+	base := filepath.Base(nf)                 // 50-keenetic-xray.sh
+	return []string{
+		nf,
+		filepath.Join(ndmRoot, "ifipchanged.d", base),
+		filepath.Join(ndmRoot, "ifstatechanged.d", base),
+	}
+}
+
 // presetsOverlayDir is where internal/presets.Refresh keeps the daily
 // repo-refreshed routing-list presets. Next to config.json so a package
 // purge (install.PrermCleanup) clears it too; the embedded copy is the

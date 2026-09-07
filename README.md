@@ -74,6 +74,11 @@ mode stream-up` глобально переопределяет `xhttp` `mode` (
   так что свежий список доезжает без переустановки агента. `preset add`
   привязывает список к пресету; бот/CLI показывают `⬆ +N −M`, когда
   появилась свежая версия, `preset sync` её подтягивает.
+- **Защищённый DNS** (`keenetic-xray dns …`, кнопка `🧭 DNS`) — прописывает
+  роутерному `dns-proxy` резолвер DoT/DoH из ~20 публичных (Cloudflare,
+  Quad9, AdGuard, Mullvad, …) или свой. `dns test` замеряет задержку всех
+  провайдеров прямо с роутера. Трогаем только апстримы из своего списка —
+  заведённые вручную не задеваются. См. [docs/dns.md](docs/dns.md).
 
 **MSS-клампинг.** Устройство в LAN согласует MSS ~1460 под MTU роутера
 1500, но такие пакеты не влезают в путь `Proxy0 → xray → xhttp/REALITY` —
@@ -225,6 +230,7 @@ keenetic-xray proxy0 {show|set [--lan-ip=192.168.x.1] [--protocol=socks5|http] [
 keenetic-xray failover {show|set <key> <value>}
 keenetic-xray routes {list|show [name]|new <name> [entries…]|add <name> <entries…>|del <name> <entries…>|rm <name>|enable <name>|disable <name>|set <name> [--iface=Proxy0|Wireguard4] [--exclusive]|apply}
 keenetic-xray routes preset {list|show <name>|add <name> [--ip] [--iface=…] [--exclusive]|sync [<name>|--all]|update}
+keenetic-xray dns {show|test|list|preset <id> [--dot|--doh|--both]|set dot <ip> <sni> …|set doh <url> …|off}
 keenetic-xray transport {show|mode auto|packet-up|stream-up|stream-one|mode-clear|mss <1200..1452|auto|off>|wg {show|on|off}}
 ```
 

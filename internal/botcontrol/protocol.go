@@ -80,6 +80,13 @@ const (
 	ActionWGTransportShow = "wg_show" // no args
 	ActionWGTransportOn   = "wg_on"   // no args -- creates/reconciles the interface, generates keys
 	ActionWGTransportOff  = "wg_off"  // no args -- removes the interface
+	// Keenetic dns-proxy secure upstreams (DoT/DoH). See
+	// internal/keenetic.ApplyDNS + internal/dnsupstream.
+	ActionDNSShow   = "dns_show"   // no args -> config + live upstreams (human text)
+	ActionDNSTest   = "dns_test"   // no args -> latency table for the whole provider catalogue
+	ActionDNSPreset = "dns_preset" // args[0]=provider id, args[1]="dot"|"doh"|"both"
+	ActionDNSSet    = "dns_set"    // args[0]="dot"|"doh", args[1]=newline/space list ("<ip> <sni>" pairs, or URLs)
+	ActionDNSOff    = "dns_off"    // no args -> remove every managed upstream
 )
 
 // Command is a single unit of work queued for a router by the control

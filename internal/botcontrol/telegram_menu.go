@@ -141,7 +141,7 @@ func portsTransportScreenKB(id string) inlineKeyboard {
 		{{Text: "✏️ Интерфейс Keenetic", CallbackData: "ptif:" + id}},
 		{{Text: "📶 MSS: Авто", CallbackData: "ptmss:" + id + ":auto"}, {Text: "1400", CallbackData: "ptmss:" + id + ":1400"}},
 		{{Text: "1280", CallbackData: "ptmss:" + id + ":1280"}, {Text: "MSS: Выкл", CallbackData: "ptmss:" + id + ":off"}},
-		{{Text: "🔌 WG-транспорт", CallbackData: "wgt:" + id}},
+		{{Text: "🔌 WG-транспорт", CallbackData: "wgt:" + id}, {Text: "🧭 DNS", CallbackData: "dnsm:" + id}},
 		{{Text: "📊 Показать", CallbackData: "act:proxy0_show:" + id}, {Text: "⬅️ Назад", CallbackData: "router:" + id}},
 	}}
 }
@@ -370,6 +370,8 @@ func (b *TelegramBot) handleCallback(ctx context.Context, cb tgCallbackQuery) {
 		b.enqueueCardArgs(ctx, cb, strings.TrimPrefix(data, "corepre:"), ActionUpdateCore, []string{xraycore.PrereleaseTag})
 	case strings.HasPrefix(data, "corestable:"):
 		b.enqueueCardArgs(ctx, cb, strings.TrimPrefix(data, "corestable:"), ActionUpdateCore, []string{"stable"})
+	case strings.HasPrefix(data, "dn") && b.handleDNSCallback(ctx, cb, data):
+		// the 🧭 DNS flow (dnsm/dnp/dna/dntest/dnoff/dncust)
 	case strings.HasPrefix(data, "rtm:"):
 		b.openRoutesScreen(ctx, cb, strings.TrimPrefix(data, "rtm:"))
 	case strings.HasPrefix(data, "rtp") && b.handlePresetCallback(ctx, cb, data):

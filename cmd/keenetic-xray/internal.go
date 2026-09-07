@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
+	"github.com/kuzzrus/keenetic-xray-go/internal/dnsupstream"
 	"github.com/kuzzrus/keenetic-xray-go/internal/install"
 	"github.com/kuzzrus/keenetic-xray-go/internal/keenetic"
 	"github.com/kuzzrus/keenetic-xray-go/internal/xraycore"
@@ -169,6 +170,11 @@ func cmdPrermCleanup(args []string) error {
 		// its keenetic-xray-wg marker; hand-made WG tunnels are untouched).
 		if err := keenetic.ClearWGTransport(ctx); err != nil {
 			fmt.Println("warning: could not remove the WG-transport interface:", err)
+		}
+		// Drop the secure-DNS upstreams we manage (catalogue IPs/URLs only;
+		// a hand-added upstream is untouched).
+		if _, err := keenetic.ClearDNS(ctx, dnsupstream.AllTLSIPs(), dnsupstream.AllDoHURLs()); err != nil {
+			fmt.Println("warning: could not clear secure-DNS upstreams:", err)
 		}
 	}
 	return install.PrermCleanup(installPaths(), purge)

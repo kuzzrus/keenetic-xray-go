@@ -15,6 +15,7 @@ import (
 	"github.com/kuzzrus/keenetic-xray-go/internal/botcontrol"
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 	"github.com/kuzzrus/keenetic-xray-go/internal/failover"
+	"github.com/kuzzrus/keenetic-xray-go/internal/keenetic"
 	"github.com/kuzzrus/keenetic-xray-go/internal/presets"
 	"github.com/kuzzrus/keenetic-xray-go/internal/version"
 )
@@ -73,6 +74,8 @@ func run(args []string) error {
 		return cmdTransport(rest)
 	case "addon", "addons":
 		return cmdAddon(rest)
+	case "rci":
+		return cmdRCI(rest)
 	case "internal":
 		return cmdInternal(rest)
 	default:
@@ -111,7 +114,8 @@ commands:
   transport {show|mode auto|packet-up|stream-up|stream-one|mode-clear|mss <1200..1452|auto|off>|wg {show|on|off}}
                                                   xhttp mode override; forwarded-TCP MSS clamp on the Proxy0 path (PMTU fix); or an in-router WireGuard hop into xray
   addon {list|show <id>|status <id>|install <id>|remove <id>|configure <id> <k=v>…}
-                                                  optional router-side components: unbound (local DNS), nfqws2 (DPI bypass), conntrack, cron`)
+                                                  optional router-side components: unbound (local DNS), nfqws2 (DPI bypass), conntrack, cron
+  rci {show|probe [url]|enable [url]|disable}     read the router config over the local RCI JSON API instead of ndmc (hedge for ndmc-sandboxed firmware)`)
 }
 
 func cmdDaemon(args []string) error {
@@ -169,6 +173,14 @@ func cmdDaemon(args []string) error {
 				fmt.Fprintln(os.Stderr, "reload: loading config:", err)
 				continue
 			}
+			// Pick up an rci enable/disable done via the CLI without a restart.
+			if fresh.RCI.Enabled {
+				if _, e := keenetic.UseRCI(fresh.RCI.BaseURL()); e != nil {
+					fmt.Fprintln(os.Stderr, "reload: rci:", e)
+				}
+			} else {
+				_, _ = keenetic.UseRCI("")
+			}
 			if d.ReloadConfig(ctx, fresh) {
 				fmt.Println("reload: applied")
 			} else {
@@ -186,6 +198,13 @@ func cmdDaemon(args []string) error {
 		fmt.Fprintf(logw, time.Now().Format("15:04:05")+" "+format+"\n", a...)
 	}
 	presets.SetOverlay(presetsOverlayDir())
+	if cfg.RCI.Enabled {
+		if url, err := keenetic.UseRCI(cfg.RCI.BaseURL()); err != nil {
+			logf("rci: %v — читаю конфиг через ndmc", err)
+		} else {
+			logf("rci: конфиг роутера читаю через %s (записи — ndmc)", url)
+		}
+	}
 	applyProxy0AtStartup(cfg, logf)
 	applyRoutesAtStartup(cfg, logf)
 	applyWGTransportAtStartup(cfg, logf)

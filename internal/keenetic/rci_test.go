@@ -2,18 +2,25 @@ package keenetic
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
-// rciTestServer serves the two endpoints tryRead uses.
+// rciTestServer serves the two endpoints tryRead uses. runningCfg is
+// the CLI text; the server returns it as KeeneticOS does --
+// {"message": [<one line per entry>]} from /rci/show/running-config.
 func rciTestServer(t *testing.T, runningCfg, versionJSON string) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
-	mux.HandleFunc("/ci/running-config.txt", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/octet-stream")
-		_, _ = w.Write([]byte(runningCfg))
+	mux.HandleFunc("/rci/show/running-config", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		body, _ := json.Marshal(map[string]any{
+			"message": strings.Split(strings.TrimRight(runningCfg, "\n"), "\n"),
+		})
+		_, _ = w.Write(body)
 	})
 	mux.HandleFunc("/rci/show/version", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -164,5 +171,27 @@ func TestAvailable_TrueWithRCIEvenWithoutNdmc(t *testing.T) {
 	}
 	if !Available() {
 		t.Error("Available() should be true once RCI is active, even without ndmc")
+	}
+}
+
+func TestRunningConfigFromRCI(t *testing.T) {
+	// Array form (the normal KeeneticOS shape).
+	arr := `{"message":["system","    hostname X","!"]}`
+	got, err := runningConfigFromRCI([]byte(arr))
+	if err != nil || got != "system\n    hostname X\n!\n" {
+		t.Errorf("array form = %q, %v", got, err)
+	}
+	// String form (some builds).
+	str := `{"message":"system\n    hostname X\n!\n"}`
+	got, err = runningConfigFromRCI([]byte(str))
+	if err != nil || got != "system\n    hostname X\n!\n" {
+		t.Errorf("string form = %q, %v", got, err)
+	}
+	// Junk.
+	if _, err := runningConfigFromRCI([]byte(`not json`)); err == nil {
+		t.Error("expected an error for non-JSON")
+	}
+	if _, err := runningConfigFromRCI([]byte(`{"message":123}`)); err == nil {
+		t.Error("expected an error for an unexpected message shape")
 	}
 }

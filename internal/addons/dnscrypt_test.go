@@ -23,6 +23,7 @@ func TestDnscrypt_InstallWritesTomlAndStarts(t *testing.T) {
 		"listen_addresses = ['127.0.0.1:65053']",
 		"require_dnssec = true",
 		"require_nolog = true",
+		"use_syslog = true", // so `logread` shows dnscrypt-proxy
 		"[sources.relays]",
 		"[anonymized_dns]", // on by default
 		unboundManagedMark,

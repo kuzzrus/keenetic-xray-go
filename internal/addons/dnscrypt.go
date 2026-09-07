@@ -297,6 +297,7 @@ ignore_system_dns = true
 netprobe_timeout = 60
 netprobe_address = '9.9.9.9:53'
 log_level = 2
+use_syslog = true
 cache = true
 cache_size = 4096
 cache_min_ttl = 2400

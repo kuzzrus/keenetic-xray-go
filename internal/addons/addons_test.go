@@ -159,8 +159,8 @@ func TestNfqws2_InstallAddsFeedAndStarts(t *testing.T) {
 		t.Fatalf("Install: %v", err)
 	}
 	feed, ok := f.files[nfqwsFeedFile]
-	if !ok || !strings.Contains(string(feed), nfqwsFeedURL) {
-		t.Errorf("feed file not written correctly: %q", feed)
+	if !ok || !strings.Contains(string(feed), nfqwsFeedURL()) || !strings.Contains(string(feed), "src/gz nfqws2-keenetic ") {
+		t.Errorf("feed file not written correctly: %q (want the src/gz nfqws2-keenetic line with %s)", feed, nfqwsFeedURL())
 	}
 	if !contains(f.opkgCalls, "install "+nfqwsPkg) {
 		t.Errorf("opkg install not called: %v", f.opkgCalls)

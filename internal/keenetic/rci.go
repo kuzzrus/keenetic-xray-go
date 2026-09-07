@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -14,12 +15,13 @@ import (
 // RCI is Keenetic's local JSON mirror of the CLI tree. KeeneticOS serves
 // it without authentication to 127.0.0.1, so an Entware process on the
 // router can read state even on firmware that sandboxes it away from the
-// `ndmc` binary. This file lets the keenetic layer serve the two reads
-// that map cleanly -- `show running-config` (as CLI text via
-// /ci/running-config.txt) and `show version` -- over RCI when it's
-// enabled; every write and every other read still goes through ndmcRun's
-// exec path. Off unless UseRCI is called (from the daemon, when
-// config.RCI.Enabled).
+// `ndmc` binary. This file lets the keenetic layer serve the reads that
+// map cleanly -- `show running-config`, `show version`, `show interface
+// <iface>`, `show object-group fqdn <name>` -- over RCI when it's
+// enabled, each reformatted (see rci_reformat.go) into the exact text
+// its ndmc parser expects; every write and every other read still goes
+// through ndmcRun's exec path. Off unless UseRCI is called (from the
+// daemon, when config.RCI.Enabled).
 
 var (
 	rciMu     sync.RWMutex
@@ -70,12 +72,21 @@ func UseRCI(base string) (string, error) {
 // RCIActive reports whether RCI-backed reads are on.
 func RCIActive() bool { return activeRCI() != nil }
 
-// tryRead serves the commands RCI can answer faithfully. ok is false for
-// anything it doesn't handle (writes, `show interface`, …) so ndmcRun
+// tryRead serves the reads RCI can answer faithfully. ok is false for
+// anything it doesn't handle (every write, `show ip`, …) so ndmcRun
 // falls through to exec.
+//
+//   - running-config / version are core reads on every reconcile: if RCI
+//     mode is on it's because ndmc may be fenced off, so a fetch error is
+//     still ok=true (surface it -- there's no fallback worth having).
+//   - interface / object-group are peripheral (WG transport, conntrack
+//     flush): a fetch error there is ok=false so a router whose ndmc
+//     still works gets the right answer; only a 200-with-unreadable-body
+//     is surfaced.
 func (c *rciClient) tryRead(ctx context.Context, cmd string) (out string, ok bool, err error) {
-	switch strings.TrimSpace(cmd) {
-	case "show running-config":
+	cmd = strings.TrimSpace(cmd)
+	switch {
+	case cmd == "show running-config":
 		// /rci/show/running-config returns {"message": [<one CLI line per
 		// entry>]} -- join it and you have byte-identical text to
 		// `ndmc -c "show running-config"`, so every existing line parser
@@ -87,12 +98,34 @@ func (c *rciClient) tryRead(ctx context.Context, cmd string) (out string, ok boo
 		}
 		txt, e := runningConfigFromRCI(b)
 		return txt, true, e
-	case "show version":
+	case cmd == "show version":
 		b, e := c.get(ctx, "/rci/show/version")
 		if e != nil {
 			return "", true, e
 		}
 		txt, e := versionTextFromRCI(b)
+		return txt, true, e
+	case strings.HasPrefix(cmd, "show interface "):
+		iface := strings.TrimSpace(strings.TrimPrefix(cmd, "show interface "))
+		if iface == "" || strings.ContainsAny(iface, " \t") {
+			return "", false, nil // "show interface" with no/odd arg -- not ours
+		}
+		b, e := c.get(ctx, "/rci/show/interface/"+url.PathEscape(iface))
+		if e != nil {
+			return "", false, nil // let ndmc try
+		}
+		txt, e := interfaceTextFromRCI(b)
+		return txt, true, e
+	case strings.HasPrefix(cmd, "show object-group fqdn "):
+		name := strings.TrimSpace(strings.TrimPrefix(cmd, "show object-group fqdn "))
+		if name == "" || strings.ContainsAny(name, " \t") {
+			return "", false, nil
+		}
+		b, e := c.get(ctx, "/rci/show/object-group/fqdn/"+url.PathEscape(name))
+		if e != nil {
+			return "", false, nil
+		}
+		txt, e := objectGroupTextFromRCI(b)
 		return txt, true, e
 	default:
 		return "", false, nil

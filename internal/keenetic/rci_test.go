@@ -9,10 +9,12 @@ import (
 	"testing"
 )
 
-// rciTestServer serves the two endpoints tryRead uses. runningCfg is
-// the CLI text; the server returns it as KeeneticOS does --
-// {"message": [<one line per entry>]} from /rci/show/running-config.
-func rciTestServer(t *testing.T, runningCfg, versionJSON string) *httptest.Server {
+// rciTestServer serves the running-config and version endpoints tryRead
+// uses. runningCfg is the CLI text; the server returns it as KeeneticOS
+// does -- {"message": [<one line per entry>]} from
+// /rci/show/running-config. Extra route registrations (interface,
+// object-group) can be passed as `more`.
+func rciTestServer(t *testing.T, runningCfg, versionJSON string, more ...func(*http.ServeMux)) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/rci/show/running-config", func(w http.ResponseWriter, _ *http.Request) {
@@ -26,9 +28,22 @@ func rciTestServer(t *testing.T, runningCfg, versionJSON string) *httptest.Serve
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(versionJSON))
 	})
+	for _, fn := range more {
+		fn(mux)
+	}
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// rciJSONRoute registers one RCI endpoint that returns a fixed JSON body.
+func rciJSONRoute(path, body string) func(*http.ServeMux) {
+	return func(mux *http.ServeMux) {
+		mux.HandleFunc(path, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(body))
+		})
+	}
 }
 
 // withRCIOff restores RCI state after a test that calls UseRCI.
@@ -129,6 +144,215 @@ func TestNdmcRun_RCIFallsThroughForOtherCommands(t *testing.T) {
 	}
 	if len(seen) != 3 {
 		t.Errorf("ndmcExec saw %v, want all 3 non-RCI commands", seen)
+	}
+}
+
+// --- phase 2: show interface / show object-group over RCI ---
+
+const rciBridgeJSON = `{
+  "id": "Bridge0", "index": 0, "type": "Bridge", "description": "Home segment",
+  "interface-name": "br0", "link": "up", "connected": true, "state": "up",
+  "mtu": 1500, "address": "192.168.7.1", "mask": "255.255.255.0", "uptime": 84231
+}`
+
+const rciWGJSON = `{
+  "id": "Wireguard0", "type": "Wireguard", "description": "keenetic-xray-wg",
+  "link": "up", "connected": true, "state": "up", "mtu": 1412,
+  "address": "10.55.0.1", "mask": "255.255.255.0",
+  "wireguard": {
+    "public-key": "SRVPUBKEYbase64000000000000000000000000000000=",
+    "listen-port": 51820,
+    "peer": [
+      { "public-key": "PEERPUBKEY0000000000000000000000000000000000=",
+        "endpoint": "127.0.0.1:51820", "last-handshake": 12, "online": "yes",
+        "rxbytes": 4096, "txbytes": 8192 }
+    ]
+  }
+}`
+
+func TestNdmcRun_RCIServesInterface(t *testing.T) {
+	srv := rciTestServer(t, "system\n", `{"release":"5.1.3"}`,
+		rciJSONRoute("/rci/show/interface/Bridge0", rciBridgeJSON),
+		rciJSONRoute("/rci/show/interface/Wireguard0", rciWGJSON),
+	)
+	withRCIOff(t)
+	origExec := ndmcExec
+	ndmcExec = func(_ context.Context, cmd string) (string, error) {
+		t.Errorf("ndmcExec called for %q -- RCI should have served it", cmd)
+		return "", nil
+	}
+	t.Cleanup(func() { ndmcExec = origExec })
+	if _, err := UseRCI(srv.URL); err != nil {
+		t.Fatalf("UseRCI: %v", err)
+	}
+	ctx := context.Background()
+
+	if ip := lanIPFromShowInterface(ctx, "Bridge0"); ip != "192.168.7.1" {
+		t.Errorf("lanIPFromShowInterface via RCI = %q, want 192.168.7.1", ip)
+	}
+	if !WGInterfaceUp(ctx, "Wireguard0") {
+		t.Error("WGInterfaceUp via RCI = false, want true (state: up)")
+	}
+	pk, err := WGInterfacePublicKey(ctx, "Wireguard0")
+	if err != nil || pk != "SRVPUBKEYbase64000000000000000000000000000000=" {
+		t.Errorf("WGInterfacePublicKey via RCI = %q, %v", pk, err)
+	}
+	sum, err := ShowWGTransport(ctx, "Wireguard0")
+	if err != nil {
+		t.Fatalf("ShowWGTransport via RCI: %v", err)
+	}
+	for _, want := range []string{"состояние: up", "адрес: 10.55.0.1", "mtu: 1412", "last-handshake: 12", "online: yes"} {
+		if !strings.Contains(sum, want) {
+			t.Errorf("ShowWGTransport summary missing %q:\n%s", want, sum)
+		}
+	}
+}
+
+func TestNdmcRun_RCIServesObjectGroup(t *testing.T) {
+	const groupJSON = `{"fqdn":[
+	  {"name":"api.telegram.org","address":["149.154.167.220","149.154.167.221"]},
+	  {"name":"core.telegram.org","address":["149.154.167.99"]}
+	],"excluded-address":["10.0.0.1"]}`
+	srv := rciTestServer(t, "system\n", `{"release":"5.1.3"}`,
+		rciJSONRoute("/rci/show/object-group/fqdn/keenetic-xray-telegram", groupJSON),
+	)
+	withRCIOff(t)
+	origExec := ndmcExec
+	ndmcExec = func(_ context.Context, cmd string) (string, error) {
+		t.Errorf("ndmcExec called for %q -- RCI should have served it", cmd)
+		return "", nil
+	}
+	t.Cleanup(func() { ndmcExec = origExec })
+	if _, err := UseRCI(srv.URL); err != nil {
+		t.Fatalf("UseRCI: %v", err)
+	}
+
+	ips := objectGroupIPs(context.Background(), "keenetic-xray-telegram")
+	want := map[string]bool{"149.154.167.220": true, "149.154.167.221": true, "149.154.167.99": true}
+	if len(ips) != 3 {
+		t.Fatalf("objectGroupIPs via RCI = %v, want the 3 resolved addresses (not the excluded one)", ips)
+	}
+	for _, ip := range ips {
+		if !want[ip] {
+			t.Errorf("unexpected IP %q (excluded-address leaked?)", ip)
+		}
+	}
+}
+
+func TestNdmcRun_RCIInterfaceFetchErrorFallsThrough(t *testing.T) {
+	// Server has no /rci/show/interface route -> 404 -> ndmc still gets a shot.
+	srv := rciTestServer(t, "system\n", `{"release":"5.1.3"}`)
+	withRCIOff(t)
+	var seen string
+	origExec := ndmcExec
+	ndmcExec = func(_ context.Context, cmd string) (string, error) {
+		seen = cmd
+		return "exec-answer", nil
+	}
+	t.Cleanup(func() { ndmcExec = origExec })
+	if _, err := UseRCI(srv.URL); err != nil {
+		t.Fatalf("UseRCI: %v", err)
+	}
+	out, err := ndmcRun(context.Background(), "show interface Bridge0")
+	if err != nil || out != "exec-answer" || seen != "show interface Bridge0" {
+		t.Errorf("show interface fetch error should fall through to ndmc: out=%q err=%v seen=%q", out, err, seen)
+	}
+}
+
+func TestInterfaceTextFromRCI(t *testing.T) {
+	txt, err := interfaceTextFromRCI([]byte(rciWGJSON))
+	if err != nil {
+		t.Fatalf("interfaceTextFromRCI: %v", err)
+	}
+	// wireguard: must come before the interface public-key, which must
+	// come before peer: -- WGInterfacePublicKey relies on that order.
+	iWG := strings.Index(txt, "wireguard:")
+	iKey := strings.Index(txt, "public-key: SRVPUBKEY")
+	iPeer := strings.Index(txt, "peer:")
+	if !(iWG >= 0 && iWG < iKey && iKey < iPeer) {
+		t.Errorf("block order wrong (wg=%d key=%d peer=%d):\n%s", iWG, iKey, iPeer, txt)
+	}
+	if !strings.Contains(txt, "connected: yes") {
+		t.Errorf("bool `connected:true` should render as `yes`:\n%s", txt)
+	}
+	if !strings.Contains(txt, "mtu: 1412") {
+		t.Errorf("integer mtu should render without a decimal:\n%s", txt)
+	}
+
+	// Wrapped form {"Wireguard0": {...}}.
+	wrapped := `{"Wireguard0":` + rciWGJSON + `}`
+	tw, err := interfaceTextFromRCI([]byte(wrapped))
+	if err != nil || !strings.Contains(tw, "state: up") {
+		t.Errorf("wrapped form not unwrapped: %v\n%s", err, tw)
+	}
+
+	// Unrecognisable object -> error (so ndmcRun surfaces it).
+	if _, err := interfaceTextFromRCI([]byte(`{"foo":"bar"}`)); err == nil {
+		t.Error("expected an error for an object with no state/address/id")
+	}
+	if _, err := interfaceTextFromRCI([]byte(`not json`)); err == nil {
+		t.Error("expected an error for non-JSON")
+	}
+}
+
+func TestObjectGroupTextFromRCI(t *testing.T) {
+	cases := []struct {
+		name, json string
+		want       string
+	}{
+		{"nested fqdn list", `{"fqdn":[{"address":["1.1.1.1","8.8.8.8"]}]}`, "1.1.1.1\n8.8.8.8\n"},
+		{"flat address array", `{"address":["8.8.8.8","1.1.1.1"]}`, "1.1.1.1\n8.8.8.8\n"},
+		{"dedup + sort", `{"a":["9.9.9.9","1.1.1.1","9.9.9.9"]}`, "1.1.1.1\n9.9.9.9\n"},
+		{"excluded key skipped", `{"address":["1.1.1.1"],"excluded-address":["2.2.2.2"]}`, "1.1.1.1\n"},
+		{"no v6, no cidr", `{"a":["2001:db8::1","1.1.1.1/32","1.1.1.1"]}`, "1.1.1.1\n"},
+		{"empty is handled", `{"fqdn":[]}`, ""},
+	}
+	for _, c := range cases {
+		got, err := objectGroupTextFromRCI([]byte(c.json))
+		if err != nil {
+			t.Errorf("%s: %v", c.name, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+	if _, err := objectGroupTextFromRCI([]byte(`nope`)); err == nil {
+		t.Error("expected an error for non-JSON")
+	}
+}
+
+func TestScalarString(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{`"up"`, "up"},
+		{`1500`, "1500"},
+		{`1500.0`, "1500"},
+		{`3.5`, "3.5"},
+		{`true`, "yes"},
+		{`false`, "no"},
+		{`null`, ""},
+		{`{"x":1}`, ""},
+		{`[1,2]`, ""},
+	}
+	for _, c := range cases {
+		if got := scalarString([]byte(c.in)); got != c.want {
+			t.Errorf("scalarString(%s) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestIsDottedQuadV4(t *testing.T) {
+	yes := []string{"1.1.1.1", "192.168.0.1", "255.255.255.255", "0.0.0.0"}
+	no := []string{"1.1.1.1/32", "1.1.1.1:53", "2001:db8::1", "1.1.1", "example.com", "999.1.1.1"}
+	for _, s := range yes {
+		if !isDottedQuadV4(s) {
+			t.Errorf("isDottedQuadV4(%q) = false, want true", s)
+		}
+	}
+	for _, s := range no {
+		if isDottedQuadV4(s) {
+			t.Errorf("isDottedQuadV4(%q) = true, want false", s)
+		}
 	}
 }
 

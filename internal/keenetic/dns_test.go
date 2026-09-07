@@ -139,3 +139,38 @@ func TestClearDNS(t *testing.T) {
 		t.Errorf("ClearDNS touched an unmanaged upstream:\n%s", joined)
 	}
 }
+
+func TestSetLocalNameServer(t *testing.T) {
+	sent := fakeNdmc(t, nil)
+	if err := SetLocalNameServer(context.Background(), "192.168.1.1", 5353, true); err != nil {
+		t.Fatalf("on: %v", err)
+	}
+	if got := strings.Join(*sent, "|"); got != "ip name-server 192.168.1.1:5353|system configuration save" {
+		t.Errorf("on sent %q", got)
+	}
+
+	sent2 := fakeNdmc(t, nil)
+	if err := SetLocalNameServer(context.Background(), "192.168.1.1", 5353, false); err != nil {
+		t.Fatalf("off: %v", err)
+	}
+	if got := strings.Join(*sent2, "|"); got != "no ip name-server 192.168.1.1:5353|system configuration save" {
+		t.Errorf("off sent %q", got)
+	}
+}
+
+func TestLocalNameServerActive(t *testing.T) {
+	fakeNdmc(t, map[string]string{"show running-config": "system\n!\nip name-server 192.168.1.1:5353\n!\n"})
+	if on, err := LocalNameServerActive(context.Background(), "192.168.1.1", 5353); err != nil || !on {
+		t.Errorf("expected active, got %v %v", on, err)
+	}
+
+	fakeNdmc(t, map[string]string{"show running-config": "system\n    ip name-server 192.168.1.1:5353 mydomain on ISP\n!\n"})
+	if on, err := LocalNameServerActive(context.Background(), "192.168.1.1", 5353); err != nil || !on {
+		t.Errorf("expected active with trailing tokens, got %v %v", on, err)
+	}
+
+	fakeNdmc(t, map[string]string{"show running-config": "system\n!\n"})
+	if on, err := LocalNameServerActive(context.Background(), "192.168.1.1", 5353); err != nil || on {
+		t.Errorf("expected inactive, got %v %v", on, err)
+	}
+}

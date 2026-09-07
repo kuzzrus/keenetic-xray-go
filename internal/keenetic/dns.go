@@ -171,6 +171,51 @@ func ApplyDNS(ctx context.Context, want DNSDesired) (DNSReport, error) {
 	return rep, nil
 }
 
+// SetLocalNameServer adds or removes an `ip name-server <ip>:<port>`
+// entry (KeeneticOS accepts the colon form for a non-standard port; the
+// bare positional form treats the second field as a domain). Used to
+// point the router's dns-proxy at a locally-installed resolver
+// (internal/addons: unbound) WITHOUT `opkg dns-override` -- dns-proxy
+// stays in the path, so its DNS-name → route snooping keeps working.
+// `system configuration save` runs after. Keenetic rejects a loopback
+// address here, so the caller passes the LAN IP.
+func SetLocalNameServer(ctx context.Context, ip string, port int, on bool) error {
+	if !Available() {
+		return fmt.Errorf("ndmc not found (not a Keenetic router?)")
+	}
+	spec := fmt.Sprintf("ip name-server %s:%d", ip, port)
+	if !on {
+		spec = "no " + spec
+	}
+	for _, c := range []string{spec, "system configuration save"} {
+		if _, err := ndmcRun(ctx, c); err != nil {
+			return fmt.Errorf("%q: %w", c, err)
+		}
+	}
+	return nil
+}
+
+// LocalNameServerActive reports whether `ip name-server <ip>:<port>` is
+// in the running config.
+func LocalNameServerActive(ctx context.Context, ip string, port int) (bool, error) {
+	out, err := ndmcRun(ctx, "show running-config")
+	if err != nil {
+		return false, fmt.Errorf("show running-config: %w", err)
+	}
+	want := fmt.Sprintf("ip name-server %s:%d", ip, port)
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(strings.TrimSpace(line))
+		// "ip name-server <ip>:<port> [domain] [on <iface>]"
+		if len(f) >= 3 && f[0] == "ip" && f[1] == "name-server" && f[2] == fmt.Sprintf("%s:%d", ip, port) {
+			return true, nil
+		}
+		if strings.TrimSpace(line) == want {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // ShowDNS returns the router's current secure upstreams, sorted.
 func ShowDNS(ctx context.Context) (LiveDNS, error) {
 	if !Available() {

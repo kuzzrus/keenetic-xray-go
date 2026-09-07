@@ -453,6 +453,55 @@ type Config struct {
 	// (default: internal/presets.DefaultSourceURL). For a fork or a
 	// mirror; "" -> the default.
 	PresetsSourceURL string `json:"presets_source_url,omitempty"`
+
+	// DNS, when set, has the daemon keep Keenetic's dns-proxy pointed at
+	// the chosen DNS-over-TLS / DNS-over-HTTPS upstreams. Empty -> the
+	// router's DNS config is left entirely alone.
+	DNS DNSConfig `json:"dns,omitempty"`
+}
+
+// DNSConfig is the desired set of secure DNS upstreams for Keenetic's
+// built-in dns-proxy. Provider is a dnsupstream catalogue id (or
+// "custom"/""), kept for the UI; DoT/DoH are the concrete endpoints the
+// daemon reconciles onto the router. internal/keenetic only ever
+// adds/removes upstreams whose IP/URL is in this project's known set, so
+// a hand-added upstream is never touched.
+type DNSConfig struct {
+	Provider string         `json:"provider,omitempty"`
+	DoT      []DNSHostTLS   `json:"dot,omitempty"`
+	DoH      []DNSHostHTTPS `json:"doh,omitempty"`
+}
+
+type DNSHostTLS struct {
+	IP  string `json:"ip"`
+	SNI string `json:"sni"`
+}
+
+type DNSHostHTTPS struct {
+	URL string `json:"url"`
+}
+
+// Configured reports whether any secure upstream is set.
+func (d DNSConfig) Configured() bool { return len(d.DoT) > 0 || len(d.DoH) > 0 }
+
+var dnsSNIRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$`)
+
+func (d DNSConfig) validate() error {
+	for _, t := range d.DoT {
+		if net.ParseIP(strings.TrimSpace(t.IP)) == nil {
+			return fmt.Errorf("dns: DoT upstream %q: не IP-адрес", t.IP)
+		}
+		if !dnsSNIRe.MatchString(strings.ToLower(strings.TrimSpace(t.SNI))) {
+			return fmt.Errorf("dns: DoT upstream %s: SNI %q не похож на имя хоста", t.IP, t.SNI)
+		}
+	}
+	for _, h := range d.DoH {
+		u := strings.TrimSpace(h.URL)
+		if !strings.HasPrefix(u, "https://") || len(u) < len("https://a.bc/") || strings.ContainsAny(u, " \t\"") {
+			return fmt.Errorf("dns: DoH upstream %q: нужен https:// URL", h.URL)
+		}
+	}
+	return nil
 }
 
 // ValidXHTTPMode reports whether s is an acceptable XHTTPMode: empty
@@ -822,6 +871,9 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("xhttp_mode %q: want auto|packet-up|stream-up|stream-one", c.XHTTPMode)
 	}
 	if err := c.WGTransport.validate(); err != nil {
+		return err
+	}
+	if err := c.DNS.validate(); err != nil {
 		return err
 	}
 	return nil

@@ -56,6 +56,7 @@ func reconcileOnce(ctx context.Context, logf func(string, ...any)) {
 	applyRoutesAtStartup(cfg, logf) // already drift-based and quiet-when-clean
 	reconcileWGTransport(ctx, cfg, logf)
 	reconcileMSSClamp(ctx, cfg, logf)
+	reconcileDNS(ctx, cfg, logf)
 }
 
 // reconcileProxy0 re-points the Proxy interface at the local inbound only

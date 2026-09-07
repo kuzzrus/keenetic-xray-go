@@ -32,6 +32,7 @@ const (
 	wizRouteName    // route list: step 1, the name (new-list flow)
 	wizRouteEntries // route list: the domains/subnets to add or remove
 	wizRouteIface   // an interface name for an already-chosen list
+	wizDNSCustom    // custom DoT/DoH upstream lines for 🧭 DNS
 )
 
 func (b *TelegramBot) startAddRouterWizard(ctx context.Context, chatID int64) {
@@ -215,6 +216,10 @@ func (b *TelegramBot) handleWizardText(ctx context.Context, chatID int64, text s
 
 	case wizRouteIface:
 		b.wizardRouteIface(ctx, chatID, st, strings.TrimSpace(text))
+		return true
+
+	case wizDNSCustom:
+		b.wizardDNSCustom(ctx, chatID, st, text)
 		return true
 	}
 

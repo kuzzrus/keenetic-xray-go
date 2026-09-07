@@ -67,6 +67,8 @@ func run(args []string) error {
 		return cmdLogs(rest)
 	case "routes":
 		return cmdRoutes(rest)
+	case "dns":
+		return cmdDNS(rest)
 	case "transport":
 		return cmdTransport(rest)
 	case "internal":
@@ -184,6 +186,7 @@ func cmdDaemon(args []string) error {
 	applyRoutesAtStartup(cfg, logf)
 	applyWGTransportAtStartup(cfg, logf)
 	applyMSSClamp(cfg, logf)
+	applyDNSAtStartup(cfg, logf)
 	go routerReconcileLoop(ctx, logf)
 	go presetRefreshLoop(ctx, logf)
 	watchReconcileSignal(ctx, func() { reconcileOnce(ctx, logf) }) // SIGUSR1 from the netfilter.d hook

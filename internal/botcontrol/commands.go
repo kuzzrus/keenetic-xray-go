@@ -205,6 +205,16 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 		return h.routesPresetSync(ctx, cmd.Args)
 	case ActionRoutesPresetUpdate:
 		return h.routesPresetUpdate(ctx)
+	case ActionDNSShow:
+		return h.dnsShow(ctx)
+	case ActionDNSTest:
+		return h.dnsTest(ctx)
+	case ActionDNSPreset:
+		return h.dnsPreset(ctx, cmd.Args)
+	case ActionDNSSet:
+		return h.dnsSet(ctx, cmd.Args)
+	case ActionDNSOff:
+		return h.dnsOff(ctx)
 	default:
 		return "", fmt.Errorf("unknown action %q", cmd.Action)
 	}

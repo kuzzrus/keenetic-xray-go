@@ -553,7 +553,8 @@ const helpText = `/menu — меню с кнопками (проще всего)
 /logs <router> [N] — последние N строк лога демона (по умолч. 200)
 /ports <router> <socks-port> <http-port> — сменить локальные порты (применяется на лету)
 /routes <router> list|show|new <имя> <домены…>|add|del|rm|on|off|iface <имя> <ProxyN|WireguardN> — списки доменов в туннель (KeeneticOS 5.0+)
-/routes <router> preset add <имя> [ip]|sync [<имя>|all] — готовые списки по сервисам (или кнопка 📦 Готовые списки)`
+/routes <router> preset add <имя> [ip]|sync [<имя>|all] — готовые списки по сервисам (или кнопка 📦 Готовые списки)
+/dns <router> show|test|preset <id> [dot|doh|both]|off — защищённый DNS (DoT/DoH) для роутерного dns-proxy (или кнопка 🧭 DNS)`
 
 func (b *TelegramBot) dispatch(ctx context.Context, text string) string {
 	fields := strings.Fields(text)
@@ -625,8 +626,39 @@ func (b *TelegramBot) dispatch(ctx context.Context, text string) string {
 		return b.runRouterCommand(ctx, args[:1], ActionSetPorts, args[1:])
 	case "/routes":
 		return b.dispatchRoutes(ctx, args)
+	case "/dns":
+		return b.dispatchDNS(ctx, args)
 	default:
 		return "неизвестная команда. Откройте /menu или /help"
+	}
+}
+
+// dispatchDNS routes /dns <router> {show|test|preset <id> [dot|doh|both]|off}.
+func (b *TelegramBot) dispatchDNS(ctx context.Context, args []string) string {
+	usage := "формат: /dns <роутер> {show | test | preset <id> [dot|doh|both] | off}"
+	if len(args) < 1 {
+		return usage
+	}
+	rid := args[:1]
+	if len(args) < 2 || args[1] == "show" {
+		return b.runRouterCommand(ctx, rid, ActionDNSShow, nil)
+	}
+	switch args[1] {
+	case "test":
+		return b.runRouterCommand(ctx, rid, ActionDNSTest, nil)
+	case "preset":
+		if len(args) < 3 {
+			return usage
+		}
+		mode := "both"
+		if len(args) >= 4 {
+			mode = args[3]
+		}
+		return b.runRouterCommand(ctx, rid, ActionDNSPreset, []string{args[2], mode})
+	case "off":
+		return b.runRouterCommand(ctx, rid, ActionDNSOff, nil)
+	default:
+		return usage
 	}
 }
 

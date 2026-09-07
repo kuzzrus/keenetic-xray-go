@@ -30,9 +30,12 @@ func (h *RouterHandler) addonList(ctx context.Context) (string, error) {
 				run = "1"
 			}
 		}
-		// id \t title \t installed \t running \t version \t detail
+		// id \t title \t installed \t running \t version \t detail.
+		// "-" stands in for an empty version/detail so no field is ever
+		// blank -- a trailing empty tab-field is fragile to trim on the
+		// way back (parseAddonList).
 		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			a.ID(), a.Title(), inst, run, st.Version, oneLine(st.Detail))
+			a.ID(), a.Title(), inst, run, dashIfEmpty(st.Version), dashIfEmpty(oneLine(st.Detail)))
 	}
 	return strings.TrimRight(b.String(), "\n"), nil
 }
@@ -126,4 +129,11 @@ func (h *RouterHandler) addonConfigure(ctx context.Context, args []string) (stri
 // oneLine flattens any newlines so a value is safe in a TSV field.
 func oneLine(s string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(s, "\n", " "), "\t", " ")
+}
+
+func dashIfEmpty(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }

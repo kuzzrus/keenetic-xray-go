@@ -17,7 +17,7 @@ func TestRouterHandler_AddonList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("addon_list: %v", err)
 	}
-	lines := strings.Split(strings.TrimSpace(out), "\n")
+	lines := strings.Split(strings.Trim(out, "\n"), "\n")
 	if len(lines) != 4 {
 		t.Fatalf("addon_list returned %d lines, want 4:\n%s", len(lines), out)
 	}
@@ -30,6 +30,11 @@ func TestRouterHandler_AddonList(t *testing.T) {
 		}
 		if f[0] != wantIDs[i] {
 			t.Errorf("line %d id = %q, want %q", i, f[0], wantIDs[i])
+		}
+		for j, v := range f {
+			if v == "" {
+				t.Errorf("line %d field %d is blank (should be a %q sentinel): %q", i, j, "-", ln)
+			}
 		}
 	}
 }
@@ -45,8 +50,10 @@ func TestRouterHandler_AddonUnknown(t *testing.T) {
 }
 
 func TestParseAddonList(t *testing.T) {
+	// The producer never emits a blank field -- "-" stands in for an
+	// empty version/detail (addonList's dashIfEmpty).
 	tsv := "unbound\tUnbound — рекурсивный DNS\t1\t1\t1.19.3\t127.0.0.1:5353\n" +
-		"nfqws2\tnfqws2 — обход DPI\t0\t-\t\t\n"
+		"nfqws2\tnfqws2 — обход DPI\t0\t-\t-\t-\n"
 	rows := parseAddonList(tsv)
 	if len(rows) != 2 {
 		t.Fatalf("parseAddonList len = %d, want 2", len(rows))
@@ -54,8 +61,8 @@ func TestParseAddonList(t *testing.T) {
 	if !rows[0].installed || rows[0].running != "1" || rows[0].version != "1.19.3" || rows[0].detail != "127.0.0.1:5353" {
 		t.Errorf("row 0 = %+v", rows[0])
 	}
-	if rows[1].installed || rows[1].running != "-" {
-		t.Errorf("row 1 = %+v", rows[1])
+	if rows[1].installed || rows[1].running != "-" || rows[1].version != "" || rows[1].detail != "" {
+		t.Errorf("row 1 = %+v (want not-installed, running \"-\", version/detail empty)", rows[1])
 	}
 }
 

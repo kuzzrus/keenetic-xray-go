@@ -32,18 +32,29 @@ type addonRow struct {
 
 func parseAddonList(out string) []addonRow {
 	var rows []addonRow
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimRight(line, "\r")
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
 		f := strings.Split(line, "\t")
 		if len(f) < 6 {
 			continue
 		}
 		rows = append(rows, addonRow{
 			id: f[0], title: f[1], installed: f[2] == "1",
-			running: f[3], version: f[4], detail: f[5],
+			running: f[3], version: undash(f[4]), detail: undash(f[5]),
 		})
 	}
 	return rows
+}
+
+// undash reverses addonList's "-" sentinel for an empty field.
+func undash(s string) string {
+	if s == "-" {
+		return ""
+	}
+	return s
 }
 
 func addonsScreenKB(id string, rows []addonRow) inlineKeyboard {

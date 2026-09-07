@@ -215,6 +215,18 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 		return h.dnsSet(ctx, cmd.Args)
 	case ActionDNSOff:
 		return h.dnsOff(ctx)
+	case ActionAddonList:
+		return h.addonList(ctx)
+	case ActionAddonShow:
+		return h.addonShow(ctx, cmd.Args)
+	case ActionAddonStatus:
+		return h.addonStatus(ctx, cmd.Args)
+	case ActionAddonInstall:
+		return h.addonInstall(ctx, cmd.Args)
+	case ActionAddonRemove:
+		return h.addonRemove(ctx, cmd.Args)
+	case ActionAddonConfigure:
+		return h.addonConfigure(ctx, cmd.Args)
 	default:
 		return "", fmt.Errorf("unknown action %q", cmd.Action)
 	}

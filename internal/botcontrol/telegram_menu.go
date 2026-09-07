@@ -52,8 +52,8 @@ func routerCardKB(id string) inlineKeyboard {
 		{{Text: "⬆️ primary", CallbackData: "act:sw_pri:" + id}, {Text: "⬇️ backup", CallbackData: "act:sw_bak:" + id}},
 		{{Text: "🔗 Источники", CallbackData: "srcm:" + id}, {Text: "🐕 Вотчдог", CallbackData: "wdm:" + id}},
 		{{Text: "⚙️ Порты и транспорт", CallbackData: "ptm:" + id}, {Text: "🧩 Ядро xray", CallbackData: "corem:" + id}},
-		{{Text: "📍 Маршруты", CallbackData: "rtm:" + id}, {Text: "🔄 Обновить подписку", CallbackData: "act:sub_refresh:" + id}},
-		{{Text: "♻️ Рестарт демона", CallbackData: "act:restart:" + id}, {Text: "🔁 Обновить агент", CallbackData: "upd:" + id}},
+		{{Text: "📍 Маршруты", CallbackData: "rtm:" + id}, {Text: "🧩 Дополнения", CallbackData: "adnm:" + id}},
+		{{Text: "🔄 Обновить подписку", CallbackData: "act:sub_refresh:" + id}, {Text: "♻️ Рестарт демона", CallbackData: "act:restart:" + id}, {Text: "🔁 Обновить агент", CallbackData: "upd:" + id}},
 		{{Text: "✏️ Переименовать", CallbackData: "rename:" + id}, {Text: "📦 Установка агента", CallbackData: "install:" + id}},
 		{{Text: "🗑 Удалить роутер", CallbackData: "del:" + id}},
 		{{Text: "🔄 Обновить", CallbackData: "router:" + id}, {Text: "⬅️ Роутеры", CallbackData: "routers"}, {Text: "🏠 Меню", CallbackData: "menu"}},
@@ -372,6 +372,8 @@ func (b *TelegramBot) handleCallback(ctx context.Context, cb tgCallbackQuery) {
 		b.enqueueCardArgs(ctx, cb, strings.TrimPrefix(data, "corestable:"), ActionUpdateCore, []string{"stable"})
 	case strings.HasPrefix(data, "dn") && b.handleDNSCallback(ctx, cb, data):
 		// the 🧭 DNS flow (dnsm/dnp/dna/dntest/dnoff/dncust)
+	case strings.HasPrefix(data, "adn") && b.handleAddonsCallback(ctx, cb, data):
+		// the 🧩 Дополнения flow (adnm/adn/adni/adnr/adns/adnc)
 	case strings.HasPrefix(data, "rtm:"):
 		b.openRoutesScreen(ctx, cb, strings.TrimPrefix(data, "rtm:"))
 	case strings.HasPrefix(data, "rtp") && b.handlePresetCallback(ctx, cb, data):

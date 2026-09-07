@@ -87,6 +87,15 @@ const (
 	ActionDNSPreset = "dns_preset" // args[0]=provider id, args[1]="dot"|"doh"|"both"
 	ActionDNSSet    = "dns_set"    // args[0]="dot"|"doh", args[1]=newline/space list ("<ip> <sni>" pairs, or URLs)
 	ActionDNSOff    = "dns_off"    // no args -> remove every managed upstream
+
+	// Optional router-side components (internal/addons): unbound, nfqws2,
+	// conntrack, cron. Surfaced on the bot's 🧩 Дополнения screen.
+	ActionAddonList      = "addon_list"      // no args -> TSV: id, title, installed(0|1), running(0|1|-), version, detail
+	ActionAddonShow      = "addon_show"      // args[0]=id -> About + one-line state
+	ActionAddonStatus    = "addon_status"    // args[0]=id -> free-form health report
+	ActionAddonInstall   = "addon_install"   // args[0]=id
+	ActionAddonRemove    = "addon_remove"    // args[0]=id
+	ActionAddonConfigure = "addon_configure" // args[0]=id, args[1:]=key=value pairs
 )
 
 // Command is a single unit of work queued for a router by the control

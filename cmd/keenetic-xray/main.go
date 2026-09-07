@@ -71,6 +71,8 @@ func run(args []string) error {
 		return cmdDNS(rest)
 	case "transport":
 		return cmdTransport(rest)
+	case "addon", "addons":
+		return cmdAddon(rest)
 	case "internal":
 		return cmdInternal(rest)
 	default:
@@ -107,7 +109,9 @@ commands:
   routes {list|show [name]|new <name> [entries…]|add <name> <entries…>|del <name> <entries…>|rm <name>|enable|disable <name>|set <name> [--iface=] [--exclusive]|apply}
                                                   KeeneticOS 5.0+ DNS-based routing: send named lists of domains/subnets through Proxy0
   transport {show|mode auto|packet-up|stream-up|stream-one|mode-clear|mss <1200..1452|auto|off>|wg {show|on|off}}
-                                                  xhttp mode override; forwarded-TCP MSS clamp on the Proxy0 path (PMTU fix); or an in-router WireGuard hop into xray`)
+                                                  xhttp mode override; forwarded-TCP MSS clamp on the Proxy0 path (PMTU fix); or an in-router WireGuard hop into xray
+  addon {list|show <id>|status <id>|install <id>|remove <id>|configure <id> <k=v>…}
+                                                  optional router-side components: unbound (local DNS), nfqws2 (DPI bypass), conntrack, cron`)
 }
 
 func cmdDaemon(args []string) error {

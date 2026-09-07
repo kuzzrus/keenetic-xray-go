@@ -44,14 +44,22 @@ func writeDaemonPIDFile() (cleanup func(), err error) {
 // connection a reconnect.
 func applyDaemonChange(in *bufio.Reader, interactive bool) {
 	if signalDaemonReload() {
-		fmt.Println("applied live (no restart needed)")
+		fmt.Println("применено на лету (рестарт не нужен)")
+		return
+	}
+	// Fresh install: postinst runs `S99keenetic-xray start` right after
+	// the wizard, so there's nothing to restart -- and restarting here
+	// would be actively harmful, since rc.func's stop matches by process
+	// name and kills the running `keenetic-xray setup` process itself.
+	if os.Getenv("KEENETIC_XRAY_POSTINST") == "1" {
+		fmt.Println("демон запустится сразу после установки — рестарт не нужен")
 		return
 	}
 	if interactive {
 		offerDaemonRestart(in)
 		return
 	}
-	fmt.Printf("apply with: %s restart\n", initScript)
+	fmt.Printf("применить:  %s restart\n", initScript)
 }
 
 // signalDaemonReload sends SIGHUP to the running daemon (found via its
@@ -118,18 +126,25 @@ func runningDaemonPID() (int, error) {
 // box, foreground use) it just prints how to start the daemon.
 func offerDaemonRestart(in *bufio.Reader) {
 	if fi, err := os.Stat(initScript); err != nil || fi.IsDir() {
-		fmt.Println("Start the failover daemon with: keenetic-xray daemon")
+		fmt.Println("запусти демон:  keenetic-xray daemon")
 		return
 	}
-	fmt.Print("\nRestart the failover daemon now to apply? [Y/n]: ")
+	fmt.Print("\nПерезапустить демон сейчас, чтобы применить? [Y/n]: ")
 	line, _ := in.ReadString('\n')
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "n") {
-		fmt.Printf("not restarted -- apply later with: %s restart\n", initScript)
+		fmt.Printf("не перезапущен — применить позже:  %s restart\n", initScript)
 		return
 	}
-	cmd := exec.Command(initScript, "restart")
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil {
-		fmt.Printf("restart failed (%v) -- run it yourself: %s restart\n", err, initScript)
+	// Detached, after a beat: rc.func's stop kills processes by name
+	// (PROCS=keenetic-xray), so a synchronous restart here would take
+	// this very process (`keenetic-xray setup` / `proxy0 set` / …) down
+	// with the daemon. Let the caller return first, then restart.
+	cmd := exec.Command("/bin/sh", "-c", fmt.Sprintf("sleep 1; %s restart", initScript))
+	restartDetached(cmd)
+	if err := cmd.Start(); err != nil {
+		fmt.Printf("перезапуск не удался (%v) — сделай сам:  %s restart\n", err, initScript)
+		return
 	}
+	_ = cmd.Process.Release()
+	fmt.Println("демон перезапускается…")
 }

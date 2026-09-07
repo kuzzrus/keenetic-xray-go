@@ -3,6 +3,7 @@ package addons
 import (
 	"context"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 )
@@ -33,7 +34,20 @@ const (
 	unboundPort     = 5353
 	unboundDefCache = 8 // MB, per rrset/msg cache
 	unboundRtrMark  = "# mode: router"
+	// unboundManagedMark tags a conf this component wrote, so Install
+	// knows to replace a stock package conf rather than leave it.
+	unboundManagedMark = "Managed by keenetic-xray"
 )
+
+// privateV4 reports whether s is a plain RFC1918 IPv4 -- the only thing
+// valid as the router-mode listen address / name-server target.
+func privateV4(s string) bool {
+	ip := net.ParseIP(strings.TrimSpace(s))
+	if ip == nil || ip.To4() == nil {
+		return false
+	}
+	return ip.IsPrivate()
+}
 
 type unboundAddon struct{}
 
@@ -84,11 +98,15 @@ func unboundRead(ctx context.Context) unboundState {
 	if n := unboundGrepInt(s, "msg-cache-size:"); n > 0 {
 		st.cacheMB = n / (1024 * 1024)
 	}
-	for _, line := range strings.Split(s, "\n") {
-		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "interface:"); ok {
-			v = strings.TrimSpace(v)
-			if v != "127.0.0.1" && v != "0.0.0.0" && v != "::1" {
-				st.routerIP = v
+	// routerIP is only meaningful for a conf WE put into router mode --
+	// a stock package conf can carry `interface: ::0` etc. that must not
+	// be mistaken for the router's LAN IP.
+	if st.routerMode {
+		for _, line := range strings.Split(s, "\n") {
+			if v, ok := strings.CutPrefix(strings.TrimSpace(line), "interface:"); ok {
+				if v = strings.TrimSpace(v); privateV4(v) {
+					st.routerIP = v
+				}
 			}
 		}
 	}
@@ -114,7 +132,10 @@ func (*unboundAddon) Install(ctx context.Context) error {
 	if err := opkgInstall(ctx, unboundPkg); err != nil {
 		return err
 	}
-	if _, err := readFile(unboundConf); err != nil {
+	// Replace a stock package conf (or a missing one) with ours -- the
+	// router-mode logic reads its own markers back, and a stock conf can
+	// carry an `interface: ::0` that must not leak into `ip name-server`.
+	if body, err := readFile(unboundConf); err != nil || !strings.Contains(string(body), unboundManagedMark) {
 		if err := writeFile(unboundConf, []byte(unboundConfBody(unboundDefCache, true, false, "")), 0o644); err != nil {
 			return fmt.Errorf("запись %s: %w", unboundConf, err)
 		}
@@ -127,19 +148,33 @@ func (*unboundAddon) Install(ctx context.Context) error {
 
 func (*unboundAddon) Remove(ctx context.Context) error {
 	u := unboundRead(ctx)
-	if u.routerMode && keeneticAvailable() {
-		ip := u.routerIP
-		if ip == "" {
-			ip, _ = keeneticLANIP(ctx, "")
-		}
-		if ip != "" {
-			if err := setLocalNameServer(ctx, ip, u.port, false); err != nil {
-				return fmt.Errorf("сначала убираю `ip name-server %s:%d` — не вышло: %w", ip, u.port, err)
-			}
-		}
+	// Best-effort: drop the name-server entry if we have a real IP for it.
+	// A leftover entry just gives dns-proxy a dead upstream alongside its
+	// working ones -- not worth aborting the removal over.
+	if u.routerMode && keeneticAvailable() && privateV4(u.routerIP) {
+		_ = setLocalNameServer(ctx, u.routerIP, u.port, false)
 	}
 	_, _ = initdRun(ctx, unboundInit, "stop")
 	return opkgRemove(ctx, unboundPkg)
+}
+
+// routerLANIP resolves the LAN IP for router mode: a valid IP already in
+// our conf, else ask ndmc. Never returns a non-RFC1918 value.
+func routerLANIP(ctx context.Context, u unboundState) (string, error) {
+	if privateV4(u.routerIP) {
+		return u.routerIP, nil
+	}
+	if !keeneticAvailable() {
+		return "", fmt.Errorf("router-dns требует роутер Keenetic (ndmc не найден)")
+	}
+	ip, err := keeneticLANIP(ctx, "")
+	if err != nil {
+		return "", fmt.Errorf("не удалось определить LAN IP роутера: %w", err)
+	}
+	if !privateV4(ip) {
+		return "", fmt.Errorf("LAN IP роутера %q не похож на приватный IPv4", ip)
+	}
+	return ip, nil
 }
 
 func (*unboundAddon) Configure(ctx context.Context, kv map[string]string) error {
@@ -182,20 +217,18 @@ func (*unboundAddon) Configure(ctx context.Context, kv map[string]string) error 
 	}
 
 	// The LAN IP the router-mode conf binds and the name-server points at.
-	lanIP := u.routerIP
-	if router && lanIP == "" {
-		if !keeneticAvailable() {
-			return fmt.Errorf("router-dns требует роутер Keenetic (ndmc не найден)")
-		}
-		ip, err := keeneticLANIP(ctx, "")
+	// Resolve it up front (and validate) so a bad value never reaches ndmc.
+	var lanIP string
+	if router {
+		ip, err := routerLANIP(ctx, u)
 		if err != nil {
-			return fmt.Errorf("не удалось определить LAN IP роутера: %w", err)
+			return err
 		}
 		lanIP = ip
 	}
 
-	writeConf := func() error {
-		if err := writeFile(unboundConf, []byte(unboundConfBody(cache, dnssec, router, lanIP)), 0o644); err != nil {
+	writeConf := func(rtr bool, ip string) error {
+		if err := writeFile(unboundConf, []byte(unboundConfBody(cache, dnssec, rtr, ip)), 0o644); err != nil {
 			return err
 		}
 		if _, err := initdRun(ctx, unboundInit, "restart"); err != nil {
@@ -209,23 +242,28 @@ func (*unboundAddon) Configure(ctx context.Context, kv map[string]string) error 
 		// Bring unbound up on the LAN IP first, then hand dns-proxy the
 		// name-server -- dns-proxy keeps serving from its existing
 		// upstreams throughout, so there's no DNS gap.
-		if err := writeConf(); err != nil {
+		if err := writeConf(true, lanIP); err != nil {
 			return err
 		}
 		if err := setLocalNameServer(ctx, lanIP, u.port, true); err != nil {
+			_ = writeConf(false, "") // roll back to local so we're not half-on
 			return fmt.Errorf("ip name-server %s:%d: %w", lanIP, u.port, err)
 		}
 	case "off":
-		if keeneticAvailable() && lanIP != "" {
-			if err := setLocalNameServer(ctx, lanIP, u.port, false); err != nil {
-				return fmt.Errorf("не смог убрать `ip name-server %s:%d`: %w", lanIP, u.port, err)
+		// Best-effort name-server removal: use the IP the conf recorded;
+		// if it's junk (recovering from a bad state) just skip it -- the
+		// important part is getting the conf back to local.
+		if keeneticAvailable() && privateV4(u.routerIP) {
+			if err := setLocalNameServer(ctx, u.routerIP, u.port, false); err != nil {
+				_ = writeConf(false, "")
+				return fmt.Errorf("вернул конфиг в локальный режим, но `ip name-server %s:%d` убрать не вышло — сними вручную: %w", u.routerIP, u.port, err)
 			}
 		}
-		if err := writeConf(); err != nil {
+		if err := writeConf(false, ""); err != nil {
 			return err
 		}
 	default:
-		if err := writeConf(); err != nil {
+		if err := writeConf(router, lanIP); err != nil {
 			return err
 		}
 	}

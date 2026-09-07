@@ -3,7 +3,6 @@ package addons
 import (
 	"context"
 	"fmt"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,34 +19,24 @@ func init() { Register(&nfqws2Addon{}) }
 // hooks. This component just adds the feed, installs the package, and
 // edits its config file / domain list.
 const (
-	nfqwsPkg      = "nfqws2-keenetic"
-	nfqwsFeedName = "nfqws2-keenetic" // src/gz <name> -- must match the package feed name
-	nfqwsFeedBase = "https://nfqws.github.io/nfqws2-keenetic"
+	nfqwsPkg = "nfqws2-keenetic"
+	// src/gz <name> <url>. The name must match the package feed name; the
+	// "/all" path is the repo's documented universal index -- opkg picks
+	// the right arch build from it via the `arch` priorities in
+	// opkg.conf. An earlier attempt at per-arch URLs was a red herring:
+	// the real blocker is that opkg's default wget-nossl can't fetch the
+	// https GitHub Pages feed at all (see Install).
+	nfqwsFeedName = "nfqws2-keenetic"
+	nfqwsFeedURL  = "https://nfqws.github.io/nfqws2-keenetic/all"
 	nfqwsFeedFile = "/opt/etc/opkg/nfqws2-keenetic.conf"
-	nfqwsInit     = "S51nfqws2"
-	nfqwsConf     = "/opt/etc/nfqws2/nfqws2.conf"
-	nfqwsUserList = "/opt/etc/nfqws2/lists/user.list"
-	nfqwsLog      = "/opt/var/log/nfqws2.log"
+	// nfqwsLegacyFeedFile is what keenetic-xray < v0.25.2 wrote (wrong
+	// feed name + broken URL); Install/Remove clean it up.
+	nfqwsLegacyFeedFile = "/opt/etc/opkg/nfqws2.conf"
+	nfqwsInit           = "S51nfqws2"
+	nfqwsConf           = "/opt/etc/nfqws2/nfqws2.conf"
+	nfqwsUserList       = "/opt/etc/nfqws2/lists/user.list"
+	nfqwsLog            = "/opt/var/log/nfqws2.log"
 )
-
-// nfqwsFeedURL is the arch-specific opkg feed. The nfqws2-keenetic repo
-// publishes per-arch indexes (mips / mipsel / aarch64 / …); the generic
-// "/all" path carries no installable packages, which is why an install
-// against it fails with "Unknown package".
-func nfqwsFeedURL() string {
-	arch := map[string]string{
-		"mipsle": "mipsel",
-		"mips":   "mips",
-		"arm64":  "aarch64",
-		"arm":    "armv7",
-		"386":    "x86",
-		"amd64":  "x86_64",
-	}[runtime.GOARCH]
-	if arch == "" {
-		arch = runtime.GOARCH
-	}
-	return nfqwsFeedBase + "/" + arch
-}
 
 type nfqws2Addon struct{}
 
@@ -85,11 +74,20 @@ func (*nfqws2Addon) Detect(ctx context.Context) State {
 }
 
 func (*nfqws2Addon) Install(ctx context.Context) error {
-	if err := writeFile(nfqwsFeedFile, []byte(fmt.Sprintf("src/gz %s %s\n", nfqwsFeedName, nfqwsFeedURL())), 0o644); err != nil {
+	// opkg's default downloader is wget-nossl, which can't fetch the
+	// https GitHub Pages feed ("wget: not an http or ftp url"). Swap in
+	// wget-ssl from the plain-http Entware feed. Best-effort -- any of
+	// these may already be in the target state.
+	_, _ = opkgRun(ctx, "update")
+	_, _ = opkgRun(ctx, "install", "ca-certificates", "wget-ssl")
+	_, _ = opkgRun(ctx, "remove", "wget-nossl")
+
+	_ = removeFile(nfqwsLegacyFeedFile)
+	if err := writeFile(nfqwsFeedFile, []byte(fmt.Sprintf("src/gz %s %s\n", nfqwsFeedName, nfqwsFeedURL)), 0o644); err != nil {
 		return fmt.Errorf("добавление репозитория nfqws2 (%s): %w", nfqwsFeedFile, err)
 	}
 	if err := opkgInstall(ctx, nfqwsPkg); err != nil {
-		return err
+		return fmt.Errorf("%w\n(если про wget/https — вручную: opkg install ca-certificates wget-ssl && opkg remove wget-nossl)", err)
 	}
 	// The package's postinst normally starts it; make sure.
 	_, _ = initdRun(ctx, nfqwsInit, "start")
@@ -102,6 +100,7 @@ func (*nfqws2Addon) Remove(ctx context.Context) error {
 		return err
 	}
 	_ = removeFile(nfqwsFeedFile)
+	_ = removeFile(nfqwsLegacyFeedFile)
 	return nil
 }
 

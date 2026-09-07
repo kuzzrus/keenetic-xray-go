@@ -243,8 +243,18 @@ func TestUnbound_InstallWritesConfAndStarts(t *testing.T) {
 		t.Fatalf("Install: %v", err)
 	}
 	conf := string(f.files[unboundConf])
-	if !strings.Contains(conf, "port: 5353") || !strings.Contains(conf, "interface: 127.0.0.1") {
+	if !strings.Contains(conf, "port: 5335") || !strings.Contains(conf, "interface: 127.0.0.1") {
 		t.Errorf("unbound.conf not sane: %q", conf)
+	}
+	// Entware-daemon essentials -- without these S61unbound can't track it
+	// and the stock conf's chroot/username assumptions bite.
+	for _, want := range []string{`username: ""`, `chroot: ""`, "pidfile:", "use-syslog: yes"} {
+		if !strings.Contains(conf, want) {
+			t.Errorf("unbound.conf missing %q:\n%s", want, conf)
+		}
+	}
+	if strings.Contains(conf, "port: 53\n") || strings.Contains(conf, "port: 5353") {
+		t.Errorf("must not use :53 (dns-proxy) or :5353 (mDNS): %q", conf)
 	}
 	if strings.Contains(conf, unboundRtrMark) {
 		t.Errorf("fresh install should be local mode, not router: %q", conf)
@@ -321,8 +331,8 @@ func TestUnbound_RouterDNSOnOffAndRemoveReverts(t *testing.T) {
 	if !strings.Contains(conf, unboundRtrMark) || !strings.Contains(conf, "interface: 192.168.1.1") {
 		t.Errorf("conf not in router mode: %q", conf)
 	}
-	if !ns["192.168.1.1:5353"] {
-		t.Errorf("ip name-server 192.168.1.1:5353 should be added; have %v", ns)
+	if !ns["192.168.1.1:5335"] {
+		t.Errorf("ip name-server 192.168.1.1:5335 should be added; have %v", ns)
 	}
 	if u := unboundRead(ctx); !u.routerMode || u.routerIP != "192.168.1.1" {
 		t.Errorf("unboundRead = %+v, want routerMode, routerIP 192.168.1.1", u)
@@ -332,7 +342,7 @@ func TestUnbound_RouterDNSOnOffAndRemoveReverts(t *testing.T) {
 	if err := a.Configure(ctx, map[string]string{"router-dns": "off"}); err != nil {
 		t.Fatalf("router-dns=off: %v", err)
 	}
-	if ns["192.168.1.1:5353"] {
+	if ns["192.168.1.1:5335"] {
 		t.Errorf("name-server should be removed after off; have %v", ns)
 	}
 	if strings.Contains(string(f.files[unboundConf]), unboundRtrMark) {
@@ -343,13 +353,13 @@ func TestUnbound_RouterDNSOnOffAndRemoveReverts(t *testing.T) {
 	if err := a.Configure(ctx, map[string]string{"router-dns": "on"}); err != nil {
 		t.Fatal(err)
 	}
-	if !ns["192.168.1.1:5353"] {
+	if !ns["192.168.1.1:5335"] {
 		t.Fatal("precondition: name-server should be set")
 	}
 	if err := a.Remove(ctx); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
-	if ns["192.168.1.1:5353"] {
+	if ns["192.168.1.1:5335"] {
 		t.Error("Remove must drop the ip name-server entry")
 	}
 	if _, still := f.installed[unboundPkg]; still {
@@ -406,8 +416,8 @@ func TestUnbound_StockConfInterfaceNotTreatedAsRouterIP(t *testing.T) {
 	if err := a.Configure(ctx, map[string]string{"router-dns": "on"}); err != nil {
 		t.Fatalf("router-dns=on: %v", err)
 	}
-	if !ns["192.168.1.1:5353"] {
-		t.Errorf("want ip name-server 192.168.1.1:5353; have %v", ns)
+	if !ns["192.168.1.1:5335"] {
+		t.Errorf("want ip name-server 192.168.1.1:5335; have %v", ns)
 	}
 	for k := range ns {
 		if strings.HasPrefix(k, "::") {
@@ -426,7 +436,7 @@ func TestUnbound_RouterDNSOffRecoversFromJunkIP(t *testing.T) {
 	ctx := context.Background()
 	a, _ := Find("unbound")
 	f.installed[unboundPkg] = "1.19-test"
-	f.files[unboundConf] = []byte("# " + unboundManagedMark + "\n" + unboundRtrMark + "\nserver:\n    interface: ::0\n    port: 5353\n")
+	f.files[unboundConf] = []byte("# " + unboundManagedMark + "\n" + unboundRtrMark + "\nserver:\n    interface: ::0\n    port: 5335\n")
 
 	if err := a.Configure(ctx, map[string]string{"router-dns": "off"}); err != nil {
 		t.Fatalf("router-dns=off from junk state: %v", err)
@@ -442,7 +452,7 @@ func TestPrivateV4(t *testing.T) {
 			t.Errorf("privateV4(%q) = false, want true", s)
 		}
 	}
-	for _, s := range []string{"::0", "::", "0.0.0.0", "8.8.8.8", "127.0.0.1", "", "not-an-ip", "192.168.1.1:5353"} {
+	for _, s := range []string{"::0", "::", "0.0.0.0", "8.8.8.8", "127.0.0.1", "", "not-an-ip", "192.168.1.1:5335"} {
 		if privateV4(s) {
 			t.Errorf("privateV4(%q) = true, want false", s)
 		}

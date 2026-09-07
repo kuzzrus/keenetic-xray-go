@@ -108,13 +108,13 @@ func mark(ours bool) string {
 
 func dnsTest(all bool) error {
 	pool := dnsupstream.Providers()
+	_, budget := dnsupstream.Budget()
 	if all {
 		pool = dnsupstream.TestPool()
-		fmt.Printf("проверяю %d провайдеров (пул --all) с роутера, таймаут 3с…\n", len(pool))
-	} else {
-		fmt.Println("проверяю провайдеров с роутера (DoT :853 / DoH :443, таймаут 3с)…")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	fmt.Printf("проверяю %d провайдеров с роутера (DoT :853 / DoH :443, таймаут %ds)…\n",
+		len(pool), int(budget.Seconds()))
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	res := dnsupstream.ProbeAll(ctx, pool)
 	fmt.Printf("\n%-24s %-16s %-16s %s\n", "провайдер", "DoT", "DoH", "")

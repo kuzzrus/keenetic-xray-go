@@ -70,6 +70,63 @@ func TestEnsure_ExistingBinaryShortCircuits(t *testing.T) {
 	}
 }
 
+func TestEnsure_KeepsExistingWhenVersionUnreadable(t *testing.T) {
+	dest := filepath.Join(t.TempDir(), "xray")
+	if err := os.WriteFile(dest, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	src, err := Ensure(context.Background(), Options{
+		Dest:    dest,
+		smoke:   func(string) error { return nil },
+		version: func(string) (string, error) { return "", fmt.Errorf("garbled") },
+		opkg:    func(context.Context) error { t.Fatal("opkg must not be called"); return nil },
+	})
+	if err != nil || src != "existing" {
+		t.Fatalf("Ensure = (%q, %v), want (existing, nil)", src, err)
+	}
+}
+
+func TestEnsure_UpgradesWhenInstalledVersionDiffers(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "xray")
+	if err := os.WriteFile(dest, []byte("OLD"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	base, _ := fakeRelease(t, DefaultTag, "NEW-PACKED-XRAY")
+
+	src, err := Ensure(context.Background(), Options{
+		Dest:    dest,
+		BaseURL: base,
+		smoke:   func(string) error { return nil },                                     // the old core "runs"...
+		version: func(string) (string, error) { return "Xray 1.2.3 (Xray, ...)", nil }, // ...but it's the wrong version
+		opkg:    func(context.Context) error { t.Fatal("opkg must not be called"); return nil },
+	})
+	if err != nil || src != "vendored" {
+		t.Fatalf("Ensure = (%q, %v), want (vendored, nil)", src, err)
+	}
+	if got, _ := os.ReadFile(dest); string(got) != "NEW-PACKED-XRAY" {
+		t.Fatalf("core not upgraded: %q", got)
+	}
+}
+
+func TestEnsure_KeepsExistingWhenVersionMatches(t *testing.T) {
+	dest := filepath.Join(t.TempDir(), "xray")
+	if err := os.WriteFile(dest, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	src, err := Ensure(context.Background(), Options{
+		Dest:  dest,
+		smoke: func(string) error { return nil },
+		version: func(string) (string, error) {
+			return "Xray " + strings.TrimPrefix(DefaultTag, "v") + " (Xray, ...)", nil
+		},
+		opkg: func(context.Context) error { t.Fatal("opkg must not be called"); return nil },
+	})
+	if err != nil || src != "existing" {
+		t.Fatalf("Ensure = (%q, %v), want (existing, nil)", src, err)
+	}
+}
+
 func TestEnsure_ForceReinstallsOverRunningBinary(t *testing.T) {
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "xray")

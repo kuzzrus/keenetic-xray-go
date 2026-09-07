@@ -17,6 +17,7 @@ func routesPreset(cfg *config.Config, args []string) error {
 	if len(args) == 0 {
 		return routesUsage()
 	}
+	presets.SetOverlay(presetsOverlayDir())
 	switch args[0] {
 	case "list", "ls":
 		return presetList(cfg)
@@ -29,6 +30,8 @@ func routesPreset(cfg *config.Config, args []string) error {
 		return presetAdd(cfg, args[1:])
 	case "sync":
 		return presetSyncCmd(cfg, args[1:])
+	case "update":
+		return cmdRoutesPresetUpdate(cfg)
 	default:
 		return routesUsage()
 	}

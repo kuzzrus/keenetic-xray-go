@@ -93,8 +93,7 @@ Bot: `📍 Маршруты` on a router card (add / remove entries, on/off,
 `telegram`, `discord`, `github`, … in ~10 category groups — generated
 from Geo-Aggregator (domains) and `lord-alfred/ipranges` + Telegram's own
 publication (CIDR) by `cmd/geo-gen`, refreshed daily in CI (see
-`internal/presets/data/README.md`). They're **embedded in the agent
-binary**, so a router gets a fresher list by updating the agent.
+`internal/presets/data/README.md`).
 
 ```
 keenetic-xray routes preset list                 # browse, with ✓ / ⬆ marks
@@ -102,22 +101,37 @@ keenetic-xray routes preset show youtube
 keenetic-xray routes preset add youtube --ip      # bind list "youtube" (+ "youtube-ip")
 keenetic-xray routes preset add youtube --iface=Wireguard4
 keenetic-xray routes preset sync youtube          # or --all
+keenetic-xray routes preset update                # pull fresh lists from the repo now
 ```
 
 Bot: `📍 Маршруты` → `📦 Готовые списки` → category → service →
-`Добавить (домены)` / `Домены + IP‑диапазоны`.
+`Добавить (домены)` / `Домены + IP‑диапазоны`; `🔄 Обновить из
+репозитория` on the category screen.
+
+**Where the lists come from at runtime.** The embedded copy is the
+baseline. The daemon also keeps a live overlay at
+`<config dir>/presets/` and refreshes it from the repo's
+`internal/presets/data/` on `main` once a day (and on
+`routes preset update` / the bot button) — so a router picks up a
+refreshed list **without a reinstall**. Every fetched line is re-checked
+through `config.ClassifyRouteEntry` before it's written; a list that
+fails to fetch or collapses to a fraction of its size is left as it was.
+Turn the auto-pull off with `presets_no_auto_update` in config
+(`presets_source_url` overrides the location for a fork). Same trust
+level as `internal/xraycore` fetching xray-core from this repo's
+releases.
 
 `add` creates a route list named after the preset (`youtube`, and with
 `--ip` also `youtube-ip`) and records which preset + content revision it
 came from (`RouteList.Preset` / `PresetRev`). Such a list is **managed**:
-a re-`add` or `sync` overwrites its entries wholesale from the embedded
+a re-`add` or `sync` overwrites its entries wholesale from the active
 preset — keep hand-tuned domains in a separate list. `preset add` refuses
 to take over a list of the same name that was made by hand.
 
-The bot/CLI compare a bound list's current entries against the embedded
-preset and show `⬆ +N −M` when they differ (usually because the agent was
-updated to a build with a newer list); `sync` pulls the new version in.
-The comparison is per-entry, so one added or removed domain shows up.
+The bot/CLI compare a bound list's current entries against the active
+preset (overlay if present, else embed) and show `⬆ +N −M` when they
+differ; `sync` pulls the new version in. The comparison is per-entry, so
+one added or removed domain shows up.
 
 CIDR companions (`<service>-ip`) exist only where the provider's IP block
 is genuinely that service's own and stays small after aggregation —

@@ -71,9 +71,10 @@ const (
 	ActionRoutesNames      = "routes_names"    // no args -> one "name\tcount\tstate\tiface" line per list (machine-readable, for the bot's list-as-buttons screen)
 	// Built-in curated preset lists (internal/presets), refreshed daily in
 	// the repo. See cmd/keenetic-xray/routes_preset.go.
-	ActionRoutesPresetList = "routes_preset_list" // no args -> TSV: name, service, title, category, kind, count, installed(0|1), driftAdded, driftRemoved; first line is "#cats\t<cat>\t<cat>..."
-	ActionRoutesPresetAdd  = "routes_preset_add"  // args[0]=preset name; optional "ip", "iface=<IfaceN>", "exclusive"
-	ActionRoutesPresetSync = "routes_preset_sync" // args[0]=preset name or "all"
+	ActionRoutesPresetList   = "routes_preset_list"   // no args -> TSV: name, service, title, category, kind, count, installed(0|1), driftAdded, driftRemoved; first lines are "#gen\t<date>" and "#cats\t<cat>\t<cat>..."
+	ActionRoutesPresetAdd    = "routes_preset_add"    // args[0]=preset name; optional "ip", "iface=<IfaceN>", "exclusive"
+	ActionRoutesPresetSync   = "routes_preset_sync"   // args[0]=preset name or "all"
+	ActionRoutesPresetUpdate = "routes_preset_update" // no args -> pull the latest preset lists from the repo now (the daemon also does this daily)
 	// In-router WireGuard transport (LAN -> WireguardN -> xray wireguard
 	// inbound -> tunnel). See internal/keenetic.ApplyWGTransport.
 	ActionWGTransportShow = "wg_show" // no args

@@ -3,11 +3,19 @@
 // router binary reads them to offer "ready-made lists" in the bot's
 // 📦 Готовые списки screen and `keenetic-xray routes preset …`, and to
 // tell an already-applied list from an out-of-date one.
+//
+// The embedded copy is the baseline. A router can also keep a live
+// overlay directory (see SetOverlay + Refresh): when it holds a
+// manifest.json, the package serves the overlay and falls back to the
+// embed per-file. That's how a router picks up the daily repo refresh
+// without a reinstall.
 package presets
 
 import (
 	"embed"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -40,43 +48,86 @@ type manifest struct {
 }
 
 var (
-	once   sync.Once
-	loaded manifest
-	byName map[string]Preset
+	mu         sync.Mutex
+	loadedOnce bool
+	loaded     manifest
+	byName     map[string]Preset
+	overlayDir string // "" -> embed only
 )
 
-func load() {
-	once.Do(func() {
-		raw, err := files.ReadFile("data/manifest.json")
-		if err != nil {
-			return
-		}
-		_ = json.Unmarshal(raw, &loaded)
-		byName = make(map[string]Preset, len(loaded.Presets))
-		for _, p := range loaded.Presets {
-			byName[p.Name] = p
-		}
-	})
+// SetOverlay points the package at a live directory that may hold a
+// refreshed manifest.json + *.lst (written by Refresh). Call once at
+// startup, before any other call. A dir that doesn't exist yet is fine.
+func SetOverlay(dir string) {
+	mu.Lock()
+	overlayDir = dir
+	loadedOnce = false
+	mu.Unlock()
 }
 
-// Generated is the date stamp of the embedded manifest ("2006-01-02").
+// readDataFile returns the bytes of one data file ("manifest.json" or
+// "<name>.lst"), preferring the overlay and falling back to the embed.
+func readDataFile(name string) ([]byte, error) {
+	if overlayDir != "" {
+		if b, err := os.ReadFile(filepath.Join(overlayDir, name)); err == nil {
+			return b, nil
+		}
+	}
+	return files.ReadFile("data/" + name)
+}
+
+// snapshot returns the current manifest and name index, loading them on
+// first use. The returned values are never mutated in place (Refresh
+// swaps in wholly new ones), so callers may read them after the lock is
+// dropped.
+func snapshot() (manifest, map[string]Preset) {
+	mu.Lock()
+	defer mu.Unlock()
+	if !loadedOnce {
+		loadedOnce = true
+		loaded = manifest{}
+		byName = map[string]Preset{}
+		if raw, err := readDataFile("manifest.json"); err == nil {
+			var m manifest
+			if json.Unmarshal(raw, &m) == nil {
+				loaded = m
+				idx := make(map[string]Preset, len(m.Presets))
+				for _, p := range m.Presets {
+					idx[p.Name] = p
+				}
+				byName = idx
+			}
+		}
+	}
+	return loaded, byName
+}
+
+// reload forces the next accessor to re-read the manifest (used by
+// Refresh after it writes the overlay).
+func reload() {
+	mu.Lock()
+	loadedOnce = false
+	mu.Unlock()
+}
+
+// Generated is the date stamp of the active manifest ("2006-01-02").
 func Generated() string {
-	load()
-	return loaded.Generated
+	m, _ := snapshot()
+	return m.Generated
 }
 
 // All returns every preset, sorted by name.
 func All() []Preset {
-	load()
-	out := append([]Preset(nil), loaded.Presets...)
+	m, _ := snapshot()
+	out := append([]Preset(nil), m.Presets...)
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 
 // Find returns the preset row for a list id ("youtube" / "youtube-ip").
 func Find(name string) (Preset, bool) {
-	load()
-	p, ok := byName[strings.ToLower(strings.TrimSpace(name))]
+	_, idx := snapshot()
+	p, ok := idx[strings.ToLower(strings.TrimSpace(name))]
 	return p, ok
 }
 
@@ -92,10 +143,10 @@ type Category struct {
 // ("<svc>-ip") are left out; the UI offers them as a toggle on the
 // domain preset via HasCIDR.
 func ByCategory() []Category {
-	load()
+	m, _ := snapshot()
 	group := map[string][]Preset{}
 	var order []string
-	for _, p := range loaded.Presets {
+	for _, p := range m.Presets {
 		if p.Kind != "domains" {
 			continue
 		}
@@ -105,7 +156,7 @@ func ByCategory() []Category {
 		group[p.Category] = append(group[p.Category], p)
 	}
 
-	seq := loaded.Categories
+	seq := m.Categories
 	if len(seq) == 0 {
 		seq = order
 	}
@@ -135,8 +186,8 @@ func ByCategory() []Category {
 // HasCIDR reports whether a "<service>-ip" companion list exists for the
 // given domain-preset name.
 func HasCIDR(name string) bool {
-	load()
-	_, ok := byName[strings.ToLower(strings.TrimSpace(name))+"-ip"]
+	_, idx := snapshot()
+	_, ok := idx[strings.ToLower(strings.TrimSpace(name))+"-ip"]
 	return ok
 }
 
@@ -144,12 +195,12 @@ func HasCIDR(name string) bool {
 // per line, comments and blanks stripped. Order is as stored (already
 // sorted by the generator).
 func Entries(name string) ([]string, bool) {
-	load()
+	_, idx := snapshot()
 	name = strings.ToLower(strings.TrimSpace(name))
-	if _, ok := byName[name]; !ok {
+	if _, ok := idx[name]; !ok {
 		return nil, false
 	}
-	raw, err := files.ReadFile("data/" + name + ".lst")
+	raw, err := readDataFile(name + ".lst")
 	if err != nil {
 		return nil, false
 	}

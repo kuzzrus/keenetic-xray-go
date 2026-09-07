@@ -62,8 +62,9 @@ type Options struct {
 	Force bool
 
 	// Test hooks; nil selects the real implementation.
-	smoke func(bin string) error          // "<bin> version" must exit 0
-	opkg  func(ctx context.Context) error // install xray-core through opkg
+	smoke   func(bin string) error           // "<bin> version" must exit 0
+	opkg    func(ctx context.Context) error  // install xray-core through opkg
+	version func(bin string) (string, error) // "<bin> version" first line; nil -> Version
 }
 
 // Ensure guarantees a runnable xray binary at opts.Dest and reports where
@@ -85,7 +86,19 @@ func Ensure(ctx context.Context, opts Options) (string, error) {
 	}
 
 	if !opts.Force && smoke(dest) == nil {
-		return "existing", nil
+		// A runnable core is enough on the opkg path (opkg owns its
+		// version) and when it's already the wanted vendored tag. Only a
+		// vendored-capable install with the *wrong* version falls through
+		// to an upgrade -- so a DefaultTag bump reaches a router on its
+		// next `ensure-xray-core` (postinst runs it on every agent
+		// update) without re-downloading when it's already current.
+		want := opts.Tag
+		if want == "" {
+			want = DefaultTag
+		}
+		if opts.Prefer == "entware" || !coreVersionKnownWrong(opts, dest, want) {
+			return "existing", nil
+		}
 	}
 
 	if opts.Prefer != "entware" {
@@ -106,6 +119,24 @@ func Ensure(ctx context.Context, opts Options) (string, error) {
 		return "", fmt.Errorf("xray-core installed via opkg but %s still does not run: %w", dest, err)
 	}
 	return "entware", nil
+}
+
+// coreVersionKnownWrong reports whether the core at dest reports a
+// version that is *definitely* not the one tag names ("vX.Y.Z"). A
+// version that can't be read or parsed is left alone (returns false) --
+// smoke already proved it runs, and a reinstall shouldn't be gambled on
+// an unreadable `xray version`.
+func coreVersionKnownWrong(opts Options, dest, tag string) bool {
+	vf := opts.version
+	if vf == nil {
+		vf = Version
+	}
+	line, err := vf(dest)
+	if err != nil {
+		return false
+	}
+	f := strings.Fields(line) // "Xray 26.3.27 (Xray, ...)" -> ["Xray","26.3.27",...]
+	return len(f) >= 2 && f[1] != strings.TrimPrefix(tag, "v")
 }
 
 // Version runs `<binary> version` and returns its first line, e.g.

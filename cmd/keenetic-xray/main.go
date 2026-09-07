@@ -15,6 +15,7 @@ import (
 	"github.com/kuzzrus/keenetic-xray-go/internal/botcontrol"
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 	"github.com/kuzzrus/keenetic-xray-go/internal/failover"
+	"github.com/kuzzrus/keenetic-xray-go/internal/presets"
 	"github.com/kuzzrus/keenetic-xray-go/internal/version"
 )
 
@@ -178,11 +179,13 @@ func cmdDaemon(args []string) error {
 	logf := func(format string, a ...any) {
 		fmt.Fprintf(logw, time.Now().Format("15:04:05")+" "+format+"\n", a...)
 	}
+	presets.SetOverlay(presetsOverlayDir())
 	applyProxy0AtStartup(cfg, logf)
 	applyRoutesAtStartup(cfg, logf)
 	applyWGTransportAtStartup(cfg, logf)
 	applyMSSClamp(cfg, logf)
 	go routerReconcileLoop(ctx, logf)
+	go presetRefreshLoop(ctx, logf)
 	watchReconcileSignal(ctx, func() { reconcileOnce(ctx, logf) }) // SIGUSR1 from the netfilter.d hook
 
 	if cfg.Agent.Enabled {

@@ -9,8 +9,8 @@ import (
 )
 
 // On a box without opkg (CI, the dev machine) every component's Detect
-// reports "not installed", so addon_list is deterministic: four rows,
-// tab-separated, in the fixed order.
+// reports "not installed", so addon_list is deterministic: one row per
+// component, tab-separated, in the fixed order.
 func TestRouterHandler_AddonList(t *testing.T) {
 	h := &RouterHandler{Config: config.Default()}
 	out, err := h.Handle(context.Background(), Command{Action: ActionAddonList})
@@ -18,10 +18,10 @@ func TestRouterHandler_AddonList(t *testing.T) {
 		t.Fatalf("addon_list: %v", err)
 	}
 	lines := strings.Split(strings.Trim(out, "\n"), "\n")
-	if len(lines) != 4 {
-		t.Fatalf("addon_list returned %d lines, want 4:\n%s", len(lines), out)
+	if len(lines) != 5 {
+		t.Fatalf("addon_list returned %d lines, want 5:\n%s", len(lines), out)
 	}
-	wantIDs := []string{"unbound", "nfqws2", "conntrack", "cron"}
+	wantIDs := []string{"unbound", "dnscrypt", "nfqws2", "conntrack", "cron"}
 	for i, ln := range lines {
 		f := strings.Split(ln, "\t")
 		if len(f) != 6 {

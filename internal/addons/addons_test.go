@@ -94,10 +94,10 @@ func withFakeSys(t *testing.T, f *fakeSys) {
 
 func TestAll_OrderAndFind(t *testing.T) {
 	got := All()
-	if len(got) != 4 {
-		t.Fatalf("All() len = %d, want 4", len(got))
+	if len(got) != 5 {
+		t.Fatalf("All() len = %d, want 5", len(got))
 	}
-	want := []string{"unbound", "nfqws2", "conntrack", "cron"}
+	want := []string{"unbound", "dnscrypt", "nfqws2", "conntrack", "cron"}
 	for i, id := range want {
 		if got[i].ID() != id {
 			t.Errorf("All()[%d] = %q, want %q", i, got[i].ID(), id)

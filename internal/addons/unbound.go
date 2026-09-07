@@ -162,11 +162,13 @@ func (*unboundAddon) Remove(ctx context.Context) error {
 	return opkgRemove(ctx, unboundPkg)
 }
 
-// routerLANIP resolves the LAN IP for router mode: a valid IP already in
-// our conf, else ask ndmc. Never returns a non-RFC1918 value.
-func routerLANIP(ctx context.Context, u unboundState) (string, error) {
-	if privateV4(u.routerIP) {
-		return u.routerIP, nil
+// routerLANIP resolves the LAN IP for a DNS component's router mode:
+// `stored` (what our conf already recorded) if it's a valid RFC1918
+// IPv4, else ask ndmc. Never returns a non-RFC1918 value. Shared by the
+// unbound and dnscrypt components.
+func routerLANIP(ctx context.Context, stored string) (string, error) {
+	if privateV4(stored) {
+		return stored, nil
 	}
 	if !keeneticAvailable() {
 		return "", fmt.Errorf("router-dns требует роутер Keenetic (ndmc не найден)")
@@ -224,7 +226,7 @@ func (*unboundAddon) Configure(ctx context.Context, kv map[string]string) error 
 	// Resolve it up front (and validate) so a bad value never reaches ndmc.
 	var lanIP string
 	if router {
-		ip, err := routerLANIP(ctx, u)
+		ip, err := routerLANIP(ctx, u.routerIP)
 		if err != nil {
 			return err
 		}

@@ -53,6 +53,7 @@ var (
 		return os.WriteFile(path, b, perm)
 	}
 	removeFile = os.Remove
+	mkdirAll   = func(path string) error { return os.MkdirAll(path, 0o755) }
 )
 
 const initdDir = "/opt/etc/init.d"

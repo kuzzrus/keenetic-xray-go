@@ -56,7 +56,7 @@ type Addon interface {
 
 // order is the fixed display order; anything not listed sorts after,
 // alphabetically. Keeps `addon list` and the bot menu stable.
-var order = []string{"unbound", "nfqws2", "conntrack", "cron"}
+var order = []string{"unbound", "dnscrypt", "nfqws2", "conntrack", "cron"}
 
 var registry = map[string]Addon{}
 

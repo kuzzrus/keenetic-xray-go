@@ -16,7 +16,9 @@ esac
 
 PIDFILE="${KEENETIC_XRAY_PID_FILE:-/opt/var/run/keenetic-xray.pid}"
 [ -f "$PIDFILE" ] || exit 0
-PID=$(cat "$PIDFILE" 2>/dev/null)
+# Line 1 is the PID; line 2, when present, is a start-time token the CLI
+# uses to spot PID reuse (see writeDaemonPIDFile). Only the PID matters here.
+read -r PID < "$PIDFILE" 2>/dev/null
 [ -n "$PID" ] && [ -d "/proc/$PID" ] && kill -USR1 "$PID" 2>/dev/null
 
 exit 0

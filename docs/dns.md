@@ -23,7 +23,8 @@ reconcile loop, like Proxy0 / routes / MSS.
 ## Commands
 
 ```
-keenetic-xray dns test                     # measure every provider's DoT+DoH latency from the router
+keenetic-xray dns test                     # measure the shown catalogue's DoT+DoH latency from the router
+keenetic-xray dns test --all               # also probe the wider candidate pool (~45), for curating the list
 keenetic-xray dns list                     # provider ids
 keenetic-xray dns preset cloudflare        # apply (DoT + DoH); --dot / --doh to pick one
 keenetic-xray dns preset quad9 --doh
@@ -49,13 +50,18 @@ on `:853`). DoH over `:443` usually survives where DoT doesn't.
 
 ## Providers
 
-~20 public resolvers (`internal/dnsupstream/providers.go`): Cloudflare
-(+Security), Google, Quad9 (+Unsecured), AdGuard (+Family), Yandex
-(+Safe, DoT), Mullvad (+Adblock), Gcore, DNS4EU, DNS.SB, Comss.one (DoH),
-OpenDNS, CleanBrowsing, UncensoredDNS, ControlD Unfiltered, LibreDNS. A
-filtering resolver (AdGuard, CleanBrowsing) can return NXDOMAIN for
-ad/tracker domains — which can interfere with routing. Run `dns test` on
-the router to see which are actually reachable from your ISP.
+The shown catalogue (`providers` in `internal/dnsupstream/providers.go`)
+is ~18 resolvers: Cloudflare (+Security), Google, Quad9 (+Unsecured),
+AdGuard (+Family), Yandex (+Safe, DoT), Mullvad (+Adblock), DNS4EU,
+DNS.SB, Comss.one (DoH), OpenDNS, CleanBrowsing, UncensoredDNS, ControlD
+Unfiltered (DoH), LibreDNS (DoH). A wider `candidates` pool (~25 more:
+BlahDNS, DNSforge, Freifunk, SWITCH, HE.net, AliDNS, DNSPod, DNS4EU
+variants, …) is probed only by `dns test --all` and never shown as a
+button — it's what the shown list is curated from after a run on real
+hardware. A filtering resolver (AdGuard, CleanBrowsing) can return
+NXDOMAIN for ad/tracker domains, which can interfere with routing. Run
+`dns test` (or `--all`) on the router to see what's actually reachable
+from your ISP.
 
 ## Not done
 

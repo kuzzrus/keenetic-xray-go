@@ -67,16 +67,25 @@ func dnsMark(ours bool) string {
 	return ""
 }
 
-func (h *RouterHandler) dnsTest(ctx context.Context) (string, error) {
-	cctx, cancel := context.WithTimeout(ctx, 40*time.Second)
-	defer cancel()
-	res := dnsupstream.ProbeAll(cctx, dnsupstream.Providers())
-	var b strings.Builder
-	fmt.Fprintf(&b, "%-20s %-14s %s\n", "провайдер", "DoT", "DoH")
-	for _, r := range res {
-		fmt.Fprintf(&b, "%-20s %-14s %s\n", r.Provider.ID, r.DoT.String(), r.DoH.String())
+func (h *RouterHandler) dnsTest(ctx context.Context, args []string) (string, error) {
+	all := len(args) > 0 && strings.EqualFold(args[0], "all")
+	pool := dnsupstream.Providers()
+	if all {
+		pool = dnsupstream.TestPool()
 	}
-	b.WriteString("\nвыбрать: кнопкой в 🧭 DNS")
+	cctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+	res := dnsupstream.ProbeAll(cctx, pool)
+	var b strings.Builder
+	fmt.Fprintf(&b, "%-22s %-14s %s\n", "провайдер", "DoT", "DoH")
+	for _, r := range res {
+		tag := ""
+		if all && !dnsupstream.InCatalogue(r.Provider.ID) {
+			tag = " ·канд"
+		}
+		fmt.Fprintf(&b, "%-22s %-14s %s%s\n", r.Provider.ID, r.DoT.String(), r.DoH.String(), tag)
+	}
+	b.WriteString("\nвыбрать: кнопкой в 🧭 DNS (или /dns <r> preset <id>)")
 	return b.String(), nil
 }
 

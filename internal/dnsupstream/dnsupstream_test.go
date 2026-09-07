@@ -51,12 +51,14 @@ func selfSignedCert(t *testing.T) tls.Certificate {
 }
 
 func TestProvidersWellFormed(t *testing.T) {
-	ps := Providers()
-	if len(ps) < 15 {
-		t.Fatalf("expected a broad catalogue, got %d", len(ps))
+	if len(Providers()) < 15 {
+		t.Fatalf("expected a broad catalogue, got %d", len(Providers()))
+	}
+	if len(TestPool()) <= len(Providers()) {
+		t.Fatalf("TestPool (%d) should be wider than Providers (%d)", len(TestPool()), len(Providers()))
 	}
 	seen := map[string]bool{}
-	for _, p := range ps {
+	for _, p := range TestPool() {
 		if p.ID == "" || p.Name == "" {
 			t.Errorf("provider %+v missing id/name", p)
 		}

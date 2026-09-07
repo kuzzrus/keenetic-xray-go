@@ -645,7 +645,11 @@ func (b *TelegramBot) dispatchDNS(ctx context.Context, args []string) string {
 	}
 	switch args[1] {
 	case "test":
-		return b.runRouterCommand(ctx, rid, ActionDNSTest, nil)
+		var targs []string
+		if len(args) >= 3 && args[2] == "all" {
+			targs = []string{"all"}
+		}
+		return b.runRouterCommand(ctx, rid, ActionDNSTest, targs)
 	case "preset":
 		if len(args) < 3 {
 			return usage

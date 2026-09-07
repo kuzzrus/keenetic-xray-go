@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/kuzzrus/keenetic-xray-go/internal/install"
 	"github.com/kuzzrus/keenetic-xray-go/internal/keenetic"
 	"github.com/kuzzrus/keenetic-xray-go/internal/subscription"
+	"github.com/kuzzrus/keenetic-xray-go/internal/xraycore"
 )
 
 // errSlotSkipped is returned by promptSlotSource when the operator hits
@@ -240,10 +242,36 @@ func runSetupInteractive(reader *bufio.Reader, cfg *config.Config, o setupOpts) 
 	}
 
 	promptTransport(reader, cfg, o)
+	promptXrayCore(reader, o)
 
 	applyDaemonChange(reader, true)
 	printSetupSummary(cfg, haveBackup)
 	return nil
+}
+
+// promptXrayCore offers to switch the just-installed stable core to the
+// vetted pre-release build. Skipped when there's no distinct pre-release
+// tag, or in non-interactive mode. Delegates to `internal
+// ensure-xray-core --tag`, which persists the choice in config.
+func promptXrayCore(reader *bufio.Reader, o setupOpts) {
+	if o.Yes || xraycore.PrereleaseTag == "" || xraycore.PrereleaseTag == xraycore.DefaultTag {
+		return
+	}
+	fmt.Println("\nЯдро xray:")
+	fmt.Printf("  1) стабильное  %s  (по умолчанию, уже стоит)\n", xraycore.DefaultTag)
+	fmt.Printf("  2) пререлизное %s  (новее, opt-in)\n", xraycore.PrereleaseTag)
+	fmt.Print("> ")
+	line, _ := reader.ReadString('\n')
+	if strings.TrimSpace(line) != "2" {
+		return
+	}
+	fmt.Println("ставлю пререлизное ядро…")
+	cmd := exec.Command(os.Args[0], "internal", "ensure-xray-core", "--tag="+xraycore.PrereleaseTag)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Println("не удалось поставить пререлизное ядро:", err)
+		fmt.Println("позже:  keenetic-xray internal ensure-xray-core --tag=" + xraycore.PrereleaseTag)
+	}
 }
 
 // slotSourceResult is one resolved slot source: the chosen profile, plus
@@ -468,13 +496,15 @@ func promptTransport(reader *bufio.Reader, cfg *config.Config, o setupOpts) {
 		_ = cfg.Save(configPath())
 		doSetupProxy0(cfg)
 	case "3":
-		if err := wgTransportOn(cfg); err != nil {
+		cfg.Proxy0.Enabled = false // WG transport is the chosen path, don't also wire Proxy0
+		if err := wgTransportApply(cfg); err != nil {
 			fmt.Println("  WG-транспорт не поднялся:", err)
 			fmt.Println("  позже:  keenetic-xray transport wg on")
 			return
 		}
-		fmt.Printf("  WG-транспорт включён (%s). Направляй на него списки/политики.\n", cfg.WGTransport.Iface)
 	case "4":
+		cfg.Proxy0.Enabled = false
+		_ = cfg.Save(configPath())
 		fmt.Println("  Keenetic не трогаем. Прокси на 127.0.0.1 и в LAN на портах выше.")
 	default: // "1" or Enter
 		cfg.Proxy0.Protocol = "socks5"
@@ -501,11 +531,21 @@ func printSetupSummary(cfg *config.Config, haveBackup bool) {
 	fmt.Printf("  порты:     SOCKS %d · HTTP %d\n", cfg.Failover.SOCKSPort, cfg.Failover.HTTPPort)
 	switch {
 	case cfg.Proxy0.Enabled:
-		fmt.Printf("  транспорт: Proxy0 / %s\n", cfg.Proxy0.Protocol)
+		proto := cfg.Proxy0.Protocol
+		if proto == "" {
+			proto = "socks5"
+		}
+		fmt.Printf("  транспорт: Proxy0 / %s\n", proto)
 	case cfg.WGTransport.Enabled:
 		fmt.Printf("  транспорт: WireGuard (%s)\n", cfg.WGTransport.Iface)
 	default:
 		fmt.Println("  транспорт: только локальный прокси")
+	}
+	if v, err := xraycore.Version(xrayBinaryPath()); err == nil {
+		if i := strings.Index(v, " ("); i > 0 {
+			v = v[:i]
+		}
+		fmt.Printf("  ядро:      %s\n", v)
 	}
 	fmt.Printf("  вариант:   %s\n", cfg.Variant)
 

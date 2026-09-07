@@ -361,6 +361,80 @@ func TestUnbound_RouterDNSRequiresKeenetic(t *testing.T) {
 	}
 }
 
+// Regression: a stock unbound package conf carries `interface: ::0`.
+// That must NOT be mistaken for the router's LAN IP (the bug that sent
+// `ip name-server ::0:5353` to ndmc).
+func TestUnbound_StockConfInterfaceNotTreatedAsRouterIP(t *testing.T) {
+	f := newFakeSys()
+	withFakeSys(t, f)
+	ns := map[string]bool{}
+	withUnboundKeeneticSeam(t, true, "192.168.1.1", ns)
+	ctx := context.Background()
+	a, _ := Find("unbound")
+
+	// Simulate the stock package conf already on disk (no managed marker,
+	// listens on ::0).
+	f.installed[unboundPkg] = "1.19-test"
+	f.files[unboundConf] = []byte("server:\n    interface: ::0\n    port: 53\n")
+
+	// Install must replace it with ours.
+	if err := a.Install(ctx); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if !strings.Contains(string(f.files[unboundConf]), unboundManagedMark) {
+		t.Fatalf("Install left the stock conf in place: %q", f.files[unboundConf])
+	}
+	if u := unboundRead(ctx); u.routerIP != "" {
+		t.Errorf("routerIP = %q, want empty (::0 must not be read as the LAN IP)", u.routerIP)
+	}
+
+	// router-dns=on must resolve via ndmc (192.168.1.1), never ::0.
+	if err := a.Configure(ctx, map[string]string{"router-dns": "on"}); err != nil {
+		t.Fatalf("router-dns=on: %v", err)
+	}
+	if !ns["192.168.1.1:5353"] {
+		t.Errorf("want ip name-server 192.168.1.1:5353; have %v", ns)
+	}
+	for k := range ns {
+		if strings.HasPrefix(k, "::") {
+			t.Errorf("an IPv6-any name-server slipped through: %q", k)
+		}
+	}
+}
+
+// Recovery: a conf stuck in router mode with a junk interface line (the
+// bad state the bug produced) can still be switched back to local.
+func TestUnbound_RouterDNSOffRecoversFromJunkIP(t *testing.T) {
+	f := newFakeSys()
+	withFakeSys(t, f)
+	ns := map[string]bool{}
+	withUnboundKeeneticSeam(t, true, "192.168.1.1", ns)
+	ctx := context.Background()
+	a, _ := Find("unbound")
+	f.installed[unboundPkg] = "1.19-test"
+	f.files[unboundConf] = []byte("# " + unboundManagedMark + "\n" + unboundRtrMark + "\nserver:\n    interface: ::0\n    port: 5353\n")
+
+	if err := a.Configure(ctx, map[string]string{"router-dns": "off"}); err != nil {
+		t.Fatalf("router-dns=off from junk state: %v", err)
+	}
+	if strings.Contains(string(f.files[unboundConf]), unboundRtrMark) {
+		t.Errorf("conf still in router mode: %q", f.files[unboundConf])
+	}
+}
+
+func TestPrivateV4(t *testing.T) {
+	for _, s := range []string{"192.168.1.1", "10.0.0.1", "172.16.5.4"} {
+		if !privateV4(s) {
+			t.Errorf("privateV4(%q) = false, want true", s)
+		}
+	}
+	for _, s := range []string{"::0", "::", "0.0.0.0", "8.8.8.8", "127.0.0.1", "", "not-an-ip", "192.168.1.1:5353"} {
+		if privateV4(s) {
+			t.Errorf("privateV4(%q) = true, want false", s)
+		}
+	}
+}
+
 func TestShellConfSet(t *testing.T) {
 	f := newFakeSys()
 	withFakeSys(t, f)

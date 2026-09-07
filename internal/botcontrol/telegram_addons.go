@@ -134,7 +134,7 @@ func (b *TelegramBot) openAddonsScreen(ctx context.Context, cb tgCallbackQuery, 
 }
 
 func addonScreenKB(id, addonID string) inlineKeyboard {
-	return inlineKeyboard{InlineKeyboard: [][]inlineButton{
+	rows := [][]inlineButton{
 		{
 			{Text: "⬇️ Установить", CallbackData: "adni:" + id + ":" + addonID},
 			{Text: "🗑 Удалить", CallbackData: "adnr:" + id + ":" + addonID},
@@ -143,8 +143,18 @@ func addonScreenKB(id, addonID string) inlineKeyboard {
 			{Text: "⚙️ Настроить", CallbackData: "adnc:" + id + ":" + addonID},
 			{Text: "📊 Статус", CallbackData: "adns:" + id + ":" + addonID},
 		},
-		{{Text: "⬅️ Дополнения", CallbackData: "adnm:" + id}},
-	}}
+	}
+	// unbound: one-tap router-DNS wiring. adnx carries the key=value to
+	// pass straight to addon_configure; the router side is idempotent and
+	// reverts on its own when the component is removed.
+	if addonID == "unbound" {
+		rows = append(rows, []inlineButton{
+			{Text: "🔌 Сделать DNS роутера", CallbackData: "adnx:" + id + ":unbound:router-dns=on"},
+			{Text: "🔙 Вернуть DNS роутеру", CallbackData: "adnx:" + id + ":unbound:router-dns=off"},
+		})
+	}
+	rows = append(rows, []inlineButton{{Text: "⬅️ Дополнения", CallbackData: "adnm:" + id}})
+	return inlineKeyboard{InlineKeyboard: rows}
 }
 
 func (b *TelegramBot) openAddonScreen(ctx context.Context, cb tgCallbackQuery, id, addonID string) {
@@ -267,6 +277,17 @@ func (b *TelegramBot) handleAddonsCallback(ctx context.Context, cb tgCallbackQue
 			return true
 		}
 		b.startAddonConfigWizard(ctx, cb.Message.Chat.ID, id, aid)
+	case strings.HasPrefix(data, "adnx:"):
+		// adnx:<router>:<addon>:<key=value> -- a one-tap configure.
+		id, tail, ok := strings.Cut(strings.TrimPrefix(data, "adnx:"), ":")
+		if !ok {
+			return true
+		}
+		aid, kv, ok := strings.Cut(tail, ":")
+		if !ok || !strings.Contains(kv, "=") {
+			return true
+		}
+		b.enqueueAddonAction(ctx, cb, id, aid, ActionAddonConfigure, []string{aid, kv})
 	case strings.HasPrefix(data, "adn:"):
 		id, aid, ok := strings.Cut(strings.TrimPrefix(data, "adn:"), ":")
 		if !ok {

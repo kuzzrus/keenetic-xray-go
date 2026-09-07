@@ -2,6 +2,7 @@ package addons
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -231,30 +232,132 @@ func TestUnbound_InstallWritesConfAndStarts(t *testing.T) {
 	if !strings.Contains(conf, "port: 5353") || !strings.Contains(conf, "interface: 127.0.0.1") {
 		t.Errorf("unbound.conf not sane: %q", conf)
 	}
+	if strings.Contains(conf, unboundRtrMark) {
+		t.Errorf("fresh install should be local mode, not router: %q", conf)
+	}
 	if !contains(f.initCalls, unboundInit+" start") {
 		t.Errorf("unbound start not called: %v", f.initCalls)
 	}
 
-	// Configure changes port + disables dnssec.
-	if err := a.Configure(ctx, map[string]string{"port": "5300", "dnssec": "off", "cache": "16"}); err != nil {
+	// Configure: disable dnssec, bump cache.
+	if err := a.Configure(ctx, map[string]string{"dnssec": "off", "cache": "16"}); err != nil {
 		t.Fatalf("Configure: %v", err)
 	}
 	conf = string(f.files[unboundConf])
-	if !strings.Contains(conf, "port: 5300") {
-		t.Errorf("port not changed: %q", conf)
-	}
 	if !strings.Contains(conf, "val-permissive-mode: yes") {
 		t.Errorf("dnssec not disabled: %q", conf)
 	}
 	if !strings.Contains(conf, "msg-cache-size: 16777216") {
 		t.Errorf("cache size not 16MB: %q", conf)
 	}
-	if unboundConfiguredPort(ctx) != 5300 {
-		t.Errorf("unboundConfiguredPort = %d, want 5300", unboundConfiguredPort(ctx))
+	if u := unboundRead(ctx); u.dnssec || u.cacheMB != 16 || u.routerMode {
+		t.Errorf("unboundRead = %+v, want dnssec off, cache 16, local", u)
 	}
 
-	if err := a.Configure(ctx, map[string]string{"port": "0"}); err == nil {
-		t.Error("port=0 should fail")
+	if err := a.Configure(ctx, map[string]string{"cache": "999"}); err == nil {
+		t.Error("cache=999 should fail")
+	}
+	if err := a.Configure(ctx, map[string]string{"nope": "1"}); err == nil {
+		t.Error("unknown key should fail")
+	}
+}
+
+// withUnboundKeeneticSeam fakes the internal/keenetic calls unbound's
+// router-dns mode makes. `nameservers` records the ip:port entries
+// currently added.
+func withUnboundKeeneticSeam(t *testing.T, available bool, lanIP string, nameservers map[string]bool) {
+	t.Helper()
+	oa, os, ol, oi := keeneticAvailable, setLocalNameServer, localNameServerActive, keeneticLANIP
+	keeneticAvailable = func() bool { return available }
+	setLocalNameServer = func(_ context.Context, ip string, port int, on bool) error {
+		k := fmt.Sprintf("%s:%d", ip, port)
+		if on {
+			nameservers[k] = true
+		} else {
+			delete(nameservers, k)
+		}
+		return nil
+	}
+	localNameServerActive = func(_ context.Context, ip string, port int) (bool, error) {
+		return nameservers[fmt.Sprintf("%s:%d", ip, port)], nil
+	}
+	keeneticLANIP = func(_ context.Context, _ string) (string, error) { return lanIP, nil }
+	t.Cleanup(func() {
+		keeneticAvailable, setLocalNameServer, localNameServerActive, keeneticLANIP = oa, os, ol, oi
+	})
+}
+
+func TestUnbound_RouterDNSOnOffAndRemoveReverts(t *testing.T) {
+	f := newFakeSys()
+	withFakeSys(t, f)
+	ns := map[string]bool{}
+	withUnboundKeeneticSeam(t, true, "192.168.1.1", ns)
+	ctx := context.Background()
+	a, _ := Find("unbound")
+
+	if err := a.Install(ctx); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+
+	// router-dns=on: conf binds the LAN IP + marker, name-server added.
+	if err := a.Configure(ctx, map[string]string{"router-dns": "on"}); err != nil {
+		t.Fatalf("router-dns=on: %v", err)
+	}
+	conf := string(f.files[unboundConf])
+	if !strings.Contains(conf, unboundRtrMark) || !strings.Contains(conf, "interface: 192.168.1.1") {
+		t.Errorf("conf not in router mode: %q", conf)
+	}
+	if !ns["192.168.1.1:5353"] {
+		t.Errorf("ip name-server 192.168.1.1:5353 should be added; have %v", ns)
+	}
+	if u := unboundRead(ctx); !u.routerMode || u.routerIP != "192.168.1.1" {
+		t.Errorf("unboundRead = %+v, want routerMode, routerIP 192.168.1.1", u)
+	}
+
+	// router-dns=off: name-server removed, marker gone.
+	if err := a.Configure(ctx, map[string]string{"router-dns": "off"}); err != nil {
+		t.Fatalf("router-dns=off: %v", err)
+	}
+	if ns["192.168.1.1:5353"] {
+		t.Errorf("name-server should be removed after off; have %v", ns)
+	}
+	if strings.Contains(string(f.files[unboundConf]), unboundRtrMark) {
+		t.Errorf("conf still router mode after off")
+	}
+
+	// Remove while in router mode reverts the name-server first.
+	if err := a.Configure(ctx, map[string]string{"router-dns": "on"}); err != nil {
+		t.Fatal(err)
+	}
+	if !ns["192.168.1.1:5353"] {
+		t.Fatal("precondition: name-server should be set")
+	}
+	if err := a.Remove(ctx); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if ns["192.168.1.1:5353"] {
+		t.Error("Remove must drop the ip name-server entry")
+	}
+	if _, still := f.installed[unboundPkg]; still {
+		t.Error("unbound-daemon should be removed")
+	}
+}
+
+func TestUnbound_RouterDNSRequiresKeenetic(t *testing.T) {
+	f := newFakeSys()
+	withFakeSys(t, f)
+	ns := map[string]bool{}
+	withUnboundKeeneticSeam(t, false, "", ns) // no ndmc
+	ctx := context.Background()
+	a, _ := Find("unbound")
+	f.installed[unboundPkg] = "1.19-test"
+	f.files[unboundConf] = []byte(unboundConfBody(8, true, false, ""))
+
+	if err := a.Configure(ctx, map[string]string{"router-dns": "on"}); err == nil {
+		t.Error("router-dns=on should fail without a Keenetic")
+	}
+	if len(ns) != 0 {
+		t.Errorf("no name-server should be touched without Keenetic: %v", ns)
 	}
 }
 

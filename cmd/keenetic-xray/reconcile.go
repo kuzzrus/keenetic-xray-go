@@ -20,9 +20,11 @@ import (
 const reconcileInterval = 2 * time.Minute
 
 // routerReconcileLoop periodically runs reconcileOnce. It's the fallback:
-// the netfilter.d hook (packaging/ndm/netfilter.d) makes ndm signal the
-// daemon (SIGUSR1 -> reconcileOnce) the moment it rebuilds the firewall,
-// so drift is normally fixed within a second, not up to two minutes.
+// the ndm hooks (packaging/ndm/*) make ndm signal the daemon (SIGUSR1 ->
+// reconcileOnce) the moment it rebuilds the firewall (netfilter.d), the
+// LAN IP moves (ifipchanged.d) or a tracked interface comes back up
+// (ifstatechanged.d), so drift is normally fixed within a second, not up
+// to two minutes.
 func routerReconcileLoop(ctx context.Context, logf func(string, ...any)) {
 	if !keenetic.Available() {
 		return

@@ -96,6 +96,53 @@ func TestCmdInternal_PostinstSetupThenPrermCleanup(t *testing.T) {
 	}
 }
 
+func TestNdmHookPaths_DerivesSiblings(t *testing.T) {
+	t.Setenv("KEENETIC_XRAY_NETFILTER_HOOK", "/x/ndm/netfilter.d/50-keenetic-xray.sh")
+	got := ndmHookPaths()
+	// The daemon only ever runs on Linux; normalise separators so the
+	// derivation is still checkable from the Windows dev box.
+	want := []string{
+		"/x/ndm/netfilter.d/50-keenetic-xray.sh",
+		"/x/ndm/ifipchanged.d/50-keenetic-xray.sh",
+		"/x/ndm/ifstatechanged.d/50-keenetic-xray.sh",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ndmHookPaths() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if filepath.ToSlash(got[i]) != want[i] {
+			t.Errorf("ndmHookPaths()[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+// prerm-cleanup drops every ndm hook, not just netfilter.d, so a botched
+// removal can't leave one behind SIGUSR1'ing a dead PID.
+func TestCmdInternal_PrermCleanupRemovesAllNdmHooks(t *testing.T) {
+	dir := t.TempDir()
+	nf := filepath.Join(dir, "ndm", "netfilter.d", "50-keenetic-xray.sh")
+	t.Setenv("KEENETIC_XRAY_NETFILTER_HOOK", nf)
+	t.Setenv("KEENETIC_XRAY_CONFIG", filepath.Join(dir, "etc", "config.json"))
+
+	hooks := ndmHookPaths()
+	for _, h := range hooks {
+		if err := os.MkdirAll(filepath.Dir(h), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(h, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := run([]string{"internal", "prerm-cleanup"}); err != nil {
+		t.Fatalf("prerm-cleanup: %v", err)
+	}
+	for _, h := range hooks {
+		if _, err := os.Stat(h); !os.IsNotExist(err) {
+			t.Errorf("hook %s should be gone after prerm-cleanup, stat err = %v", h, err)
+		}
+	}
+}
+
 func TestCmdEnsureXrayCore_TagPersistsBeforeDownload(t *testing.T) {
 	dir := t.TempDir()
 	configFile := filepath.Join(dir, "etc", "keenetic-xray", "config.json")

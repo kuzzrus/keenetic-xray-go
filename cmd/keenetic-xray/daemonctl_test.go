@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -19,11 +20,27 @@ func withProcessName(t *testing.T, fn func(pid int) string) {
 	t.Cleanup(func() { processName = old })
 }
 
+// withProcStartToken overrides procStartToken for the duration of the test.
+func withProcStartToken(t *testing.T, fn func(pid int) string) {
+	t.Helper()
+	old := procStartToken
+	procStartToken = fn
+	t.Cleanup(func() { procStartToken = old })
+}
+
 func writePIDFile(t *testing.T, pid int) string {
+	t.Helper()
+	return writePIDFileLines(t, strconv.Itoa(pid))
+}
+
+// writePIDFileLines writes an arbitrary pidfile body (one arg per line)
+// so tests can exercise both the legacy single-line format and the
+// pid+start-token format writeDaemonPIDFile now produces.
+func writePIDFileLines(t *testing.T, lines ...string) string {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "keenetic-xray.pid")
-	if err := os.WriteFile(path, []byte(strconv.Itoa(pid)+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatalf("writing pidfile: %v", err)
 	}
 	t.Setenv("KEENETIC_XRAY_PID_FILE", path)
@@ -89,6 +106,77 @@ func TestRunningDaemonPID_Matches(t *testing.T) {
 	}
 }
 
+// TestRunningDaemonPID_StartTokenMismatch: the PID is alive and still
+// named keenetic-xray, but its start time doesn't match the token the
+// daemon recorded -- the OS handed our old PID to a fresh keenetic-xray
+// invocation after a reboot. Must be rejected.
+func TestRunningDaemonPID_StartTokenMismatch(t *testing.T) {
+	writePIDFileLines(t, "42", "111111")
+	withProcessName(t, func(int) string { return "keenetic-xray" })
+	withProcStartToken(t, func(int) string { return "999999" })
+	if _, err := runningDaemonPID(); err == nil {
+		t.Error("expected an error when the start-time token doesn't match (recycled pid)")
+	}
+}
+
+func TestRunningDaemonPID_StartTokenMatches(t *testing.T) {
+	writePIDFileLines(t, "42", "111111")
+	withProcessName(t, func(int) string { return "keenetic-xray" })
+	withProcStartToken(t, func(int) string { return "111111" })
+	got, err := runningDaemonPID()
+	if err != nil {
+		t.Fatalf("runningDaemonPID: %v", err)
+	}
+	if got != 42 {
+		t.Errorf("pid = %d, want 42", got)
+	}
+}
+
+// A legacy single-line pidfile (no token) keeps working: the token
+// check is skipped, only the process-name check gates.
+func TestRunningDaemonPID_LegacyNoToken(t *testing.T) {
+	writePIDFile(t, 42)
+	withProcessName(t, func(int) string { return "keenetic-xray" })
+	withProcStartToken(t, func(int) string {
+		t.Error("procStartToken must not be consulted for a tokenless pidfile")
+		return ""
+	})
+	if _, err := runningDaemonPID(); err != nil {
+		t.Fatalf("runningDaemonPID: %v", err)
+	}
+}
+
+func TestParseProcStatStartTime(t *testing.T) {
+	// comm with a space and comm with an embedded ')': parsing must
+	// resume after the *last* ')'.
+	cases := []struct {
+		name, stat, want string
+	}{
+		{
+			"plain",
+			"1234 (keeneticxray) S 1 1234 1234 0 -1 4194560 100 0 0 0 1 2 0 0 20 0 1 0 8675309 99",
+			"8675309",
+		},
+		{
+			"comm has space",
+			"1234 (keen xray) S 1 1234 1234 0 -1 4194560 100 0 0 0 1 2 0 0 20 0 1 0 4242 99",
+			"4242",
+		},
+		{
+			"comm has close paren",
+			"1234 (we)ird) S 1 1234 1234 0 -1 4194560 100 0 0 0 1 2 0 0 20 0 1 0 5150 99",
+			"5150",
+		},
+		{"truncated", "1234 (x) S 1 1234", ""},
+		{"garbage", "not a stat line", ""},
+	}
+	for _, c := range cases {
+		if got := parseProcStatStartTime(c.stat); got != c.want {
+			t.Errorf("%s: parseProcStatStartTime = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
 // TestSignalDaemonReload_DeliversSIGHUP proves the whole chain actually
 // sends a real signal: it points the pidfile at this test process's own
 // pid (with processName faked to match), installs a SIGHUP handler
@@ -134,8 +222,16 @@ func TestWriteDaemonPIDFile_WriteAndCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading pidfile: %v", err)
 	}
-	if got, _ := strconv.Atoi(string(data)); got != os.Getpid() {
-		t.Errorf("pidfile contains %q, want this process's own pid %d", data, os.Getpid())
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if got, _ := strconv.Atoi(strings.TrimSpace(lines[0])); got != os.Getpid() {
+		t.Errorf("pidfile line 1 = %q, want this process's own pid %d", lines[0], os.Getpid())
+	}
+	// Line 2 (the start-time token) is present on Linux, absent where
+	// /proc/<pid>/stat can't be read (the Windows dev box). Round-trip it:
+	// whatever writeDaemonPIDFile recorded, runningDaemonPID must accept.
+	withProcessName(t, func(int) string { return "keenetic-xray" })
+	if _, err := runningDaemonPID(); err != nil {
+		t.Errorf("runningDaemonPID rejected a pidfile writeDaemonPIDFile just wrote: %v", err)
 	}
 
 	cleanup()

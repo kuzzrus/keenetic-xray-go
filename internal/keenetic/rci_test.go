@@ -148,24 +148,39 @@ func TestNdmcRun_RCIFallsThroughForOtherCommands(t *testing.T) {
 }
 
 // --- phase 2: show interface / show object-group over RCI ---
+//
+// The two interface fixtures are trimmed copies of real Giga KN-1012
+// (KeeneticOS 5.1.x) /rci/show/interface/<name> payloads -- string
+// "yes"/"no" for `connected`, a bare `online: true` bool on the peer, a
+// large byte counter that must not go scientific.
 
 const rciBridgeJSON = `{
-  "id": "Bridge0", "index": 0, "type": "Bridge", "description": "Home segment",
-  "interface-name": "br0", "link": "up", "connected": true, "state": "up",
-  "mtu": 1500, "address": "192.168.7.1", "mask": "255.255.255.0", "uptime": 84231
+  "id": "Bridge0", "index": 0, "interface-name": "Home", "type": "Bridge",
+  "description": "Home network",
+  "traits": ["Mac", "Ethernet", "Ip", "Bridge"],
+  "link": "up", "connected": "yes", "state": "up",
+  "mtu": 1500, "tx-queue-length": 0, "admin-only": false,
+  "address": "192.168.1.1", "mask": "255.255.255.0", "uptime": 6155,
+  "global": false, "security-level": "private",
+  "mac": "50:ff:20:d1:c5:a3", "auth-type": "none"
 }`
 
 const rciWGJSON = `{
-  "id": "Wireguard0", "type": "Wireguard", "description": "keenetic-xray-wg",
-  "link": "up", "connected": true, "state": "up", "mtu": 1412,
-  "address": "10.55.0.1", "mask": "255.255.255.0",
+  "id": "Wireguard4", "index": 4, "interface-name": "Wireguard4",
+  "type": "Wireguard", "description": "keenetic-xray-wg",
+  "traits": ["Ip", "Ip6", "Wireguard"],
+  "link": "up", "connected": "yes", "state": "up",
+  "mtu": 1280, "tx-queue-length": 50,
+  "address": "172.31.209.2", "mask": "255.255.255.255", "uptime": 6132,
   "wireguard": {
-    "public-key": "SRVPUBKEYbase64000000000000000000000000000000=",
-    "listen-port": 51820,
+    "public-key": "Qkc8d8iV9mPBcRV+Zl6NsleTl27J5IKSEJf5IpJ9YiA=",
+    "listen-port": 44244, "status": "up",
     "peer": [
-      { "public-key": "PEERPUBKEY0000000000000000000000000000000000=",
-        "endpoint": "127.0.0.1:51820", "last-handshake": 12, "online": "yes",
-        "rxbytes": 4096, "txbytes": 8192 }
+      { "public-key": "JZUbXGsO58Mex0oHffuZYgZ9hphh25Hc4riMstG9y0Y=",
+        "description": "", "local-port": 44244, "remote-port": 41199,
+        "via": "Bridge0", "remote-endpoint-address": "192.168.1.1",
+        "rxbytes": 4434113272, "txbytes": 106887688,
+        "last-handshake": 69, "online": true, "enabled": true }
     ]
   }
 }`
@@ -173,7 +188,7 @@ const rciWGJSON = `{
 func TestNdmcRun_RCIServesInterface(t *testing.T) {
 	srv := rciTestServer(t, "system\n", `{"release":"5.1.3"}`,
 		rciJSONRoute("/rci/show/interface/Bridge0", rciBridgeJSON),
-		rciJSONRoute("/rci/show/interface/Wireguard0", rciWGJSON),
+		rciJSONRoute("/rci/show/interface/Wireguard4", rciWGJSON),
 	)
 	withRCIOff(t)
 	origExec := ndmcExec
@@ -187,21 +202,21 @@ func TestNdmcRun_RCIServesInterface(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	if ip := lanIPFromShowInterface(ctx, "Bridge0"); ip != "192.168.7.1" {
-		t.Errorf("lanIPFromShowInterface via RCI = %q, want 192.168.7.1", ip)
+	if ip := lanIPFromShowInterface(ctx, "Bridge0"); ip != "192.168.1.1" {
+		t.Errorf("lanIPFromShowInterface via RCI = %q, want 192.168.1.1", ip)
 	}
-	if !WGInterfaceUp(ctx, "Wireguard0") {
+	if !WGInterfaceUp(ctx, "Wireguard4") {
 		t.Error("WGInterfaceUp via RCI = false, want true (state: up)")
 	}
-	pk, err := WGInterfacePublicKey(ctx, "Wireguard0")
-	if err != nil || pk != "SRVPUBKEYbase64000000000000000000000000000000=" {
+	pk, err := WGInterfacePublicKey(ctx, "Wireguard4")
+	if err != nil || pk != "Qkc8d8iV9mPBcRV+Zl6NsleTl27J5IKSEJf5IpJ9YiA=" {
 		t.Errorf("WGInterfacePublicKey via RCI = %q, %v", pk, err)
 	}
-	sum, err := ShowWGTransport(ctx, "Wireguard0")
+	sum, err := ShowWGTransport(ctx, "Wireguard4")
 	if err != nil {
 		t.Fatalf("ShowWGTransport via RCI: %v", err)
 	}
-	for _, want := range []string{"состояние: up", "адрес: 10.55.0.1", "mtu: 1412", "last-handshake: 12", "online: yes"} {
+	for _, want := range []string{"состояние: up", "адрес: 172.31.209.2", "mtu: 1280", "last-handshake: 69", "online: yes"} {
 		if !strings.Contains(sum, want) {
 			t.Errorf("ShowWGTransport summary missing %q:\n%s", want, sum)
 		}
@@ -267,20 +282,23 @@ func TestInterfaceTextFromRCI(t *testing.T) {
 	// wireguard: must come before the interface public-key, which must
 	// come before peer: -- WGInterfacePublicKey relies on that order.
 	iWG := strings.Index(txt, "wireguard:")
-	iKey := strings.Index(txt, "public-key: SRVPUBKEY")
+	iKey := strings.Index(txt, "public-key: Qkc8d8iV")
 	iPeer := strings.Index(txt, "peer:")
 	if !(iWG >= 0 && iWG < iKey && iKey < iPeer) {
 		t.Errorf("block order wrong (wg=%d key=%d peer=%d):\n%s", iWG, iKey, iPeer, txt)
 	}
-	if !strings.Contains(txt, "connected: yes") {
-		t.Errorf("bool `connected:true` should render as `yes`:\n%s", txt)
+	if !strings.Contains(txt, "online: yes") {
+		t.Errorf("peer bool `online:true` should render as `yes`:\n%s", txt)
 	}
-	if !strings.Contains(txt, "mtu: 1412") {
+	if !strings.Contains(txt, "mtu: 1280") {
 		t.Errorf("integer mtu should render without a decimal:\n%s", txt)
 	}
+	if !strings.Contains(txt, "rxbytes: 4434113272") {
+		t.Errorf("large byte counter must not go scientific:\n%s", txt)
+	}
 
-	// Wrapped form {"Wireguard0": {...}}.
-	wrapped := `{"Wireguard0":` + rciWGJSON + `}`
+	// Wrapped form {"Wireguard4": {...}}.
+	wrapped := `{"Wireguard4":` + rciWGJSON + `}`
 	tw, err := interfaceTextFromRCI([]byte(wrapped))
 	if err != nil || !strings.Contains(tw, "state: up") {
 		t.Errorf("wrapped form not unwrapped: %v\n%s", err, tw)

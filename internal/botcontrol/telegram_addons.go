@@ -144,13 +144,13 @@ func addonScreenKB(id, addonID string) inlineKeyboard {
 			{Text: "📊 Статус", CallbackData: "adns:" + id + ":" + addonID},
 		},
 	}
-	// unbound: one-tap router-DNS wiring. adnx carries the key=value to
-	// pass straight to addon_configure; the router side is idempotent and
-	// reverts on its own when the component is removed.
-	if addonID == "unbound" {
+	// unbound / dnscrypt: one-tap router-DNS wiring. adnx carries the
+	// key=value to pass straight to addon_configure; the router side is
+	// idempotent and reverts on its own when the component is removed.
+	if addonID == "unbound" || addonID == "dnscrypt" {
 		rows = append(rows, []inlineButton{
-			{Text: "🔌 Сделать DNS роутера", CallbackData: "adnx:" + id + ":unbound:router-dns=on"},
-			{Text: "🔙 Вернуть DNS роутеру", CallbackData: "adnx:" + id + ":unbound:router-dns=off"},
+			{Text: "🔌 Сделать DNS роутера", CallbackData: "adnx:" + id + ":" + addonID + ":router-dns=on"},
+			{Text: "🔙 Вернуть DNS роутеру", CallbackData: "adnx:" + id + ":" + addonID + ":router-dns=off"},
 		})
 	}
 	rows = append(rows, []inlineButton{{Text: "⬅️ Дополнения", CallbackData: "adnm:" + id}})

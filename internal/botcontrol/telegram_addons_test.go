@@ -197,6 +197,16 @@ func TestAddonScreenKB_Buttons(t *testing.T) {
 			}
 		}
 	}
+	// dnscrypt also gets the router-dns buttons.
+	var dc []string
+	for _, row := range addonScreenKB("r1", "dnscrypt").InlineKeyboard {
+		for _, b := range row {
+			dc = append(dc, b.CallbackData)
+		}
+	}
+	if !contains(dc, "adnx:r1:dnscrypt:router-dns=on") {
+		t.Errorf("dnscrypt screen missing router-dns button; got %v", dc)
+	}
 }
 
 func TestTelegramBot_AddonsScreen_UnboundRouterDNSButton(t *testing.T) {

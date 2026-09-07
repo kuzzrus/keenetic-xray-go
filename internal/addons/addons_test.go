@@ -156,12 +156,22 @@ func TestNfqws2_InstallAddsFeedAndStarts(t *testing.T) {
 	ctx := context.Background()
 	a, _ := Find("nfqws2")
 
+	// A stale legacy feed file (wrong name/URL) from an old build.
+	f.files[nfqwsLegacyFeedFile] = []byte("src/gz nfqws2 https://nfqws.github.io/nfqws2-keenetic/all\n")
+
 	if err := a.Install(ctx); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
 	feed, ok := f.files[nfqwsFeedFile]
-	if !ok || !strings.Contains(string(feed), nfqwsFeedURL()) || !strings.Contains(string(feed), "src/gz nfqws2-keenetic ") {
-		t.Errorf("feed file not written correctly: %q (want the src/gz nfqws2-keenetic line with %s)", feed, nfqwsFeedURL())
+	if !ok || !strings.Contains(string(feed), nfqwsFeedURL) || !strings.Contains(string(feed), "src/gz nfqws2-keenetic ") {
+		t.Errorf("feed file not written correctly: %q (want the src/gz nfqws2-keenetic line with %s)", feed, nfqwsFeedURL)
+	}
+	if _, ok := f.files[nfqwsLegacyFeedFile]; ok {
+		t.Error("Install should delete the legacy feed file")
+	}
+	// opkg's non-SSL wget is swapped for wget-ssl before the https feed.
+	if !contains(f.opkgCalls, "install ca-certificates wget-ssl") || !contains(f.opkgCalls, "remove wget-nossl") {
+		t.Errorf("wget-ssl swap not done: %v", f.opkgCalls)
 	}
 	if !contains(f.opkgCalls, "install "+nfqwsPkg) {
 		t.Errorf("opkg install not called: %v", f.opkgCalls)
@@ -170,12 +180,16 @@ func TestNfqws2_InstallAddsFeedAndStarts(t *testing.T) {
 		t.Errorf("init start not called: %v", f.initCalls)
 	}
 
-	// Remove drops the package and the feed file.
+	// Remove drops the package and both feed files.
+	f.files[nfqwsLegacyFeedFile] = []byte("stale\n")
 	if err := a.Remove(ctx); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
 	if _, ok := f.files[nfqwsFeedFile]; ok {
 		t.Error("feed file should be removed on Remove")
+	}
+	if _, ok := f.files[nfqwsLegacyFeedFile]; ok {
+		t.Error("legacy feed file should be removed on Remove")
 	}
 }
 

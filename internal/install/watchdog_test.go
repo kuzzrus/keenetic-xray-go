@@ -242,8 +242,8 @@ func TestEnsureCron_AlreadyRunningIsNoOp(t *testing.T) {
 	}
 }
 
-func TestEnsureCron_InstallsEnablesAndStarts(t *testing.T) {
-	installCalled, enableCalled, startCalled := false, false, false
+func TestEnsureCron_InstallsAndStarts(t *testing.T) {
+	installCalled, startCalled := false, false
 	origInstall := cronOpkgInstall
 	cronOpkgInstall = func() error { installCalled = true; return nil }
 	t.Cleanup(func() { cronOpkgInstall = origInstall })
@@ -251,11 +251,11 @@ func TestEnsureCron_InstallsEnablesAndStarts(t *testing.T) {
 	// Not running at first (status fails, ps fails); becomes running
 	// only once start has actually been called -- lets CronRunning's
 	// second call (EnsureCron's final verification) reflect a genuine
-	// state change from the simulated install+enable+start, the same
-	// way a real router would go from "nothing running" to "running".
+	// state change, the same way a real router would go from "nothing
+	// running" to "running".
 	withCronHooks(t,
 		bad,
-		func() error { enableCalled = true; return nil },
+		ok,
 		func() error { startCalled = true; return nil },
 		func() bool { return startCalled },
 	)
@@ -263,8 +263,30 @@ func TestEnsureCron_InstallsEnablesAndStarts(t *testing.T) {
 	if err := EnsureCron(); err != nil {
 		t.Fatalf("EnsureCron: %v", err)
 	}
-	if !installCalled || !enableCalled || !startCalled {
-		t.Errorf("install/enable/start = %v/%v/%v, want all true", installCalled, enableCalled, startCalled)
+	if !installCalled || !startCalled {
+		t.Errorf("install/start = %v/%v, want both true", installCalled, startCalled)
+	}
+}
+
+// The Entware S10cron rc.func build has no `enable` action (it prints
+// "Usage: ..." and exits 1). EnsureCron must not fail on that -- start
+// alone is enough, and ENABLED=yes in the script + Entware's boot
+// runner make it persistent.
+func TestEnsureCron_EnableUnsupportedStillSucceeds(t *testing.T) {
+	origInstall := cronOpkgInstall
+	cronOpkgInstall = ok
+	t.Cleanup(func() { cronOpkgInstall = origInstall })
+
+	started := false
+	withCronHooks(t,
+		bad, // status: not running yet
+		bad, // enable: "Usage:" -> exit 1
+		func() error { started = true; return nil }, // start: ok
+		func() bool { return started },              // ps: running once started
+	)
+
+	if err := EnsureCron(); err != nil {
+		t.Fatalf("EnsureCron should tolerate a failing `enable`: %v", err)
 	}
 }
 

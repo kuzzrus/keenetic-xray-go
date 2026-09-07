@@ -18,6 +18,7 @@ type wizState struct {
 	primary  bool   // wizSlotSource: which slot the pasted source feeds
 	listName string // wizRoute*: the target route list
 	del      bool   // wizRouteEntries: remove rather than add
+	addonID  string // wizAddonConfig: the component being configured
 }
 
 type wizStep int
@@ -33,6 +34,7 @@ const (
 	wizRouteEntries // route list: the domains/subnets to add or remove
 	wizRouteIface   // an interface name for an already-chosen list
 	wizDNSCustom    // custom DoT/DoH upstream lines for 🧭 DNS
+	wizAddonConfig  // key=value tweaks for a 🧩 Дополнения component
 )
 
 func (b *TelegramBot) startAddRouterWizard(ctx context.Context, chatID int64) {
@@ -220,6 +222,10 @@ func (b *TelegramBot) handleWizardText(ctx context.Context, chatID int64, text s
 
 	case wizDNSCustom:
 		b.wizardDNSCustom(ctx, chatID, st, text)
+		return true
+
+	case wizAddonConfig:
+		b.wizardAddonConfig(ctx, chatID, st, text)
 		return true
 	}
 

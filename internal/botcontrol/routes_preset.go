@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/presets"
 )
@@ -105,4 +106,22 @@ func (h *RouterHandler) routesPresetSync(ctx context.Context, args []string) (st
 		return "всё уже актуально:\n" + strings.Join(lines, "\n"), nil
 	}
 	return h.applyRoutes(ctx, "синхронизация готовых списков:\n"+strings.Join(lines, "\n"))
+}
+
+// routesPresetUpdate pulls the latest preset lists from the repo right
+// now (the daemon also does this on a daily loop). It refreshes the
+// embedded->overlay copy; it does not touch any route list -- the
+// operator then sees ⬆ on changed presets and taps Синхронизировать.
+func (h *RouterHandler) routesPresetUpdate(ctx context.Context) (string, error) {
+	rctx, cancel := context.WithTimeout(ctx, 4*time.Minute)
+	defer cancel()
+	res, err := presets.Refresh(rctx, h.Config.PresetsSourceURL)
+	if err != nil {
+		return "", err
+	}
+	out := "готовые списки обновлены из репозитория:\n" + res.String()
+	if res.Updated > 0 {
+		out += "\n\nу изменившихся сервисов появится ⬆ — жми «Синхронизировать»."
+	}
+	return out, nil
 }

@@ -1,18 +1,11 @@
 package presets
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"net"
 	"sort"
 	"strings"
 	"testing"
 )
-
-func revOf(entries []string) string {
-	h := sha256.Sum256([]byte(strings.Join(entries, "\n")))
-	return hex.EncodeToString(h[:])[:12]
-}
 
 func TestManifestLoads(t *testing.T) {
 	all := All()

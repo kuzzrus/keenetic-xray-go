@@ -54,7 +54,7 @@ func routesUsage() error {
 	return fmt.Errorf("usage: keenetic-xray routes {list | show [name] | new <name> [entries…] | " +
 		"add <name> <entries…> | del <name> <entries…> | rm <name> | enable <name> | disable <name> | " +
 		"set <name> [--iface=Proxy0|Wireguard4] [--exclusive] [--no-exclusive] | " +
-		"preset {list | show <name> | add <name> [--ip] [--iface=…] [--exclusive] | sync [<name>|--all]} | apply}")
+		"preset {list | show <name> | add <name> [--ip] [--iface=…] [--exclusive] | sync [<name>|--all] | update} | apply}")
 }
 
 func findList(cfg *config.Config, name string) (*config.RouteList, int) {

@@ -443,6 +443,16 @@ type Config struct {
 	// profile). "" keeps each link's own mode. One of
 	// auto|packet-up|stream-up|stream-one.
 	XHTTPMode string `json:"xhttp_mode,omitempty"`
+
+	// PresetsNoAutoUpdate turns off the daily pull of the built-in
+	// routing-list presets from the repo (internal/presets.Refresh). The
+	// embedded copy is then the only source until the agent is updated.
+	PresetsNoAutoUpdate bool `json:"presets_no_auto_update,omitempty"`
+
+	// PresetsSourceURL overrides where preset refreshes are fetched from
+	// (default: internal/presets.DefaultSourceURL). For a fork or a
+	// mirror; "" -> the default.
+	PresetsSourceURL string `json:"presets_source_url,omitempty"`
 }
 
 // ValidXHTTPMode reports whether s is an acceptable XHTTPMode: empty

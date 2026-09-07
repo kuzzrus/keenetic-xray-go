@@ -80,6 +80,14 @@ func netfilterHookPath() string {
 	return envOr("KEENETIC_XRAY_NETFILTER_HOOK", "/opt/etc/ndm/netfilter.d/50-keenetic-xray.sh")
 }
 
+// presetsOverlayDir is where internal/presets.Refresh keeps the daily
+// repo-refreshed routing-list presets. Next to config.json so a package
+// purge (install.PrermCleanup) clears it too; the embedded copy is the
+// fallback when it's absent.
+func presetsOverlayDir() string {
+	return envOr("KEENETIC_XRAY_PRESETS_DIR", filepath.Dir(configPath())+"/presets")
+}
+
 const defaultAgentTokenFile = "/opt/etc/keenetic-xray/agent-token.secret"
 
 func defaultAgentTokenPath() string {

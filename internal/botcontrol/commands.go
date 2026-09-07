@@ -203,6 +203,8 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 		return h.routesPresetAdd(ctx, cmd.Args)
 	case ActionRoutesPresetSync:
 		return h.routesPresetSync(ctx, cmd.Args)
+	case ActionRoutesPresetUpdate:
+		return h.routesPresetUpdate(ctx)
 	default:
 		return "", fmt.Errorf("unknown action %q", cmd.Action)
 	}

@@ -189,7 +189,10 @@ func presetCategoriesKB(id string, pm presetMenu) inlineKeyboard {
 		}
 		rows = append(rows, row)
 	}
-	rows = append(rows, []inlineButton{{Text: "⬅️ К спискам", CallbackData: "rtm:" + id}})
+	rows = append(rows,
+		[]inlineButton{{Text: "🔄 Обновить из репозитория", CallbackData: "rtpu:" + id}},
+		[]inlineButton{{Text: "⬅️ К спискам", CallbackData: "rtm:" + id}},
+	)
 	return inlineKeyboard{InlineKeyboard: rows}
 }
 
@@ -328,6 +331,8 @@ func (b *TelegramBot) handlePresetCallback(ctx context.Context, cb tgCallbackQue
 	switch {
 	case strings.HasPrefix(data, "rtp:"):
 		b.openPresetCategoriesScreen(ctx, cb, strings.TrimPrefix(data, "rtp:"))
+	case strings.HasPrefix(data, "rtpu:"):
+		b.enqueuePresetAction(ctx, cb, strings.TrimPrefix(data, "rtpu:"), -1, ActionRoutesPresetUpdate, nil)
 	case strings.HasPrefix(data, "rtpc:"):
 		if id, idx, ok := parseRouteRef(data, "rtpc:"); ok {
 			b.openPresetCategoryScreen(ctx, cb, id, idx)

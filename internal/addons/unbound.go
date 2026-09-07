@@ -11,17 +11,23 @@ func init() { Register(&unboundAddon{}) }
 
 // unbound is a local recursive DNS resolver: it talks to the root
 // servers directly instead of trusting an upstream that can be poisoned.
-// This component installs and manages it on 127.0.0.1:<port> (5353 by
-// default) with DNSSEC validation. It does NOT yet repoint Keenetic's
-// dns-proxy at it -- that wiring (opkg dns-override, and undoing it
-// cleanly) needs verifying on hardware first and lands with the bot
-// screen; for now Status prints the one manual step.
+// Two modes:
+//
+//	local  (default) -- listens on 127.0.0.1:<port> (5353); nothing on
+//	        the router uses it yet, it's just there.
+//	router (router-dns=on) -- listens on 0.0.0.0:53 and KeeneticOS's
+//	        `opkg dns-override` is set, so every device on the LAN
+//	        resolves through unbound instead of the ISP. Removing the
+//	        component (or router-dns=off) reverts the override and moves
+//	        unbound back to the local port.
 const (
 	unboundPkg      = "unbound-daemon"
 	unboundInit     = "S61unbound"
 	unboundConf     = "/opt/etc/unbound/unbound.conf"
 	unboundDefPort  = 5353
-	unboundDefCache = 8 // MB, per rrset/msg cache
+	unboundRtrPort  = 53
+	unboundDefCache = 8                    // MB, per rrset/msg cache
+	unboundRtrMark  = "interface: 0.0.0.0" // present in the conf iff in router mode
 )
 
 type unboundAddon struct{}
@@ -31,25 +37,61 @@ func (*unboundAddon) Title() string { return "unbound — рекурсивный
 
 func (*unboundAddon) About() string {
 	return "Локальный рекурсивный резолвер unbound: сам ходит по корневым серверам, а не " +
-		"доверяет провайдерскому DNS, который может подменять ответы. Проверяет DNSSEC. " +
-		"Слушает 127.0.0.1:<port>.\n\n" +
+		"доверяет провайдерскому DNS, который может подменять ответы. Проверяет DNSSEC.\n\n" +
 		"Настройки (addon configure unbound …):\n" +
-		"  port=5353     локальный порт\n" +
-		"  cache=8       размер кэша, МБ (на каждый из rrset/msg)\n" +
-		"  dnssec=on|off проверка DNSSEC\n\n" +
-		"Пока НЕ подключается автоматически как резолвер роутера — этот шаг " +
-		"(opkg dns-override) добавится отдельно после проверки на железе."
+		"  router-dns=on|off  сделать unbound резолвером всего роутера (0.0.0.0:53 +\n" +
+		"                     opkg dns-override) или вернуть встроенный dns-proxy\n" +
+		"  port=5353          локальный порт (в режиме router-dns игнорируется — там 53)\n" +
+		"  cache=8            размер кэша, МБ (на каждый из rrset/msg)\n" +
+		"  dnssec=on|off      проверка DNSSEC\n\n" +
+		"При удалении компонента, если он был резолвером роутера, dns-override снимается " +
+		"автоматически — роутер возвращается на свой dns-proxy."
+}
+
+// unboundState reads the current conf.
+type unboundState struct {
+	installed  bool
+	version    string
+	port       int
+	cacheMB    int
+	dnssec     bool
+	routerMode bool
+}
+
+func unboundRead(ctx context.Context) unboundState {
+	st := unboundState{port: unboundDefPort, cacheMB: unboundDefCache, dnssec: true}
+	st.version = opkgInstalledVersion(ctx, unboundPkg)
+	st.installed = st.version != ""
+	body, err := readFile(unboundConf)
+	if err != nil {
+		return st
+	}
+	s := string(body)
+	st.routerMode = strings.Contains(s, unboundRtrMark)
+	if n := unboundGrepInt(s, "port:"); n > 0 {
+		st.port = n
+	}
+	if strings.Contains(s, "val-permissive-mode: yes") {
+		st.dnssec = false
+	}
+	if n := unboundGrepInt(s, "msg-cache-size:"); n > 0 {
+		st.cacheMB = n / (1024 * 1024)
+	}
+	return st
 }
 
 func (*unboundAddon) Detect(ctx context.Context) State {
-	v := opkgInstalledVersion(ctx, unboundPkg)
-	st := State{Installed: v != "", Version: v, HasDaemon: true}
-	if !st.Installed {
+	u := unboundRead(ctx)
+	st := State{Installed: u.installed, Version: u.version, HasDaemon: true}
+	if !u.installed {
 		return st
 	}
-	port := unboundConfiguredPort(ctx)
-	st.Running = portListening(ctx, port)
-	st.Detail = fmt.Sprintf("127.0.0.1:%d", port)
+	st.Running = portListening(ctx, u.port)
+	if u.routerMode {
+		st.Detail = "резолвер роутера, 0.0.0.0:53"
+	} else {
+		st.Detail = fmt.Sprintf("локально, 127.0.0.1:%d", u.port)
+	}
 	return st
 }
 
@@ -58,8 +100,7 @@ func (*unboundAddon) Install(ctx context.Context) error {
 		return err
 	}
 	if _, err := readFile(unboundConf); err != nil {
-		// Fresh install with no usable conf -> lay down ours.
-		if err := writeFile(unboundConf, []byte(unboundConfBody(unboundDefPort, unboundDefCache, true)), 0o644); err != nil {
+		if err := writeFile(unboundConf, []byte(unboundConfBody(unboundDefPort, unboundDefCache, true, false)), 0o644); err != nil {
 			return fmt.Errorf("запись %s: %w", unboundConf, err)
 		}
 	}
@@ -70,27 +111,39 @@ func (*unboundAddon) Install(ctx context.Context) error {
 }
 
 func (*unboundAddon) Remove(ctx context.Context) error {
+	u := unboundRead(ctx)
+	// If unbound was the router's resolver, hand DNS back BEFORE pulling
+	// the package -- otherwise the LAN is left with no resolver at all. A
+	// failure here IS fatal to the removal (better to stop than strand
+	// the router without DNS).
+	if u.routerMode || (keeneticAvailable() && overrideOn(ctx)) {
+		if err := setRouterDNSOverride(ctx, false); err != nil {
+			return fmt.Errorf("сначала снимаю opkg dns-override, чтобы роутер не остался без DNS — не вышло: %w", err)
+		}
+	}
 	_, _ = initdRun(ctx, unboundInit, "stop")
 	return opkgRemove(ctx, unboundPkg)
 }
 
 func (*unboundAddon) Configure(ctx context.Context, kv map[string]string) error {
-	port := unboundConfiguredPort(ctx)
-	cache := unboundDefCache
-	dnssec := true
-	// seed cache/dnssec from the current file so a partial change keeps the rest
-	if body, err := readFile(unboundConf); err == nil {
-		s := string(body)
-		if strings.Contains(s, "# dnssec: off") || strings.Contains(s, "val-permissive-mode: yes") {
-			dnssec = false
-		}
-		if n := unboundGrepInt(s, "msg-cache-size:"); n > 0 {
-			cache = n / (1024 * 1024)
-		}
+	u := unboundRead(ctx)
+	if !u.installed {
+		return fmt.Errorf("unbound не установлен")
 	}
+	port, cache, dnssec, router := u.port, u.cacheMB, u.dnssec, u.routerMode
+	switchRouter := "" // "", "on", "off"
 
 	for k, v := range kv {
 		switch k {
+		case "router-dns":
+			switch v {
+			case "on", "yes", "true":
+				switchRouter, router = "on", true
+			case "off", "no", "false":
+				switchRouter, router = "off", false
+			default:
+				return fmt.Errorf("router-dns=%q: on или off", v)
+			}
 		case "port":
 			n, err := strconv.Atoi(v)
 			if err != nil || n < 1 || n > 65535 {
@@ -117,46 +170,87 @@ func (*unboundAddon) Configure(ctx context.Context, kv map[string]string) error 
 		}
 	}
 
-	if err := writeFile(unboundConf, []byte(unboundConfBody(port, cache, dnssec)), 0o644); err != nil {
-		return err
+	if router {
+		port = unboundRtrPort // router mode always owns :53
 	}
-	if _, err := initdRun(ctx, unboundInit, "restart"); err != nil {
-		return fmt.Errorf("unbound не перезапустился: %w", err)
+
+	writeConf := func() error {
+		if err := writeFile(unboundConf, []byte(unboundConfBody(port, cache, dnssec, router)), 0o644); err != nil {
+			return err
+		}
+		if _, err := initdRun(ctx, unboundInit, "restart"); err != nil {
+			return fmt.Errorf("unbound не перезапустился: %w", err)
+		}
+		return nil
+	}
+
+	switch switchRouter {
+	case "on":
+		// Free :53 first (dns-proxy stands down), then bring unbound up on it.
+		if !keeneticAvailable() {
+			return fmt.Errorf("router-dns требует роутер Keenetic (ndmc не найден)")
+		}
+		if err := setRouterDNSOverride(ctx, true); err != nil {
+			return fmt.Errorf("opkg dns-override: %w", err)
+		}
+		if err := writeConf(); err != nil {
+			// roll the override back so the LAN isn't left dark
+			_ = setRouterDNSOverride(ctx, false)
+			return err
+		}
+	case "off":
+		// Move unbound off :53 first, then let dns-proxy reclaim it.
+		if err := writeConf(); err != nil {
+			return err
+		}
+		if keeneticAvailable() {
+			if err := setRouterDNSOverride(ctx, false); err != nil {
+				return fmt.Errorf("не смог снять opkg dns-override: %w", err)
+			}
+		}
+	default:
+		if err := writeConf(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
 func (*unboundAddon) Status(ctx context.Context) (string, error) {
-	if opkgInstalledVersion(ctx, unboundPkg) == "" {
+	u := unboundRead(ctx)
+	if !u.installed {
 		return "unbound не установлен", nil
 	}
-	port := unboundConfiguredPort(ctx)
 	var b strings.Builder
-	if portListening(ctx, port) {
-		fmt.Fprintf(&b, "unbound: слушает 127.0.0.1:%d\n", port)
+	if portListening(ctx, u.port) {
+		fmt.Fprintf(&b, "unbound: слушает %s:%d\n", ifaceForMode(u.routerMode), u.port)
 	} else {
-		fmt.Fprintf(&b, "unbound: установлен, но на 127.0.0.1:%d тишина (проверь `%s/%s status`)\n", port, initdDir, unboundInit)
+		fmt.Fprintf(&b, "unbound: установлен, но на порту %d тишина (проверь `%s/%s status`)\n", u.port, initdDir, unboundInit)
 	}
-	fmt.Fprintf(&b, "как резолвер роутера пока не подключён — вручную: opkg dns-override, затем перезапуск dns-proxy\n")
+	if u.routerMode {
+		b.WriteString("режим: резолвер всего роутера (opkg dns-override)\n")
+		if keeneticAvailable() {
+			if on := overrideOn(ctx); !on {
+				b.WriteString("⚠️ но `opkg dns-override` на роутере НЕ активен — примени `addon configure unbound router-dns=on` заново\n")
+			}
+		}
+	} else {
+		b.WriteString("режим: локальный (роутер этим резолвером не пользуется; включить: addon configure unbound router-dns=on)\n")
+	}
 	return strings.TrimRight(b.String(), "\n"), nil
 }
 
-// unboundConfiguredPort reads the port: line from the conf, or the
-// default.
-func unboundConfiguredPort(_ context.Context) int {
-	data, err := readFile(unboundConf)
-	if err != nil {
-		return unboundDefPort
+func ifaceForMode(routerMode bool) string {
+	if routerMode {
+		return "0.0.0.0"
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if v, ok := strings.CutPrefix(line, "port:"); ok {
-			if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
-				return n
-			}
-		}
-	}
-	return unboundDefPort
+	return "127.0.0.1"
+}
+
+// overrideOn is routerDNSOverrideOn with the error swallowed to a bool.
+func overrideOn(ctx context.Context) bool {
+	on, err := routerDNSOverrideOn(ctx)
+	return err == nil && on
 }
 
 func unboundGrepInt(body, key string) int {
@@ -170,25 +264,34 @@ func unboundGrepInt(body, key string) int {
 	return 0
 }
 
-// unboundConfBody renders a conservative recursive-resolver config.
-func unboundConfBody(port, cacheMB int, dnssec bool) string {
+// unboundConfBody renders the recursive-resolver config. routerMode
+// widens the listen address to 0.0.0.0 and opens access-control to
+// RFC1918 so LAN clients can use it.
+func unboundConfBody(port, cacheMB int, dnssec, routerMode bool) string {
 	bytesPerCache := cacheMB * 1024 * 1024
 	dnssecLine := `auto-trust-anchor-file: "/opt/etc/unbound/root.key"`
 	if !dnssec {
 		dnssecLine = "val-permissive-mode: yes  # dnssec: off"
 	}
+	listen := "    interface: 127.0.0.1\n    access-control: 127.0.0.0/8 allow\n    access-control: 0.0.0.0/0 refuse"
+	if routerMode {
+		listen = "    interface: 0.0.0.0\n" +
+			"    access-control: 127.0.0.0/8 allow\n" +
+			"    access-control: 10.0.0.0/8 allow\n" +
+			"    access-control: 172.16.0.0/12 allow\n" +
+			"    access-control: 192.168.0.0/16 allow\n" +
+			"    access-control: 0.0.0.0/0 refuse"
+	}
 	return fmt.Sprintf(`# Managed by keenetic-xray (addons: unbound). Regenerated on
 # `+"`addon configure unbound …`"+` -- local edits do not stick.
 server:
     verbosity: 0
-    interface: 127.0.0.1
+%s
     port: %d
     do-ip4: yes
     do-ip6: no
     do-udp: yes
     do-tcp: yes
-    access-control: 127.0.0.0/8 allow
-    access-control: 0.0.0.0/0 refuse
     hide-identity: yes
     hide-version: yes
     harden-glue: yes
@@ -205,5 +308,5 @@ server:
     num-threads: 1
     so-reuseport: yes
     %s
-`, port, bytesPerCache, bytesPerCache, dnssecLine)
+`, listen, port, bytesPerCache, bytesPerCache, dnssecLine)
 }

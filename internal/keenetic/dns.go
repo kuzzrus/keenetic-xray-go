@@ -171,6 +171,42 @@ func ApplyDNS(ctx context.Context, want DNSDesired) (DNSReport, error) {
 	return rep, nil
 }
 
+// SetOpkgDNSOverride flips KeeneticOS's `opkg dns-override`: on hands
+// port 53 to a locally-installed resolver (Entware) by standing down the
+// built-in dns-proxy; `no opkg dns-override` gives it back. Followed by
+// `system configuration save` so it survives a reboot. Idempotent on the
+// router side -- running it when already in that state is harmless.
+func SetOpkgDNSOverride(ctx context.Context, on bool) error {
+	if !Available() {
+		return fmt.Errorf("ndmc not found (not a Keenetic router?)")
+	}
+	cmd := "opkg dns-override"
+	if !on {
+		cmd = "no opkg dns-override"
+	}
+	for _, c := range []string{cmd, "system configuration save"} {
+		if _, err := ndmcRun(ctx, c); err != nil {
+			return fmt.Errorf("%q: %w", c, err)
+		}
+	}
+	return nil
+}
+
+// OpkgDNSOverrideActive reports whether `opkg dns-override` is currently
+// set (a bare `opkg dns-override` line in the running config).
+func OpkgDNSOverrideActive(ctx context.Context) (bool, error) {
+	out, err := ndmcRun(ctx, "show running-config")
+	if err != nil {
+		return false, fmt.Errorf("show running-config: %w", err)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if strings.TrimSpace(line) == "opkg dns-override" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // ShowDNS returns the router's current secure upstreams, sorted.
 func ShowDNS(ctx context.Context) (LiveDNS, error) {
 	if !Available() {

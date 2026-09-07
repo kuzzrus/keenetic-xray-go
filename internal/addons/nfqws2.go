@@ -3,6 +3,7 @@ package addons
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,14 +21,33 @@ func init() { Register(&nfqws2Addon{}) }
 // edits its config file / domain list.
 const (
 	nfqwsPkg      = "nfqws2-keenetic"
-	nfqwsFeedName = "nfqws2"
-	nfqwsFeedURL  = "https://nfqws.github.io/nfqws2-keenetic/all"
-	nfqwsFeedFile = "/opt/etc/opkg/nfqws2.conf"
+	nfqwsFeedName = "nfqws2-keenetic" // src/gz <name> -- must match the package feed name
+	nfqwsFeedBase = "https://nfqws.github.io/nfqws2-keenetic"
+	nfqwsFeedFile = "/opt/etc/opkg/nfqws2-keenetic.conf"
 	nfqwsInit     = "S51nfqws2"
 	nfqwsConf     = "/opt/etc/nfqws2/nfqws2.conf"
 	nfqwsUserList = "/opt/etc/nfqws2/lists/user.list"
 	nfqwsLog      = "/opt/var/log/nfqws2.log"
 )
+
+// nfqwsFeedURL is the arch-specific opkg feed. The nfqws2-keenetic repo
+// publishes per-arch indexes (mips / mipsel / aarch64 / …); the generic
+// "/all" path carries no installable packages, which is why an install
+// against it fails with "Unknown package".
+func nfqwsFeedURL() string {
+	arch := map[string]string{
+		"mipsle": "mipsel",
+		"mips":   "mips",
+		"arm64":  "aarch64",
+		"arm":    "armv7",
+		"386":    "x86",
+		"amd64":  "x86_64",
+	}[runtime.GOARCH]
+	if arch == "" {
+		arch = runtime.GOARCH
+	}
+	return nfqwsFeedBase + "/" + arch
+}
 
 type nfqws2Addon struct{}
 
@@ -65,7 +85,7 @@ func (*nfqws2Addon) Detect(ctx context.Context) State {
 }
 
 func (*nfqws2Addon) Install(ctx context.Context) error {
-	if err := writeFile(nfqwsFeedFile, []byte(fmt.Sprintf("src/gz %s %s\n", nfqwsFeedName, nfqwsFeedURL)), 0o644); err != nil {
+	if err := writeFile(nfqwsFeedFile, []byte(fmt.Sprintf("src/gz %s %s\n", nfqwsFeedName, nfqwsFeedURL())), 0o644); err != nil {
 		return fmt.Errorf("добавление репозитория nfqws2 (%s): %w", nfqwsFeedFile, err)
 	}
 	if err := opkgInstall(ctx, nfqwsPkg); err != nil {

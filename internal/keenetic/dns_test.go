@@ -139,3 +139,35 @@ func TestClearDNS(t *testing.T) {
 		t.Errorf("ClearDNS touched an unmanaged upstream:\n%s", joined)
 	}
 }
+
+func TestSetOpkgDNSOverride(t *testing.T) {
+	sent := fakeNdmc(t, nil)
+	if err := SetOpkgDNSOverride(context.Background(), true); err != nil {
+		t.Fatalf("on: %v", err)
+	}
+	if got := strings.Join(*sent, "|"); got != "opkg dns-override|system configuration save" {
+		t.Errorf("on sent %q", got)
+	}
+
+	sent2 := fakeNdmc(t, nil)
+	if err := SetOpkgDNSOverride(context.Background(), false); err != nil {
+		t.Fatalf("off: %v", err)
+	}
+	if got := strings.Join(*sent2, "|"); got != "no opkg dns-override|system configuration save" {
+		t.Errorf("off sent %q", got)
+	}
+}
+
+func TestOpkgDNSOverrideActive(t *testing.T) {
+	fakeNdmc(t, map[string]string{"show running-config": "system\n    hostname x\n!\nopkg dns-override\n!\n"})
+	on, err := OpkgDNSOverrideActive(context.Background())
+	if err != nil || !on {
+		t.Errorf("expected active, got %v %v", on, err)
+	}
+
+	fakeNdmc(t, map[string]string{"show running-config": "system\n    hostname x\n!\n"})
+	on, err = OpkgDNSOverrideActive(context.Background())
+	if err != nil || on {
+		t.Errorf("expected inactive, got %v %v", on, err)
+	}
+}

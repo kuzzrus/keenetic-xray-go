@@ -185,4 +185,33 @@ func TestAddonScreenKB_Buttons(t *testing.T) {
 			t.Errorf("addonScreenKB missing %q; got %v", want, datas)
 		}
 	}
+	// unbound-only: one-tap router-DNS buttons.
+	for _, want := range []string{"adnx:r1:unbound:router-dns=on", "adnx:r1:unbound:router-dns=off"} {
+		if !contains(datas, want) {
+			t.Errorf("unbound screen missing router-dns button %q; got %v", want, datas)
+		}
+	}
+	// a component without special buttons doesn't get adnx rows.
+	for _, row := range addonScreenKB("r1", "nfqws2").InlineKeyboard {
+		for _, b := range row {
+			if strings.HasPrefix(b.CallbackData, "adnx:") {
+				t.Errorf("nfqws2 screen should not have an adnx button: %q", b.CallbackData)
+			}
+		}
+	}
+}
+
+func TestTelegramBot_AddonsScreen_UnboundRouterDNSButton(t *testing.T) {
+	fake, _, rec := newAddonTestBot(t)
+	msgID := openMenu(t, fake)
+
+	fake.pushCallback(1, msgID, "adn:r1:unbound")
+	fake.waitForEditContaining(t, 3*time.Second, "🧩 unbound")
+
+	// Tap "Сделать DNS роутера" -> addon_configure [unbound router-dns=on].
+	fake.pushCallback(1, msgID, "adnx:r1:unbound:router-dns=on")
+	fake.waitForEditContaining(t, 3*time.Second, "настройки применены")
+	if !rec.has("addon_configure unbound|router-dns=on") {
+		t.Errorf("recorded = %v, want addon_configure unbound|router-dns=on", rec.list())
+	}
 }

@@ -159,8 +159,8 @@ func TestNfqws2_InstallAddsFeedAndStarts(t *testing.T) {
 		t.Fatalf("Install: %v", err)
 	}
 	feed, ok := f.files[nfqwsFeedFile]
-	if !ok || !strings.Contains(string(feed), nfqwsFeedURL) {
-		t.Errorf("feed file not written correctly: %q", feed)
+	if !ok || !strings.Contains(string(feed), nfqwsFeedURL()) || !strings.Contains(string(feed), "src/gz nfqws2-keenetic ") {
+		t.Errorf("feed file not written correctly: %q (want the src/gz nfqws2-keenetic line with %s)", feed, nfqwsFeedURL())
 	}
 	if !contains(f.opkgCalls, "install "+nfqwsPkg) {
 		t.Errorf("opkg install not called: %v", f.opkgCalls)
@@ -249,12 +249,97 @@ func TestUnbound_InstallWritesConfAndStarts(t *testing.T) {
 	if !strings.Contains(conf, "msg-cache-size: 16777216") {
 		t.Errorf("cache size not 16MB: %q", conf)
 	}
-	if unboundConfiguredPort(ctx) != 5300 {
-		t.Errorf("unboundConfiguredPort = %d, want 5300", unboundConfiguredPort(ctx))
+	if got := unboundRead(ctx); got.port != 5300 || got.routerMode {
+		t.Errorf("unboundRead = %+v, want port 5300, local mode", got)
 	}
 
 	if err := a.Configure(ctx, map[string]string{"port": "0"}); err == nil {
 		t.Error("port=0 should fail")
+	}
+}
+
+// withKeeneticSeam fakes the internal/keenetic calls unbound's
+// router-dns mode makes.
+func withKeeneticSeam(t *testing.T, available bool, overrideOn *bool) {
+	t.Helper()
+	oa, os, oo := keeneticAvailable, setRouterDNSOverride, routerDNSOverrideOn
+	keeneticAvailable = func() bool { return available }
+	setRouterDNSOverride = func(_ context.Context, on bool) error { *overrideOn = on; return nil }
+	routerDNSOverrideOn = func(_ context.Context) (bool, error) { return *overrideOn, nil }
+	t.Cleanup(func() { keeneticAvailable, setRouterDNSOverride, routerDNSOverrideOn = oa, os, oo })
+}
+
+func TestUnbound_RouterDNSOnOffAndRemoveReverts(t *testing.T) {
+	f := newFakeSys()
+	withFakeSys(t, f)
+	var override bool
+	withKeeneticSeam(t, true, &override)
+	ctx := context.Background()
+	a, _ := Find("unbound")
+
+	if err := a.Install(ctx); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+
+	// router-dns=on: override set, conf widened to 0.0.0.0:53.
+	if err := a.Configure(ctx, map[string]string{"router-dns": "on"}); err != nil {
+		t.Fatalf("router-dns=on: %v", err)
+	}
+	if !override {
+		t.Error("opkg dns-override should be set after router-dns=on")
+	}
+	conf := string(f.files[unboundConf])
+	if !strings.Contains(conf, "interface: 0.0.0.0") || !strings.Contains(conf, "port: 53") {
+		t.Errorf("conf not in router mode: %q", conf)
+	}
+	if u := unboundRead(ctx); !u.routerMode || u.port != 53 {
+		t.Errorf("unboundRead = %+v, want routerMode port 53", u)
+	}
+
+	// router-dns=off: override cleared, conf back to local.
+	if err := a.Configure(ctx, map[string]string{"router-dns": "off"}); err != nil {
+		t.Fatalf("router-dns=off: %v", err)
+	}
+	if override {
+		t.Error("opkg dns-override should be cleared after router-dns=off")
+	}
+	if u := unboundRead(ctx); u.routerMode {
+		t.Errorf("still in router mode after off: %+v", u)
+	}
+
+	// Removing while in router mode must revert the override first.
+	override = true
+	_, _ = f.files[unboundConf], f.files // keep
+	// put conf back into router mode to exercise the Remove path
+	if err := a.Configure(ctx, map[string]string{"router-dns": "on"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Remove(ctx); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if override {
+		t.Error("Remove must clear opkg dns-override before pulling the package")
+	}
+	if _, still := f.installed[unboundPkg]; still {
+		t.Error("unbound-daemon should be removed")
+	}
+}
+
+func TestUnbound_RouterDNSRequiresKeenetic(t *testing.T) {
+	f := newFakeSys()
+	withFakeSys(t, f)
+	var override bool
+	withKeeneticSeam(t, false, &override) // no ndmc
+	ctx := context.Background()
+	a, _ := Find("unbound")
+	f.installed[unboundPkg] = "1.19-test"
+	f.files[unboundConf] = []byte(unboundConfBody(5353, 8, true, false))
+
+	if err := a.Configure(ctx, map[string]string{"router-dns": "on"}); err == nil {
+		t.Error("router-dns=on should fail without a Keenetic")
+	}
+	if override {
+		t.Error("override must not be touched when Keenetic is absent")
 	}
 }
 

@@ -76,6 +76,8 @@ func run(args []string) error {
 		return cmdAddon(rest)
 	case "rci":
 		return cmdRCI(rest)
+	case "diag":
+		return cmdDiag(rest)
 	case "internal":
 		return cmdInternal(rest)
 	default:
@@ -115,7 +117,8 @@ commands:
                                                   xhttp mode override; forwarded-TCP MSS clamp on the Proxy0 path (PMTU fix); or an in-router WireGuard hop into xray
   addon {list|show <id>|status <id>|install <id>|remove <id>|configure <id> <k=v>…}
                                                   optional router-side components: unbound (local DNS), nfqws2 (DPI bypass), conntrack, cron
-  rci {show|probe [url]|enable [url]|disable}     read the router config over the local RCI JSON API instead of ndmc (hedge for ndmc-sandboxed firmware)`)
+  rci {show|probe [url]|enable [url]|disable}     read the router config over the local RCI JSON API instead of ndmc (hedge for ndmc-sandboxed firmware)
+  diag                                            one-shot diagnostic bundle to stdout (config with secrets redacted + resolver/addon/rci/keenetic state + log tail)`)
 }
 
 func cmdDaemon(args []string) error {

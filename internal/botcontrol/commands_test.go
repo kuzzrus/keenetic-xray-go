@@ -1108,3 +1108,24 @@ func TestRouterHandler_SwitchTo(t *testing.T) {
 		t.Errorf("state = %v (ran=%v), want StateActiveBackup", state, ran)
 	}
 }
+
+func TestRouterHandler_Diag(t *testing.T) {
+	origExe, origRun := selfExe, runSelf
+	selfExe = func() (string, error) { return "/opt/sbin/keenetic-xray", nil }
+	runSelf = func(_ context.Context, exe string, args ...string) ([]byte, error) {
+		if exe != "/opt/sbin/keenetic-xray" || len(args) != 1 || args[0] != "diag" {
+			t.Fatalf("runSelf called with %q %v", exe, args)
+		}
+		return []byte("==== keenetic-xray diag ====\nagent: test\n==== end ===="), nil
+	}
+	t.Cleanup(func() { selfExe, runSelf = origExe, origRun })
+
+	h := &RouterHandler{Config: config.Default()}
+	out, err := h.Handle(context.Background(), Command{Action: ActionDiag})
+	if err != nil {
+		t.Fatalf("diag: %v", err)
+	}
+	if !strings.Contains(out, "keenetic-xray diag") || !strings.Contains(out, "end") {
+		t.Errorf("diag passthrough = %q", out)
+	}
+}

@@ -529,6 +529,7 @@ const helpText = `/menu — меню с кнопками (проще всего)
 Дальше первым аргументом идёт id роутера:
 /status <router>
 /doctor <router>
+/diag <router> — диаг-бандл (конфиг без секретов + состояние + хвост лога)
 /switch <router> primary|backup
 /profile_list <router>
 /sub_seturl <router> <url>
@@ -579,6 +580,8 @@ func (b *TelegramBot) dispatch(ctx context.Context, text string) string {
 		return b.runRouterCommand(ctx, args, ActionStatus, nil)
 	case "/doctor":
 		return b.runRouterCommand(ctx, args, ActionDoctor, nil)
+	case "/diag":
+		return b.runRouterCommand(ctx, args, ActionDiag, nil)
 	case "/switch":
 		return b.dispatchSwitch(ctx, args)
 	case "/profile_list":

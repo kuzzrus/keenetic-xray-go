@@ -96,6 +96,11 @@ const (
 	ActionAddonInstall   = "addon_install"   // args[0]=id
 	ActionAddonRemove    = "addon_remove"    // args[0]=id
 	ActionAddonConfigure = "addon_configure" // args[0]=id, args[1:]=key=value pairs
+
+	// ActionDiag returns the one-shot diagnostic bundle (`keenetic-xray
+	// diag`): config with secrets redacted + resolver/addon/rci/keenetic
+	// state + daemon-log tail. No args.
+	ActionDiag = "diag"
 )
 
 // Command is a single unit of work queued for a router by the control

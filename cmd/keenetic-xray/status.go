@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/kuzzrus/keenetic-xray-go/internal/addons"
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 	"github.com/kuzzrus/keenetic-xray-go/internal/diskspace"
 	"github.com/kuzzrus/keenetic-xray-go/internal/keenetic"
@@ -117,6 +118,18 @@ func cmdDoctor(args []string) error {
 			check(true, "RCI reachable at "+cfg.RCI.BaseURL())
 		}
 	}
+
+	// Local DNS resolvers (unbound / dnscrypt): a listening port isn't
+	// enough -- query it.
+	dctx, dcancel := context.WithTimeout(context.Background(), 20*time.Second)
+	for _, r := range addons.ResolverHealth(dctx) {
+		if r.Resolves {
+			check(true, fmt.Sprintf("%s resolves on 127.0.0.1:%d", r.ID, r.Port))
+		} else {
+			check(false, fmt.Sprintf("%s installed but not resolving on 127.0.0.1:%d (%s)", r.ID, r.Port, r.Detail))
+		}
+	}
+	dcancel()
 
 	if free, err := diskspace.FreeBytes(optPath()); err != nil {
 		fmt.Println("[warn] could not determine free disk space:", err)

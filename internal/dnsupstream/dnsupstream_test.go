@@ -243,3 +243,39 @@ func TestProbeAll_SortsWorkingFirst(t *testing.T) {
 		}
 	}
 }
+
+func TestProbePlain_AgainstFakeUDPServer(t *testing.T) {
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("ListenPacket: %v", err)
+	}
+	defer pc.Close()
+
+	// echo a minimal valid A reply (copy the query's transaction id).
+	go func() {
+		buf := make([]byte, 512)
+		for {
+			n, addr, err := pc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			if n < 12 {
+				continue
+			}
+			reply := make([]byte, 12)
+			copy(reply, buf[:12])
+			reply[2] = 0x81 // QR + RD
+			reply[3] = 0x00 // NOERROR
+			_, _ = pc.WriteTo(reply, addr)
+		}
+	}()
+
+	if err := ProbePlain(context.Background(), pc.LocalAddr().String()); err != nil {
+		t.Errorf("ProbePlain against a good fake resolver: %v", err)
+	}
+
+	// nothing listening -> error
+	if err := ProbePlain(context.Background(), "127.0.0.1:1"); err == nil {
+		t.Error("ProbePlain to a dead port should fail")
+	}
+}

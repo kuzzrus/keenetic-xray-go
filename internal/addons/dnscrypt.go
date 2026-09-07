@@ -234,7 +234,12 @@ func (*dnscryptAddon) Status(ctx context.Context) (string, error) {
 	}
 	var b strings.Builder
 	if portListening(ctx, d.port) || initStatusOK(ctx, dnscryptInit) {
-		fmt.Fprintf(&b, "dnscrypt-proxy: работает на :%d\n", d.port)
+		fmt.Fprintf(&b, "dnscrypt-proxy: работает на :%d", d.port)
+		if r := resolverStat(ctx, "dnscrypt", d.port); r.Resolves {
+			b.WriteString(" · резолвит ✅\n")
+		} else {
+			fmt.Fprintf(&b, " · ⚠️ не отвечает на запросы (%s)\n", r.Detail)
+		}
 	} else {
 		fmt.Fprintf(&b, "dnscrypt-proxy: установлен, но на :%d тишина (`%s/%s status`)\n", d.port, initdDir, dnscryptInit)
 	}

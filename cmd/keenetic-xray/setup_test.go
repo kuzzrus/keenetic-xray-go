@@ -227,6 +227,33 @@ func TestRunSetup_NonInteractive(t *testing.T) {
 	}
 }
 
+func TestTransportIface(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  *config.Config
+		want string
+	}{
+		{"proxy0 default name", &config.Config{Proxy0: config.Proxy0Config{Enabled: true}}, "Proxy0"},
+		{"proxy0 explicit name", &config.Config{Proxy0: config.Proxy0Config{Enabled: true, Interface: "Proxy2"}}, "Proxy2"},
+		{"wg transport", &config.Config{WGTransport: config.WGTransportConfig{Enabled: true, Iface: "Wireguard3"}}, "Wireguard3"},
+		{
+			"wg wins over proxy0",
+			&config.Config{
+				Proxy0:      config.Proxy0Config{Enabled: true},
+				WGTransport: config.WGTransportConfig{Enabled: true, Iface: "Wireguard3"},
+			},
+			"Wireguard3",
+		},
+		{"wg enabled but no iface pinned", &config.Config{WGTransport: config.WGTransportConfig{Enabled: true}}, ""},
+		{"nothing wired (option 4 / not a router)", &config.Config{}, ""},
+	}
+	for _, c := range cases {
+		if got := transportIface(c.cfg); got != c.want {
+			t.Errorf("%s: transportIface = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
 func TestResolveProfileSelector(t *testing.T) {
 	ps := []config.Profile{{Remark: "Netherlands A"}, {Remark: "Germany B"}, {Remark: "netherlands C"}}
 	cases := []struct {

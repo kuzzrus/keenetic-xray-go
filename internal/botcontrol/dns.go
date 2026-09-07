@@ -73,7 +73,7 @@ func (h *RouterHandler) dnsTest(ctx context.Context, args []string) (string, err
 	if all {
 		pool = dnsupstream.TestPool()
 	}
-	cctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 	res := dnsupstream.ProbeAll(cctx, pool)
 	var b strings.Builder

@@ -48,6 +48,13 @@ func probeBudget() (concurrency int, timeout time.Duration, sequential bool) {
 	}
 }
 
+// Budget exposes the per-probe timeout and fan-out chosen for this host,
+// so `dns test` can print the number it's actually using.
+func Budget() (concurrency int, timeout time.Duration) {
+	c, t, _ := probeBudget()
+	return c, t
+}
+
 // Timing is the outcome of one endpoint probe.
 type Timing struct {
 	OK      bool

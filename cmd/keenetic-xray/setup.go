@@ -16,6 +16,7 @@ import (
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 	"github.com/kuzzrus/keenetic-xray-go/internal/install"
 	"github.com/kuzzrus/keenetic-xray-go/internal/keenetic"
+	"github.com/kuzzrus/keenetic-xray-go/internal/presets"
 	"github.com/kuzzrus/keenetic-xray-go/internal/subscription"
 	"github.com/kuzzrus/keenetic-xray-go/internal/xraycore"
 )
@@ -242,11 +243,63 @@ func runSetupInteractive(reader *bufio.Reader, cfg *config.Config, o setupOpts) 
 	}
 
 	promptTransport(reader, cfg, o)
+	promptTelegramRoute(reader, cfg)
 	promptXrayCore(reader, o)
 
 	applyDaemonChange(reader, true)
 	printSetupSummary(cfg, haveBackup)
 	return nil
+}
+
+// transportIface names the Keenetic interface the wizard just pointed
+// router traffic at -- the in-router WireGuard transport, or Proxy0 --
+// or "" when the operator kept Keenetic untouched (transport option 4)
+// or this isn't a router. WG wins if both somehow got set.
+func transportIface(cfg *config.Config) string {
+	switch {
+	case cfg.WGTransport.Enabled && cfg.WGTransport.Iface != "":
+		return cfg.WGTransport.Iface
+	case cfg.Proxy0.Enabled:
+		return cfg.Proxy0.IfaceName()
+	default:
+		return ""
+	}
+}
+
+// promptTelegramRoute offers, right after the transport is chosen, to
+// send Telegram straight through it -- so a fresh install comes up with
+// Telegram already tunnelled without a second command. Binds the
+// embedded telegram / telegram-ip presets to the just-picked interface
+// and runs the normal routes apply. Skipped when there's no transport to
+// ride (option 4, or not a Keenetic).
+func promptTelegramRoute(reader *bufio.Reader, cfg *config.Config) {
+	iface := transportIface(cfg)
+	if iface == "" || !keenetic.Available() {
+		return
+	}
+	fmt.Printf("\nЗавернуть Telegram в туннель через %s? [Y/n]: ", iface)
+	line, _ := reader.ReadString('\n')
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "n", "no", "н", "нет":
+		fmt.Println("  пропущено — позже:  keenetic-xray routes preset add telegram --ip --iface=" + iface)
+		return
+	}
+
+	presets.SetOverlay(presetsOverlayDir())
+	names, err := presets.Apply(cfg, "telegram", true, iface, false)
+	if err != nil {
+		fmt.Println("  список telegram не применился:", err)
+		fmt.Println("  позже:  keenetic-xray routes preset add telegram --ip --iface=" + iface)
+		return
+	}
+	// presets.Apply lands the interface on the domain list only; Telegram's
+	// CIDR ranges are tight and service-specific, so send them the same way.
+	if ip := presets.BoundList(cfg, "telegram-ip"); ip != nil {
+		ip.Interface = iface
+	}
+	if err := routesApply(cfg, fmt.Sprintf("Telegram → %s (%s)", iface, strings.Join(names, ", "))); err != nil {
+		fmt.Println(" ", err)
+	}
 }
 
 // promptXrayCore offers to switch the just-installed stable core to the
@@ -540,6 +593,9 @@ func printSetupSummary(cfg *config.Config, haveBackup bool) {
 		fmt.Printf("  транспорт: WireGuard (%s)\n", cfg.WGTransport.Iface)
 	default:
 		fmt.Println("  транспорт: только локальный прокси")
+	}
+	if l := presets.BoundList(cfg, "telegram"); l != nil {
+		fmt.Printf("  telegram:  → %s\n", l.RouteIface())
 	}
 	if v, err := xraycore.Version(xrayBinaryPath()); err == nil {
 		if i := strings.Index(v, " ("); i > 0 {

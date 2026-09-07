@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -548,5 +549,45 @@ func TestConfig_Proxy0Port(t *testing.T) {
 	c.Proxy0.Protocol = "http"
 	if got := c.Proxy0Port(); got != c.Failover.HTTPPort {
 		t.Errorf("Proxy0Port() http = %d, want HTTP port %d", got, c.Failover.HTTPPort)
+	}
+}
+
+func TestRedacted(t *testing.T) {
+	c := &Config{
+		Profiles: []Profile{{
+			Remark: "srv1", UUID: "11111111-2222-3333-4444-555555555555",
+			Address: "server.example.com", Port: 443, Security: "reality",
+			PublicKey: "abcdefPUBKEY", ShortID: "0a1b2c3d", SNI: "www.microsoft.com",
+		}},
+		Subscription:  &Subscription{URL: "https://sub.example.com/secret-token/abc"},
+		PrimarySource: &SlotSource{URL: "https://s.example/tok"},
+	}
+	c.WGTransport.XraySecretKey = "SECRETKEY123"
+	c.WGTransport.PSK = "PSK123"
+	c.DNS.DoH = []DNSHostHTTPS{{URL: "https://dns.example.com/dns-query/client-token"}}
+
+	r := c.Redacted()
+
+	if c.Profiles[0].UUID == "<redacted>" {
+		t.Fatal("Redacted mutated the original")
+	}
+	if r.Profiles[0].UUID != "<redacted>" || r.Profiles[0].PublicKey != "<redacted>" || r.Profiles[0].ShortID != "<redacted>" {
+		t.Errorf("profile secrets not masked: %+v", r.Profiles[0])
+	}
+	if r.Profiles[0].Address != "server.example.com" || r.Profiles[0].Port != 443 || r.Profiles[0].SNI != "www.microsoft.com" {
+		t.Errorf("non-secret profile fields lost: %+v", r.Profiles[0])
+	}
+	if r.Subscription.URL != "<redacted>" || r.PrimarySource.URL != "<redacted>" {
+		t.Errorf("URLs not masked: %q %q", r.Subscription.URL, r.PrimarySource.URL)
+	}
+	if r.WGTransport.XraySecretKey != "<redacted>" || r.WGTransport.PSK != "<redacted>" {
+		t.Errorf("WG keys not masked: %+v", r.WGTransport)
+	}
+	if r.DNS.DoH[0].URL != "https://dns.example.com/<redacted>" {
+		t.Errorf("DoH path not masked: %q", r.DNS.DoH[0].URL)
+	}
+	b, _ := json.Marshal((&Config{}).Redacted())
+	if strings.Contains(string(b), "<redacted>") {
+		t.Error("empty config produced a <redacted> token")
 	}
 }

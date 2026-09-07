@@ -227,6 +227,8 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 		return h.addonRemove(ctx, cmd.Args)
 	case ActionAddonConfigure:
 		return h.addonConfigure(ctx, cmd.Args)
+	case ActionDiag:
+		return h.diag(ctx)
 	default:
 		return "", fmt.Errorf("unknown action %q", cmd.Action)
 	}

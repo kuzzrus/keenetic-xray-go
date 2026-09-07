@@ -1019,3 +1019,70 @@ func (s IndependentSlots) Restore(c *Config) {
 		c.BackupIndex = c.UpsertProfile(*s.Backup)
 	}
 }
+
+// Redacted returns a deep copy of c with every credential / token /
+// secret-carrying URL masked -- safe to drop into a diagnostic bundle
+// or paste into a chat. Kept: server addresses, ports, SNI, transport
+// tuning, failover knobs (all needed to debug). Masked: VLESS UUIDs,
+// REALITY public-key/short-id, subscription & slot-source URLs, WG key
+// material, and the path of any DoH URL (can carry a client token).
+func (c *Config) Redacted() *Config {
+	b, err := json.Marshal(c)
+	if err != nil {
+		return &Config{}
+	}
+	var d Config
+	if err := json.Unmarshal(b, &d); err != nil {
+		return &Config{}
+	}
+
+	mask := func(s string) string {
+		if s == "" {
+			return ""
+		}
+		return "<redacted>"
+	}
+	for i := range d.Profiles {
+		p := &d.Profiles[i]
+		p.UUID = mask(p.UUID)
+		p.PublicKey = mask(p.PublicKey)
+		p.ShortID = mask(p.ShortID)
+	}
+	if d.Subscription != nil {
+		d.Subscription.URL = mask(d.Subscription.URL)
+	}
+	if d.PrimarySource != nil {
+		d.PrimarySource.URL = mask(d.PrimarySource.URL)
+	}
+	if d.BackupSource != nil {
+		d.BackupSource.URL = mask(d.BackupSource.URL)
+	}
+	d.WGTransport.XraySecretKey = mask(d.WGTransport.XraySecretKey)
+	d.WGTransport.XrayPublicKey = mask(d.WGTransport.XrayPublicKey)
+	d.WGTransport.KeeneticPublicKey = mask(d.WGTransport.KeeneticPublicKey)
+	d.WGTransport.PSK = mask(d.WGTransport.PSK)
+	for i := range d.DNS.DoH {
+		d.DNS.DoH[i].URL = redactURLPath(d.DNS.DoH[i].URL)
+	}
+	return &d
+}
+
+// redactURLPath keeps scheme://host of a URL but replaces the path and
+// query with "/<redacted>" -- a DoH URL's path segment is often a
+// per-client token.
+func redactURLPath(u string) string {
+	scheme := ""
+	rest := u
+	if i := strings.Index(rest, "://"); i >= 0 {
+		scheme = rest[:i+3]
+		rest = rest[i+3:]
+	}
+	host := rest
+	if i := strings.IndexAny(rest, "/?"); i >= 0 {
+		host = rest[:i]
+	}
+	if host == "" {
+		return u
+	}
+	return scheme + host + "/<redacted>"
+}

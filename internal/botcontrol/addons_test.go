@@ -49,6 +49,60 @@ func TestRouterHandler_AddonUnknown(t *testing.T) {
 	}
 }
 
+// The CI box / dev machine has no opkg, so these outcomes are
+// deterministic: a not-installed component, an install that can't run
+// opkg, a component with no settings.
+func TestRouterHandler_AddonShowStatusRemove_NotInstalled(t *testing.T) {
+	h := &RouterHandler{Config: config.Default()}
+	ctx := context.Background()
+
+	show, err := h.Handle(ctx, Command{Action: ActionAddonShow, Args: []string{"unbound"}})
+	if err != nil {
+		t.Fatalf("addon_show: %v", err)
+	}
+	if !strings.Contains(show, "не установлен") || !strings.Contains(show, "unbound") {
+		t.Errorf("addon_show text = %q", show)
+	}
+
+	st, err := h.Handle(ctx, Command{Action: ActionAddonStatus, Args: []string{"conntrack"}})
+	if err != nil || !strings.Contains(st, "не установлен") {
+		t.Errorf("addon_status = %q, %v", st, err)
+	}
+
+	// Remove on a not-installed component is a friendly no-op, not an error.
+	rm, err := h.Handle(ctx, Command{Action: ActionAddonRemove, Args: []string{"conntrack"}})
+	if err != nil || !strings.Contains(rm, "не установлен") {
+		t.Errorf("addon_remove = %q, %v", rm, err)
+	}
+}
+
+func TestRouterHandler_AddonInstall_FailsWithoutOpkg(t *testing.T) {
+	h := &RouterHandler{Config: config.Default()}
+	// conntrack is the simplest: Install is just `opkg install conntrack`,
+	// which can't run here -> an error surfaces rather than a panic.
+	if _, err := h.Handle(context.Background(), Command{Action: ActionAddonInstall, Args: []string{"conntrack"}}); err == nil {
+		t.Error("expected addon_install to fail without opkg")
+	}
+}
+
+func TestRouterHandler_AddonConfigure_RejectsBadInput(t *testing.T) {
+	h := &RouterHandler{Config: config.Default()}
+	ctx := context.Background()
+
+	// conntrack takes no settings at all.
+	if _, err := h.Handle(ctx, Command{Action: ActionAddonConfigure, Args: []string{"conntrack", "x=1"}}); err == nil {
+		t.Error("conntrack configure should reject any key")
+	}
+	// an arg without '='.
+	if _, err := h.Handle(ctx, Command{Action: ActionAddonConfigure, Args: []string{"nfqws2", "noequals"}}); err == nil {
+		t.Error("configure should reject an arg without '='")
+	}
+	// an unknown key for a component that does take settings.
+	if _, err := h.Handle(ctx, Command{Action: ActionAddonConfigure, Args: []string{"unbound", "bogus=1"}}); err == nil {
+		t.Error("unbound configure should reject an unknown key")
+	}
+}
+
 func TestParseAddonList(t *testing.T) {
 	// The producer never emits a blank field -- "-" stands in for an
 	// empty version/detail (addonList's dashIfEmpty).

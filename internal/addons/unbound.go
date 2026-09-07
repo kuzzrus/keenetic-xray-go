@@ -283,7 +283,12 @@ func (*unboundAddon) Status(ctx context.Context) (string, error) {
 	}
 	var b strings.Builder
 	if portListening(ctx, u.port) {
-		fmt.Fprintf(&b, "unbound: слушает :%d\n", u.port)
+		fmt.Fprintf(&b, "unbound: слушает :%d", u.port)
+		if r := resolverStat(ctx, "unbound", u.port); r.Resolves {
+			b.WriteString(" · резолвит ✅\n")
+		} else {
+			fmt.Fprintf(&b, " · ⚠️ не отвечает на запросы (%s)\n", r.Detail)
+		}
 	} else {
 		fmt.Fprintf(&b, "unbound: установлен, но на :%d тишина (проверь `%s/%s status`)\n", u.port, initdDir, unboundInit)
 	}

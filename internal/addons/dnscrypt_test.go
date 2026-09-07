@@ -135,3 +135,50 @@ func TestParseOnOff(t *testing.T) {
 		t.Error("parseOnOff(nope) should error")
 	}
 }
+
+func withResolverProbe(t *testing.T, fn func(context.Context, string) error) {
+	t.Helper()
+	old := probeResolver
+	probeResolver = fn
+	t.Cleanup(func() { probeResolver = old })
+}
+
+func TestResolverHealth(t *testing.T) {
+	f := newFakeSys()
+	withFakeSys(t, f)
+	ctx := context.Background()
+
+	// nothing installed -> nothing reported
+	if h := ResolverHealth(ctx); len(h) != 0 {
+		t.Fatalf("ResolverHealth with nothing installed = %v", h)
+	}
+
+	f.installed[unboundPkg] = "1.19"
+	f.files[unboundConf] = []byte(unboundConfBody(8, true, false, ""))
+	f.installed[dnscryptPkg] = "2.1"
+	f.files[dnscryptConf] = []byte(dnscryptConfBody(false, "", true, true))
+
+	// unbound answers, dnscrypt doesn't
+	withResolverProbe(t, func(_ context.Context, addr string) error {
+		if addr == "127.0.0.1:5335" {
+			return nil
+		}
+		return errRefused{}
+	})
+
+	h := ResolverHealth(ctx)
+	if len(h) != 2 {
+		t.Fatalf("want 2 resolver stats, got %d: %+v", len(h), h)
+	}
+	byID := map[string]ResolverStat{h[0].ID: h[0], h[1].ID: h[1]}
+	if !byID["unbound"].Resolves || byID["unbound"].Port != 5335 {
+		t.Errorf("unbound stat = %+v", byID["unbound"])
+	}
+	if byID["dnscrypt"].Resolves || byID["dnscrypt"].Port != 65053 || byID["dnscrypt"].Detail == "" {
+		t.Errorf("dnscrypt stat = %+v (want not resolving, port 65053, a detail)", byID["dnscrypt"])
+	}
+}
+
+type errRefused struct{}
+
+func (errRefused) Error() string { return "dial udp: connect: connection refused" }

@@ -256,6 +256,37 @@ func probeDoH(ctx context.Context, url string, timeout time.Duration) error {
 	return checkDNSReply(body, id)
 }
 
+// ProbePlain sends one A query for probeName over plain DNS-over-UDP to
+// hostport (e.g. "127.0.0.1:5335") and checks the reply header. Used to
+// verify a locally-installed resolver (unbound / dnscrypt-proxy) is
+// actually answering, not just listening.
+func ProbePlain(ctx context.Context, hostport string) error {
+	_, timeout, _ := probeBudget()
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	d := net.Dialer{}
+	conn, err := d.DialContext(ctx, "udp", hostport)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if dl, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(dl)
+	}
+
+	q, id := dnsQuery(probeName)
+	if _, err := conn.Write(q); err != nil {
+		return err
+	}
+	buf := make([]byte, 512)
+	n, err := conn.Read(buf)
+	if err != nil {
+		return err
+	}
+	return checkDNSReply(buf[:n], id)
+}
+
 // dnsQuery builds a minimal A/IN query with RD=1 and returns it with its
 // transaction ID.
 func dnsQuery(name string) ([]byte, uint16) {

@@ -18,6 +18,12 @@ set -e
 # installable cron just doesn't get the watchdog, same as
 # ensure-xray-core's own best-effort framing above.
 
+# Tells applyDaemonChange (called at the end of `setup`) not to restart
+# the daemon: postinst starts it itself a few lines below, and rc.func's
+# stop matches by process name -- an in-wizard restart would kill the
+# running `keenetic-xray setup` process.
+export KEENETIC_XRAY_POSTINST=1
+
 # If install.sh was given a link (--sub=/--vless=), do the whole first-run
 # configuration here so nothing else is needed. Best-effort: a failure
 # (bad URL, offline) just leaves it for `keenetic-xray setup` by hand.

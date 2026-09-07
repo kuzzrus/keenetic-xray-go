@@ -573,8 +573,8 @@ func (d *Daemon) ReloadConfig(ctx context.Context, fresh *config.Config) bool {
 // see cmd/keenetic-xray's signalDaemonReload/applyDaemonChange, which
 // SIGHUPs this process's pidfile after saving.
 func (d *Daemon) Run(ctx context.Context) error {
-	if d.cfg.Primary() == nil || d.cfg.Backup() == nil {
-		fmt.Println("failover: no primary/backup profiles configured yet -- run `keenetic-xray setup`, then restart this daemon")
+	if d.cfg.Primary() == nil {
+		fmt.Println("failover: no primary profile configured yet -- run `keenetic-xray setup`, then restart this daemon")
 		<-ctx.Done()
 		return ctx.Err()
 	}
@@ -584,6 +584,25 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 	defer d.actions.prod.Stop()
 	d.emit(Event{At: time.Now(), Kind: EventDaemonStart})
+
+	// Single-profile mode: no backup (or backup == primary) -> just keep
+	// the one instance up, no health-check ticker, no isolated pretest.
+	// Failover has nothing to fail over to; running the pretest would
+	// only spin a second xray for the same server (wasteful on a small
+	// router). A later `setup` that adds a real backup reloads the config
+	// and this Run restarts into the full loop.
+	if d.cfg.Backup() == nil || d.cfg.BackupIndex == d.cfg.PrimaryIndex {
+		fmt.Println("failover: single profile (no backup) -- supervising primary, no automatic switching")
+		for {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case cmd := <-d.commands: // still serve Snapshot / ForceSwitch queries
+				cmd.fn(ctx)
+				close(cmd.done)
+			}
+		}
+	}
 
 	ticker := time.NewTicker(d.actions.probeTimeout())
 	defer ticker.Stop()

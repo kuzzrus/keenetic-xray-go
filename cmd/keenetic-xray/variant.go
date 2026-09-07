@@ -44,13 +44,6 @@ func variantSet(args []string) error {
 		return err
 	}
 	cfg.Variant = args[0]
-	if args[0] == config.VariantMini && cfg.Agent.Enabled {
-		// The remote control agent is Full-only (see docs/full-vs-mini.md);
-		// downgrading must not leave a stale enabled agent behind that
-		// `daemon` would otherwise still start.
-		cfg.Agent.Enabled = false
-		fmt.Println("remote control agent disabled (not available on Mini)")
-	}
 	if err := cfg.Save(configPath()); err != nil {
 		return err
 	}

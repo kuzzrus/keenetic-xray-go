@@ -78,7 +78,8 @@ func TestCmdAgent_EnableWithoutConfigureErrors(t *testing.T) {
 	}
 }
 
-func TestCmdAgent_EnableRejectedOnMiniVariant(t *testing.T) {
+// The agent is no longer Full-gated -- it enables fine on Mini.
+func TestCmdAgent_EnableAllowedOnMiniVariant(t *testing.T) {
 	dir := t.TempDir()
 	configFile := filepath.Join(dir, "config.json")
 	t.Setenv("KEENETIC_XRAY_CONFIG", configFile)
@@ -90,17 +91,16 @@ func TestCmdAgent_EnableRejectedOnMiniVariant(t *testing.T) {
 	if err := run([]string{"variant", "set", "mini"}); err != nil {
 		t.Fatalf("variant set mini: %v", err)
 	}
-
-	if err := run([]string{"agent", "enable"}); err == nil {
-		t.Error("expected error enabling the agent on the Mini variant")
+	if err := run([]string{"agent", "enable"}); err != nil {
+		t.Fatalf("agent enable on mini: %v", err)
 	}
 
 	cfg, err := config.Load(configFile)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Agent.Enabled {
-		t.Error("Agent.Enabled should remain false after a rejected enable")
+	if !cfg.Agent.Enabled {
+		t.Error("Agent.Enabled should be true after enable on mini")
 	}
 }
 

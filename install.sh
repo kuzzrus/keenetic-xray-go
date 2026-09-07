@@ -24,6 +24,9 @@
 #   --sub=URL / --vless=LINK / a bare vless:// or http(s):// arg
 #       run `keenetic-xray setup` non-interactively with this source
 #   --no-proxy0            turn OFF the Keenetic Proxy0 wiring (on by default)
+#   --mini                 install the Mini variant (smaller log/history
+#                          retention). Default is Full -- the binary and
+#                          features are identical either way.
 #   --xray-core=vendored   force this project's size-optimised xray-core build
 #   --xray-core=entware    force `opkg install xray-core` instead
 #   --xray-core-tag=vX.Y.Z opt this router onto a specific vendored core tag
@@ -50,6 +53,8 @@ for arg in "$@"; do
         --vless=*)           export KEENETIC_XRAY_SETUP_FROM="${arg#--vless=}" ;;
         vless://* | http://* | https://*) export KEENETIC_XRAY_SETUP_FROM="$arg" ;;
         --no-proxy0)         export KEENETIC_XRAY_NO_PROXY0=1 ;;
+        --mini)             export KEENETIC_XRAY_VARIANT=mini ;;
+        --full)            export KEENETIC_XRAY_VARIANT=full ;;
         *) echo "keenetic-xray: unknown option: $arg" >&2; exit 2 ;;
     esac
 done

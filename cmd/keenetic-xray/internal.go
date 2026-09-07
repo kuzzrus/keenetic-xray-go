@@ -102,17 +102,16 @@ func cmdEnsureXrayCore(args []string) error {
 
 func installPaths() install.Paths {
 	return install.Paths{
-		ConfigDir:     filepath.Dir(configPath()),
-		ConfigFile:    configPath(),
-		LibDir:        filepath.Dir(productionConfigPath()),
-		LogDir:        logDir(),
-		RunDir:        runDir(),
-		DiskCheckPath: optPath(),
+		ConfigDir:  filepath.Dir(configPath()),
+		ConfigFile: configPath(),
+		LibDir:     filepath.Dir(productionConfigPath()),
+		LogDir:     logDir(),
+		RunDir:     runDir(),
 	}
 }
 
 func cmdPostinstSetup() error {
-	if err := install.PostinstSetup(installPaths(), install.DefaultMiniThresholdBytes); err != nil {
+	if err := install.PostinstSetup(installPaths()); err != nil {
 		return err
 	}
 	cfg, err := config.Load(configPath())

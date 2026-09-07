@@ -1,53 +1,40 @@
 # Full vs Mini
 
-Mini/Full is **not** a packaging split -- there is one `.ipk` per
-architecture, always. It's a runtime flag (`"variant": "mini"|"full"` in
-`config.json`), decided automatically by the `.ipk`'s postinst based on
-free disk space, and changeable afterward with `keenetic-xray variant
-set mini|full`.
+**Full is the default.** Mini is an explicit opt-in
+(`install.sh --mini`, or `keenetic-xray variant set mini` afterward).
 
-## Why a runtime flag instead of separate packages
+Mini/Full is **not** a packaging split -- there is one `.ipk` per
+architecture, always -- and it does **not** gate any feature. It's a
+runtime flag (`"variant": "mini"|"full"` in `config.json`) whose only
+effect is how much log/history state the daemon is willing to accumulate.
+
+## Why it barely matters now
 
 A stdlib-only Go binary is roughly the same size regardless of which
 features are compiled in (Go statically links its runtime either way),
-so gating by *binary size* wouldn't accomplish much. What actually
-matters on a disk-constrained router is which features are **allowed to
-run** and how much state they accumulate over time (logs, history) --
-that's what Mini/Full actually controls.
+so there was never a binary-size axis to gate. The disk state that
+*could* grow unbounded is already capped independently:
 
-## The threshold
+- `internal/applog` self-trims the daemon log (`DefaultMaxBytes`, ~256KB);
+- failover keeps only the last ~20 transitions / ~30 health-check
+  results, in memory;
+- the preset overlay (`internal/presets`) is bounded by the manifest.
 
-`internal/install.DefaultMiniThresholdBytes` = **43MB**, measured at
-`/opt` at postinst time. Because the `.ipk`'s `Depends: xray-core` makes
-`opkg` install the Xray core *before* postinst runs, this single
-free-space reading already nets out the core's own footprint for free --
-no subtraction math needed. Rule: less than 43MB free at that point picks
-Mini, otherwise Full.
+So in practice Mini and Full behave the same. The flag is kept because
+(a) existing `config.json` files carry it, and (b) a future disk-heavy
+feature could still consult it -- but nothing does today, including the
+remote-control agent, which now enables on either variant.
 
-For context, real measurements taken while building this project (not
-estimates): the bare `xray` binary alone (no geodata, which this project
-doesn't use anyway) is about 32-33MB regardless of architecture; the
-Entware-packaged `xray-core` `.ipk` itself was about 10MB compressed at
-the time of measurement. Neither number is independently re-verified by
-this codebase at runtime -- if Entware's package or upstream Xray grows
-significantly, the 43MB threshold may need revisiting, but there's
-nothing here that depends on the exact number staying accurate; it's a
-single named constant.
+## What used to be gated (and no longer is)
 
-## What's gated
-
-| Feature | Mini | Full |
+| | before | now |
 |---|---|---|
-| xray-core + failover daemon, local SOCKS5/HTTP inbound | yes | yes |
-| `profile`/`subscription` CLI + `setup` wizard, incl. subscription-link parsing | yes | yes |
-| Manual `subscription refresh` | yes | yes |
-| Log/state retention | small | larger, including failover + bot audit history |
-| Remote control agent (`agent enable`) | off by default | on by default |
+| variant decision | auto, by free space on `/opt` (43MB threshold) | Full unless `--mini` |
+| remote-control agent (`agent enable`) | Full only | available on both |
+| `variant set mini` with agent on | force-disabled the agent | leaves it alone |
 
-Subscription-link support is deliberately **not** Full-gated, unlike a
-naive port of the reference project's split would suggest: a real
-fraction of VLESS providers only ever hand out a subscription URL, never
-a raw link, and gating that behind Full would lock the most disk-
-constrained (often oldest-hardware) users out of onboarding entirely.
-What's actually gated is remote/automatic triggering, via the same
-control-agent enable flag Full/Mini already needs -- no separate axis.
+## When to pick Mini
+
+Only if you're on a genuinely tiny storage (tens of MB free on `/opt`)
+and want the daemon to keep its retention minimal. On anything with room
+to spare, leave it Full.

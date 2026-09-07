@@ -8,36 +8,33 @@ import (
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 )
 
-func TestDecideVariant(t *testing.T) {
-	cases := []struct {
-		free, threshold int64
-		want            string
-	}{
-		{10 * 1024 * 1024, 43 * 1024 * 1024, config.VariantMini},
-		{42 * 1024 * 1024, 43 * 1024 * 1024, config.VariantMini},
-		{43 * 1024 * 1024, 43 * 1024 * 1024, config.VariantFull},
-		{100 * 1024 * 1024, 43 * 1024 * 1024, config.VariantFull},
+func TestVariantFromEnv(t *testing.T) {
+	for _, v := range []string{"mini", "MINI", " Mini "} {
+		t.Setenv(VariantEnv, v)
+		if got := VariantFromEnv(); got != config.VariantMini {
+			t.Errorf("VariantFromEnv() with %q = %q, want mini", v, got)
+		}
 	}
-	for _, tc := range cases {
-		if got := DecideVariant(tc.free, tc.threshold); got != tc.want {
-			t.Errorf("DecideVariant(%d, %d) = %q, want %q", tc.free, tc.threshold, got, tc.want)
+	for _, v := range []string{"", "full", "nonsense"} {
+		t.Setenv(VariantEnv, v)
+		if got := VariantFromEnv(); got != config.VariantFull {
+			t.Errorf("VariantFromEnv() with %q = %q, want full", v, got)
 		}
 	}
 }
 
 func TestPostinstSetup_FreshInstall(t *testing.T) {
+	t.Setenv(VariantEnv, "") // default → Full
 	dir := t.TempDir()
 	paths := Paths{
-		ConfigDir:     filepath.Join(dir, "etc"),
-		ConfigFile:    filepath.Join(dir, "etc", "config.json"),
-		LibDir:        filepath.Join(dir, "lib"),
-		LogDir:        filepath.Join(dir, "log"),
-		RunDir:        filepath.Join(dir, "run"),
-		DiskCheckPath: dir,
+		ConfigDir:  filepath.Join(dir, "etc"),
+		ConfigFile: filepath.Join(dir, "etc", "config.json"),
+		LibDir:     filepath.Join(dir, "lib"),
+		LogDir:     filepath.Join(dir, "log"),
+		RunDir:     filepath.Join(dir, "run"),
 	}
 
-	// A 1-byte threshold should reliably land on Full given real tmpdir free space.
-	if err := PostinstSetup(paths, 1); err != nil {
+	if err := PostinstSetup(paths); err != nil {
 		t.Fatalf("PostinstSetup: %v", err)
 	}
 
@@ -59,9 +56,8 @@ func TestPostinstSetup_FreshInstall(t *testing.T) {
 func TestPostinstSetup_NeverOverwritesExistingConfig(t *testing.T) {
 	dir := t.TempDir()
 	paths := Paths{
-		ConfigDir:     filepath.Join(dir, "etc"),
-		ConfigFile:    filepath.Join(dir, "etc", "config.json"),
-		DiskCheckPath: dir,
+		ConfigDir:  filepath.Join(dir, "etc"),
+		ConfigFile: filepath.Join(dir, "etc", "config.json"),
 	}
 	if err := os.MkdirAll(paths.ConfigDir, 0o700); err != nil {
 		t.Fatal(err)
@@ -77,9 +73,9 @@ func TestPostinstSetup_NeverOverwritesExistingConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// A huge threshold would pick Mini if PostinstSetup actually ran its
-	// decision logic -- it must not, since config.json already exists.
-	if err := PostinstSetup(paths, 1<<40); err != nil {
+	// Even with KEENETIC_XRAY_VARIANT unset (→ Full), an existing
+	// config.json must be left completely alone.
+	if err := PostinstSetup(paths); err != nil {
 		t.Fatalf("PostinstSetup: %v", err)
 	}
 

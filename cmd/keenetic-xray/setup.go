@@ -3,17 +3,24 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
+	"github.com/kuzzrus/keenetic-xray-go/internal/install"
 	"github.com/kuzzrus/keenetic-xray-go/internal/keenetic"
 	"github.com/kuzzrus/keenetic-xray-go/internal/subscription"
 )
+
+// errSlotSkipped is returned by promptSlotSource when the operator hits
+// Enter on an optional slot (the backup).
+var errSlotSkipped = errors.New("slot skipped")
 
 // setupOpts drives runSetup. With From set (and/or --yes) it runs fully
 // non-interactive -- that's the path the .ipk postinst takes when the
@@ -78,15 +85,35 @@ func cmdSetup(args []string) error {
 }
 
 func runSetup(stdin io.Reader, o setupOpts) error {
-	reader := bufio.NewReader(stdin)
 	cfg, err := config.Load(configPath())
 	if err != nil {
 		return err
 	}
-	if o.From == "" && !o.Yes {
-		return runSetupInteractive(reader, cfg, o)
+	if o.From != "" || o.Yes {
+		return runSetupNonInteractive(cfg, o)
 	}
-	return runSetupNonInteractive(cfg, o)
+
+	// Interactive. When stdin isn't a terminal (the `curl | sh` postinst
+	// path pipes the script), read the keyboard from /dev/tty instead; if
+	// there's no controlling terminal at all, skip the wizard cleanly
+	// rather than half-run it on empty input.
+	in := stdin
+	if f, ok := stdin.(*os.File); ok && !isCharDevice(f) {
+		tty, terr := os.Open("/dev/tty")
+		if terr != nil {
+			fmt.Println("нет терминала — мастер настройки пропущен.")
+			fmt.Println("запусти его вручную:  keenetic-xray setup")
+			return nil
+		}
+		defer tty.Close()
+		in = tty
+	}
+	return runSetupInteractive(bufio.NewReader(in), cfg, o)
+}
+
+func isCharDevice(f *os.File) bool {
+	fi, err := f.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }
 
 // runSetupNonInteractive is the postinst / scripted path: one source
@@ -175,23 +202,31 @@ func runSetupNonInteractive(cfg *config.Config, o setupOpts) error {
 // Config.PrimarySource/BackupSource, IndependentSlots). Then SOCKS/HTTP
 // port numbers, Proxy0, and a restart offer.
 func runSetupInteractive(reader *bufio.Reader, cfg *config.Config, o setupOpts) error {
-	fmt.Println("keenetic-xray setup")
+	fmt.Print("Мастер настройки keenetic-xray\n\n")
 
-	primary, err := promptSlotSource(reader, cfg, "PRIMARY")
+	primary, err := promptSlotSource(reader, cfg, "основной", false)
 	if err != nil {
 		return err
 	}
 	cfg.PrimaryIndex = cfg.UpsertProfile(primary.profile)
 	cfg.PrimarySource = &config.SlotSource{URL: primary.src, Selector: primary.selector}
-	fmt.Printf("Saved primary: %s\n\n", primary.profile.Remark)
+	fmt.Printf("  основной: %s\n\n", primary.profile.Remark)
 
-	backup, err := promptSlotSource(reader, cfg, "BACKUP")
-	if err != nil {
+	haveBackup := true
+	backup, err := promptSlotSource(reader, cfg, "резервный", true)
+	switch {
+	case errors.Is(err, errSlotSkipped):
+		haveBackup = false
+		cfg.BackupSource = nil
+		cfg.BackupIndex = cfg.PrimaryIndex // single-profile: daemon supervises, no switching
+		fmt.Print("  резервный: пропущен — один профиль, автопереключения не будет\n\n")
+	case err != nil:
 		return err
+	default:
+		cfg.BackupIndex = cfg.UpsertProfile(backup.profile)
+		cfg.BackupSource = &config.SlotSource{URL: backup.src, Selector: backup.selector}
+		fmt.Printf("  резервный: %s\n\n", backup.profile.Remark)
 	}
-	cfg.BackupIndex = cfg.UpsertProfile(backup.profile)
-	cfg.BackupSource = &config.SlotSource{URL: backup.src, Selector: backup.selector}
-	fmt.Printf("Saved backup: %s\n", backup.profile.Remark)
 
 	socksPort, httpPort, err := promptPorts(reader, cfg, o)
 	if err != nil {
@@ -204,16 +239,10 @@ func runSetupInteractive(reader *bufio.Reader, cfg *config.Config, o setupOpts) 
 		return err
 	}
 
-	switch {
-	case o.Proxy0 == "no":
-		// leave Proxy0 alone
-	case o.Proxy0 == "yes":
-		doSetupProxy0(cfg)
-	default:
-		maybeSetupProxy0(reader, cfg)
-	}
+	promptTransport(reader, cfg, o)
 
 	applyDaemonChange(reader, true)
+	printSetupSummary(cfg, haveBackup)
 	return nil
 }
 
@@ -232,50 +261,57 @@ type slotSourceResult struct {
 // subscription URL followed by an interactive pick if it has more than
 // one profile) and resolves it to a single profile. label is "PRIMARY"
 // or "BACKUP", used only in the prompts.
-func promptSlotSource(reader *bufio.Reader, cfg *config.Config, label string) (slotSourceResult, error) {
-	fmt.Printf("%s -- paste a vless:// link, or a subscription http(s):// URL:\n> ", label)
+func promptSlotSource(reader *bufio.Reader, cfg *config.Config, label string, optional bool) (slotSourceResult, error) {
+	hint := ""
+	if optional {
+		hint = " (Enter — пропустить)"
+	}
+	fmt.Printf("%s профиль%s — вставь vless:// или ссылку на подписку http(s)://:\n> ", label, hint)
 	line, err := reader.ReadString('\n')
-	if err != nil && line == "" {
-		return slotSourceResult{}, fmt.Errorf("reading input: %w", err)
+	if err != nil && line == "" && !optional {
+		return slotSourceResult{}, fmt.Errorf("чтение ввода: %w", err)
 	}
 	src := strings.TrimSpace(line)
 	if src == "" {
-		return slotSourceResult{}, fmt.Errorf("%s: no vless:// link or subscription URL given", label)
+		if optional {
+			return slotSourceResult{}, errSlotSkipped
+		}
+		return slotSourceResult{}, fmt.Errorf("%s: не задана ни vless://-ссылка, ни URL подписки", label)
 	}
 
 	switch {
 	case strings.HasPrefix(src, "vless://"):
 		p, err := config.ParseVLESSURI(src)
 		if err != nil {
-			return slotSourceResult{}, fmt.Errorf("%s: parsing vless link: %w", label, err)
+			return slotSourceResult{}, fmt.Errorf("%s: разбор vless-ссылки: %w", label, err)
 		}
 		return slotSourceResult{profile: p, src: src}, nil
 	case strings.HasPrefix(src, "http://"), strings.HasPrefix(src, "https://"):
-		fmt.Println("fetching subscription...")
+		fmt.Println("тяну подписку…")
 		result, err := subscription.Refresh(context.Background(), src, "", "")
 		if err != nil {
-			return slotSourceResult{}, fmt.Errorf("%s: fetching subscription: %w", label, err)
+			return slotSourceResult{}, fmt.Errorf("%s: загрузка подписки: %w", label, err)
 		}
 		for _, w := range result.Warnings {
-			fmt.Println("warning:", w)
+			fmt.Println("  пропущено:", w)
 		}
 		if len(result.Profiles) == 0 {
-			return slotSourceResult{}, fmt.Errorf("%s: no usable vless:// profiles found in that subscription", label)
+			return slotSourceResult{}, fmt.Errorf("%s: в подписке нет рабочих vless://-профилей", label)
 		}
 		if len(result.Profiles) == 1 {
 			return slotSourceResult{profile: result.Profiles[0], src: src}, nil
 		}
-		fmt.Println("\nAvailable profiles:")
+		fmt.Println("\nПрофили в подписке:")
 		for i, p := range result.Profiles {
-			fmt.Printf("  %d: %s -- %s:%d\n", i, p.Remark, p.Address, p.Port)
+			fmt.Printf("  %d: %s — %s:%d\n", i, p.Remark, p.Address, p.Port)
 		}
-		idx, err := promptIndex(reader, "Select "+label, len(result.Profiles), 0)
+		idx, err := promptIndex(reader, "Выбери "+label, len(result.Profiles), 0)
 		if err != nil {
 			return slotSourceResult{}, err
 		}
 		return slotSourceResult{profile: result.Profiles[idx], src: src, selector: strconv.Itoa(idx)}, nil
 	default:
-		return slotSourceResult{}, fmt.Errorf("%s: input doesn't look like a vless:// link or an http(s):// subscription URL", label)
+		return slotSourceResult{}, fmt.Errorf("%s: не похоже ни на vless://-ссылку, ни на http(s)://-подписку", label)
 	}
 }
 
@@ -301,10 +337,10 @@ func promptPorts(reader *bufio.Reader, cfg *config.Config, o setupOpts) (socksPo
 		if socksPort != httpPort {
 			return socksPort, httpPort, nil
 		}
-		fmt.Println("SOCKS and HTTP ports must differ, try again")
+		fmt.Println("порты SOCKS и HTTP должны отличаться, ещё раз")
 		if o.SOCKSPort != 0 && o.HTTPPort != 0 {
 			// Both came from flags -- re-prompting can't change them.
-			return 0, 0, fmt.Errorf("--socks-port and --http-port must differ")
+			return 0, 0, fmt.Errorf("--socks-port и --http-port должны отличаться")
 		}
 	}
 }
@@ -313,10 +349,10 @@ func promptPorts(reader *bufio.Reader, cfg *config.Config, o setupOpts) (socksPo
 // port; an empty line (just Enter) accepts def.
 func promptPort(reader *bufio.Reader, label string, def int) (int, error) {
 	for {
-		fmt.Printf("%s [default %d]: ", label, def)
+		fmt.Printf("%s [Enter — %d]: ", label, def)
 		line, err := reader.ReadString('\n')
 		if err != nil && line == "" {
-			return 0, fmt.Errorf("reading input: %w", err)
+			return def, nil // EOF on a piped script -> take the default
 		}
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -324,7 +360,7 @@ func promptPort(reader *bufio.Reader, label string, def int) (int, error) {
 		}
 		n, err := strconv.Atoi(line)
 		if err != nil || n < 1 || n > 65535 {
-			fmt.Println("invalid port, try again")
+			fmt.Println("некорректный порт, ещё раз")
 			continue
 		}
 		return n, nil
@@ -405,28 +441,124 @@ func doSetupProxy0(cfg *config.Config) {
 	fmt.Printf("  Proxy0 -> %s:%d. Assign devices/policies to Proxy0 in the Keenetic UI.\n", ip, cfg.Proxy0Port())
 }
 
-// maybeSetupProxy0 is the interactive prompt in front of doSetupProxy0.
-func maybeSetupProxy0(reader *bufio.Reader, cfg *config.Config) {
+// promptTransport asks how to get the router's LAN traffic into xray:
+// Keenetic's Proxy0 (SOCKS5 or HTTP), the in-router WireGuard transport,
+// or nothing (local proxy only). Replaces the old y/N Proxy0 question.
+func promptTransport(reader *bufio.Reader, cfg *config.Config, o setupOpts) {
+	switch {
+	case o.Proxy0 == "no":
+		return
+	case o.Proxy0 == "yes":
+		doSetupProxy0(cfg)
+		return
+	}
 	if !keenetic.Available() {
-		return
+		return // not on a Keenetic; the local proxy is all there is
 	}
-	fmt.Print("\nPoint Keenetic's Proxy0 at the proxy now (route the LAN through it)? [y/N]: ")
+	fmt.Println("\nКак завернуть трафик роутера в xray:")
+	fmt.Println("  1) Proxy0 · SOCKS5   — обычный путь (по умолчанию)")
+	fmt.Println("  2) Proxy0 · HTTP")
+	fmt.Println("  3) WireGuard-транспорт — LAN → WireguardN → xray, ключи сгенерируются сами")
+	fmt.Println("  4) не трогать Keenetic — только локальный прокси на портах выше")
+	fmt.Print("> ")
 	line, _ := reader.ReadString('\n')
-	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "y") {
-		fmt.Println("skipped -- set it up later with: keenetic-xray proxy0 set")
-		return
+	switch strings.TrimSpace(line) {
+	case "2":
+		cfg.Proxy0.Protocol = "http"
+		_ = cfg.Save(configPath())
+		doSetupProxy0(cfg)
+	case "3":
+		if err := wgTransportOn(cfg); err != nil {
+			fmt.Println("  WG-транспорт не поднялся:", err)
+			fmt.Println("  позже:  keenetic-xray transport wg on")
+			return
+		}
+		fmt.Printf("  WG-транспорт включён (%s). Направляй на него списки/политики.\n", cfg.WGTransport.Iface)
+	case "4":
+		fmt.Println("  Keenetic не трогаем. Прокси на 127.0.0.1 и в LAN на портах выше.")
+	default: // "1" or Enter
+		cfg.Proxy0.Protocol = "socks5"
+		_ = cfg.Save(configPath())
+		doSetupProxy0(cfg)
 	}
-	doSetupProxy0(cfg)
+}
+
+// printSetupSummary is the end-of-wizard recap: what got configured, a
+// quick TCP reachability check on the primary server (not a tunnel
+// test), and a watchdog warning when cron didn't install.
+func printSetupSummary(cfg *config.Config, haveBackup bool) {
+	fmt.Print("\n── готово ──\n")
+	if p := cfg.Primary(); p != nil {
+		fmt.Printf("  профиль:   %s\n", p.Remark)
+	}
+	if haveBackup {
+		if b := cfg.Backup(); b != nil {
+			fmt.Printf("  резерв:    %s\n", b.Remark)
+		}
+	} else {
+		fmt.Println("  резерв:    нет (один профиль)")
+	}
+	fmt.Printf("  порты:     SOCKS %d · HTTP %d\n", cfg.Failover.SOCKSPort, cfg.Failover.HTTPPort)
+	switch {
+	case cfg.Proxy0.Enabled:
+		fmt.Printf("  транспорт: Proxy0 / %s\n", cfg.Proxy0.Protocol)
+	case cfg.WGTransport.Enabled:
+		fmt.Printf("  транспорт: WireGuard (%s)\n", cfg.WGTransport.Iface)
+	default:
+		fmt.Println("  транспорт: только локальный прокси")
+	}
+	fmt.Printf("  вариант:   %s\n", cfg.Variant)
+
+	if p := cfg.Primary(); p != nil {
+		addr := net.JoinHostPort(p.Address, strconv.Itoa(p.Port))
+		fmt.Printf("  проверка %s … ", addr)
+		if c, err := net.DialTimeout("tcp", addr, 5*time.Second); err != nil {
+			fmt.Println("⚠️ не отвечает —", shortDialErr(err))
+			fmt.Println("     (это адрес сервера, не туннель; проверь ссылку, если дальше не заработает)")
+		} else {
+			_ = c.Close()
+			fmt.Println("✅ отвечает")
+		}
+	}
+
+	if !watchdogArmed() {
+		fmt.Println("\n⚠️ watchdog не активен — упавший демон не поднимется сам.")
+		fmt.Println("   поставь cron:  opkg install cron  &&  keenetic-xray internal postinst-setup")
+	}
+	fmt.Println("\nдальше:  keenetic-xray status   ·   keenetic-xray doctor")
+}
+
+func shortDialErr(err error) string {
+	s := err.Error()
+	switch {
+	case strings.Contains(s, "i/o timeout"), strings.Contains(s, "deadline exceeded"):
+		return "таймаут"
+	case strings.Contains(s, "connection refused"):
+		return "порт закрыт"
+	case strings.Contains(s, "no such host"):
+		return "хост не резолвится"
+	case strings.Contains(s, "no route to host"), strings.Contains(s, "network is unreachable"):
+		return "нет маршрута"
+	}
+	if i := strings.LastIndex(s, ": "); i >= 0 {
+		return s[i+2:]
+	}
+	return s
+}
+
+func watchdogArmed() bool {
+	b, err := os.ReadFile(cronFilePath())
+	return err == nil && strings.Contains(string(b), install.WatchdogMarker)
 }
 
 // promptIndex reads a line, re-prompting on invalid input; an empty line
 // (just Enter) accepts def.
 func promptIndex(reader *bufio.Reader, label string, count, def int) (int, error) {
 	for {
-		fmt.Printf("%s [0-%d, default %d]: ", label, count-1, def)
+		fmt.Printf("%s [0-%d, Enter — %d]: ", label, count-1, def)
 		line, err := reader.ReadString('\n')
 		if err != nil && line == "" {
-			return 0, fmt.Errorf("reading input: %w", err)
+			return def, nil
 		}
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -434,7 +566,7 @@ func promptIndex(reader *bufio.Reader, label string, count, def int) (int, error
 		}
 		idx, err := strconv.Atoi(line)
 		if err != nil || idx < 0 || idx >= count {
-			fmt.Println("invalid selection, try again")
+			fmt.Println("нет такого номера, ещё раз")
 			continue
 		}
 		return idx, nil

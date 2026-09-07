@@ -286,6 +286,27 @@ type WGTransportConfig struct {
 	PSK               string `json:"psk,omitempty"`
 }
 
+// RCIConfig toggles reading the running config over the local RCI JSON
+// API. URL is the router-local base (scheme + host + port), default
+// DefaultRCIURL; no credentials -- KeeneticOS serves RCI without auth to
+// 127.0.0.1.
+type RCIConfig struct {
+	Enabled bool   `json:"enabled"`
+	URL     string `json:"url,omitempty"` // "" -> DefaultRCIURL
+}
+
+// DefaultRCIURL is where KeeneticOS's ndhttpd answers RCI on the router
+// itself. Port 79 is the historical command port; `keenetic-xray rci
+// probe` also tries 80 and stores whichever answers.
+const DefaultRCIURL = "http://127.0.0.1:79"
+
+func (r RCIConfig) BaseURL() string {
+	if r.URL == "" {
+		return DefaultRCIURL
+	}
+	return r.URL
+}
+
 // Defaults for WGTransportConfig. The address is a deliberately obscure
 // RFC1918 /32 unlikely to collide with a hand-made tunnel; MTU 1280 is
 // the IPv6 minimum and matches KeeneticOS's own WG default.
@@ -419,6 +440,13 @@ type Config struct {
 	// inbound -- an alternative router->xray hop to Proxy0/SOCKS. See
 	// WGTransportConfig and internal/keenetic.ApplyWGTransport.
 	WGTransport WGTransportConfig `json:"wg_transport,omitempty"`
+
+	// RCI, when enabled, makes the keenetic layer read the running
+	// config over Keenetic's local RCI JSON API (http://127.0.0.1, no
+	// auth from loopback) instead of shelling out to `ndmc -c "show
+	// running-config"`. A hedge for firmware that sandboxes Entware away
+	// from ndmc; writes and other reads still use ndmc. Off by default.
+	RCI RCIConfig `json:"rci,omitempty"`
 
 	// XrayCoreTag pins which vendored Xray-core release this router
 	// tracks. Empty -> xraycore.DefaultTag (the stable pin). Set to an

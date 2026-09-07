@@ -110,6 +110,14 @@ func cmdDoctor(args []string) error {
 		checkProxy0(cfg, check)
 	}
 
+	if cfg.RCI.Enabled {
+		if _, _, err := rciProbe(cfg.RCI.BaseURL()); err != nil {
+			check(false, fmt.Sprintf("RCI reachable at %s (%v) -- run: keenetic-xray rci probe", cfg.RCI.BaseURL(), err))
+		} else {
+			check(true, "RCI reachable at "+cfg.RCI.BaseURL())
+		}
+	}
+
 	if free, err := diskspace.FreeBytes(optPath()); err != nil {
 		fmt.Println("[warn] could not determine free disk space:", err)
 	} else {

@@ -22,11 +22,24 @@ import (
 // lanInterfaces are the names Keenetic uses for the LAN bridge.
 var lanInterfaces = []string{"Bridge0", "Home", "br0"}
 
-// ndmcRun executes one `ndmc -c "<cmd>"` and returns its stdout. Replaced
-// in tests.
-var ndmcRun = func(ctx context.Context, cmd string) (string, error) {
+// ndmcExec runs one real `ndmc -c "<cmd>"`. Replaced in tests.
+var ndmcExec = func(ctx context.Context, cmd string) (string, error) {
 	out, err := exec.CommandContext(ctx, "ndmc", "-c", cmd).Output()
 	return string(out), err
+}
+
+// ndmcRun is the single primitive every other function in this package
+// uses to talk to the router. When RCI mode is on (UseRCI, from the
+// daemon) the handful of reads RCI can answer faithfully are served over
+// HTTP from 127.0.0.1; everything else -- writes and the other reads --
+// falls through to ndmcExec. With RCI off it's just ndmcExec.
+var ndmcRun = func(ctx context.Context, cmd string) (string, error) {
+	if rci := activeRCI(); rci != nil {
+		if out, ok, err := rci.tryRead(ctx, cmd); ok {
+			return out, err
+		}
+	}
+	return ndmcExec(ctx, cmd)
 }
 
 // lookNdmc reports whether ndmc is on PATH. Replaced in tests.
@@ -35,9 +48,10 @@ var lookNdmc = func() error {
 	return err
 }
 
-// Available reports whether this looks like a Keenetic router (ndmc is
-// present). Callers should treat a false result as "skip, not an error".
-func Available() bool { return lookNdmc() == nil }
+// Available reports whether this looks like a Keenetic router: ndmc on
+// PATH, or an active RCI connection. Callers should treat a false result
+// as "skip, not an error".
+func Available() bool { return lookNdmc() == nil || RCIActive() }
 
 // OSVersion parses `show version` and returns the KeeneticOS
 // major/minor/patch from its "title:" field (e.g. "5.1.3"). Used to gate

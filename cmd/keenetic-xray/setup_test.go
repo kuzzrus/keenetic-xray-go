@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,6 +17,21 @@ import (
 // wizard always asks primary and backup separately now, so a bare
 // single link (the old single-slot fixture) only ever answers primary.
 const secondTestVLESSURI = "vless://22222222-3333-4444-5555-666666666666@backup.example.com:443?type=tcp&security=none#backup-node"
+
+// thirdTestVLESSURI is a third distinct link, for the field-editor tests
+// that swap a slot's source to something not already configured.
+const thirdTestVLESSURI = "vless://33333333-4444-5555-6666-777777777777@third.example.com:443?type=tcp&security=none#third"
+
+// seedTwoLinkConfig runs the wizard once (primary + backup as two vless
+// links, default ports) so a follow-up `runSetup` lands in the field
+// editor rather than the wizard.
+func seedTwoLinkConfig(t *testing.T) {
+	t.Helper()
+	in := strings.NewReader(testVLESSURI + "\n" + secondTestVLESSURI + "\n\n\n")
+	if err := runSetup(in, setupOpts{}); err != nil {
+		t.Fatalf("seed runSetup: %v", err)
+	}
+}
 
 func TestRunSetupInteractive_TwoIndependentVlessLinks(t *testing.T) {
 	dir := t.TempDir()
@@ -224,6 +240,121 @@ func TestRunSetup_NonInteractive(t *testing.T) {
 	}
 	if cfg.Subscription == nil || cfg.Subscription.URL != backend.URL {
 		t.Errorf("subscription not recorded: %#v", cfg.Subscription)
+	}
+}
+
+func TestRunSetupEdit_ChangePortsOnly(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	t.Setenv("KEENETIC_XRAY_CONFIG", path)
+	seedTwoLinkConfig(t)
+
+	// "3" -> ports edit; 7070/7071; then Enter to leave the editor.
+	if err := runSetup(strings.NewReader("3\n7070\n7071\n\n"), setupOpts{}); err != nil {
+		t.Fatalf("runSetup (edit): %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Failover.SOCKSPort != 7070 || cfg.Failover.HTTPPort != 7071 {
+		t.Errorf("ports = %d/%d, want 7070/7071", cfg.Failover.SOCKSPort, cfg.Failover.HTTPPort)
+	}
+	// Everything else must be untouched.
+	if len(cfg.Profiles) != 2 || cfg.PrimaryIndex != 0 || cfg.BackupIndex != 1 {
+		t.Errorf("profiles disturbed: n=%d primary=%d backup=%d", len(cfg.Profiles), cfg.PrimaryIndex, cfg.BackupIndex)
+	}
+	if cfg.PrimarySource == nil || cfg.PrimarySource.URL != testVLESSURI {
+		t.Errorf("PrimarySource changed: %+v", cfg.PrimarySource)
+	}
+	if cfg.BackupSource == nil || cfg.BackupSource.URL != secondTestVLESSURI {
+		t.Errorf("BackupSource changed: %+v", cfg.BackupSource)
+	}
+}
+
+func TestRunSetupEdit_BareEnterNoChange(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	t.Setenv("KEENETIC_XRAY_CONFIG", path)
+	seedTwoLinkConfig(t)
+
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runSetup(strings.NewReader("\n"), setupOpts{}); err != nil {
+		t.Fatalf("runSetup (edit): %v", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Errorf("config rewritten on a no-op editor session:\nbefore=%s\nafter=%s", before, after)
+	}
+}
+
+func TestRunSetupEdit_ChangePrimarySource(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	t.Setenv("KEENETIC_XRAY_CONFIG", path)
+	seedTwoLinkConfig(t)
+
+	// "1" -> primary edit; a link not already configured; Enter to leave.
+	if err := runSetup(strings.NewReader("1\n"+thirdTestVLESSURI+"\n\n"), setupOpts{}); err != nil {
+		t.Fatalf("runSetup (edit): %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.PrimarySource == nil || cfg.PrimarySource.URL != thirdTestVLESSURI {
+		t.Errorf("PrimarySource = %+v, want %s", cfg.PrimarySource, thirdTestVLESSURI)
+	}
+	if p := cfg.Primary(); p == nil || p.Remark != "third" {
+		t.Errorf("Primary() = %+v, want remark 'third'", p)
+	}
+	// Backup slot must be left alone.
+	if cfg.BackupSource == nil || cfg.BackupSource.URL != secondTestVLESSURI {
+		t.Errorf("BackupSource = %+v, want %s (untouched)", cfg.BackupSource, secondTestVLESSURI)
+	}
+}
+
+func TestRunSetupEdit_WizardFlagForcesWizard(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	t.Setenv("KEENETIC_XRAY_CONFIG", path)
+	seedTwoLinkConfig(t)
+
+	// --wizard skips the editor: this input is the linear flow (new
+	// primary link, skip backup, default ports, Enter through transport).
+	if err := runSetup(strings.NewReader(thirdTestVLESSURI+"\n\n\n\n\n"), setupOpts{Wizard: true}); err != nil {
+		t.Fatalf("runSetup --wizard: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.PrimarySource == nil || cfg.PrimarySource.URL != thirdTestVLESSURI {
+		t.Errorf("PrimarySource = %+v, want %s (wizard ran)", cfg.PrimarySource, thirdTestVLESSURI)
+	}
+	if cfg.BackupSource != nil {
+		t.Errorf("BackupSource = %+v, want nil (wizard skipped backup)", cfg.BackupSource)
+	}
+}
+
+func TestSourceLabel(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"vless://11111111-2222-3333-4444-555555555555@ex.com:443?type=tcp#n", "vless://…@ex.com:443"},
+		{"https://sub.example.com/abcSECRETtoken", "https://sub.example.com/…"},
+		{"https://sub.example.com/", "https://sub.example.com"},
+		{"http://host:8080", "http://host:8080"},
+		{"not a url", "(источник задан)"},
+	}
+	for _, c := range cases {
+		if got := sourceLabel(c.in); got != c.want {
+			t.Errorf("sourceLabel(%q) = %q, want %q", c.in, got, c.want)
+		}
 	}
 }
 

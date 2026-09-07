@@ -42,6 +42,7 @@ type setupOpts struct {
 	SOCKSPort  int    // 0 -> prompt interactively, or config.Default's 1080 when non-interactive
 	HTTPPort   int    // 0 -> prompt interactively, or config.Default's 1081 when non-interactive
 	Yes        bool
+	Wizard     bool // force the full linear wizard even when a config already exists (skip the field editor)
 }
 
 // cmdSetup is the first-run configurator: pick a primary/backup pair,
@@ -55,6 +56,8 @@ func cmdSetup(args []string) error {
 		switch {
 		case a == "--yes" || a == "-y":
 			o.Yes = true
+		case a == "--wizard":
+			o.Wizard = true
 		case a == "--proxy0":
 			o.Proxy0 = "yes"
 		case a == "--no-proxy0":
@@ -111,7 +114,14 @@ func runSetup(stdin io.Reader, o setupOpts) error {
 		defer tty.Close()
 		in = tty
 	}
-	return runSetupInteractive(bufio.NewReader(in), cfg, o)
+	reader := bufio.NewReader(in)
+	// A router that's already been through setup gets the field editor
+	// (show everything, change one thing) instead of the full linear
+	// wizard -- unless --wizard forces the walk-through.
+	if !o.Wizard && cfg.Primary() != nil {
+		return runSetupEdit(reader, cfg, o)
+	}
+	return runSetupInteractive(reader, cfg, o)
 }
 
 func isCharDevice(f *os.File) bool {
@@ -582,18 +592,7 @@ func printSetupSummary(cfg *config.Config, haveBackup bool) {
 		fmt.Println("  резерв:    нет (один профиль)")
 	}
 	fmt.Printf("  порты:     SOCKS %d · HTTP %d\n", cfg.Failover.SOCKSPort, cfg.Failover.HTTPPort)
-	switch {
-	case cfg.Proxy0.Enabled:
-		proto := cfg.Proxy0.Protocol
-		if proto == "" {
-			proto = "socks5"
-		}
-		fmt.Printf("  транспорт: Proxy0 / %s\n", proto)
-	case cfg.WGTransport.Enabled:
-		fmt.Printf("  транспорт: WireGuard (%s)\n", cfg.WGTransport.Iface)
-	default:
-		fmt.Println("  транспорт: только локальный прокси")
-	}
+	fmt.Printf("  транспорт: %s\n", transportSummary(cfg))
 	if l := presets.BoundList(cfg, "telegram"); l != nil {
 		fmt.Printf("  telegram:  → %s\n", l.RouteIface())
 	}

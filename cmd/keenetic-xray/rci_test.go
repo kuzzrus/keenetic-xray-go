@@ -12,8 +12,8 @@ import (
 func rciFakeRouter(t *testing.T) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
-	mux.HandleFunc("/ci/running-config.txt", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("system\n    hostname test\n!\n"))
+	mux.HandleFunc("/rci/show/running-config", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"message":["system","    hostname test","!"]}`))
 	})
 	mux.HandleFunc("/rci/show/version", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"release":"5.1.3"}`))

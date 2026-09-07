@@ -76,11 +76,17 @@ func RCIActive() bool { return activeRCI() != nil }
 func (c *rciClient) tryRead(ctx context.Context, cmd string) (out string, ok bool, err error) {
 	switch strings.TrimSpace(cmd) {
 	case "show running-config":
-		// /ci/running-config.txt is the live config as CLI text -- byte
-		// identical in shape to `ndmc -c "show running-config"`, so every
-		// existing line parser keeps working unchanged.
-		b, e := c.get(ctx, "/ci/running-config.txt")
-		return string(b), true, e
+		// /rci/show/running-config returns {"message": [<one CLI line per
+		// entry>]} -- join it and you have byte-identical text to
+		// `ndmc -c "show running-config"`, so every existing line parser
+		// keeps working. (/ci/running-config.txt is 403 on the no-auth
+		// loopback port.)
+		b, e := c.get(ctx, "/rci/show/running-config")
+		if e != nil {
+			return "", true, e
+		}
+		txt, e := runningConfigFromRCI(b)
+		return txt, true, e
 	case "show version":
 		b, e := c.get(ctx, "/rci/show/version")
 		if e != nil {
@@ -91,6 +97,26 @@ func (c *rciClient) tryRead(ctx context.Context, cmd string) (out string, ok boo
 	default:
 		return "", false, nil
 	}
+}
+
+// runningConfigFromRCI turns {"message": [...]} (or {"message": "..."})
+// from /rci/show/running-config into the CLI text the parsers expect.
+func runningConfigFromRCI(b []byte) (string, error) {
+	var v struct {
+		Message json.RawMessage `json:"message"`
+	}
+	if err := json.Unmarshal(b, &v); err != nil {
+		return "", fmt.Errorf("show running-config: RCI JSON: %w", err)
+	}
+	var lines []string
+	if err := json.Unmarshal(v.Message, &lines); err == nil {
+		return strings.Join(lines, "\n") + "\n", nil
+	}
+	var s string
+	if err := json.Unmarshal(v.Message, &s); err == nil {
+		return s, nil
+	}
+	return "", fmt.Errorf("show running-config: unexpected RCI `message` shape")
 }
 
 func (c *rciClient) get(ctx context.Context, path string) ([]byte, error) {

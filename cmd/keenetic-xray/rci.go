@@ -70,34 +70,35 @@ func rciShow(cfg *config.Config) error {
 	return nil
 }
 
-// rciCandidates is the base URL(s) to try: the explicit one, else the
-// historical command port then the web port.
+// rciCandidates is the base URL(s) to try: the explicit one, else
+// KeeneticOS's no-auth local RCI port. Port 79 on loopback answers
+// /rci/* without credentials; :80 is the authenticated web UI.
 func rciCandidates(explicit string) []string {
 	if e := strings.TrimRight(strings.TrimSpace(explicit), "/"); e != "" {
 		return []string{e}
 	}
-	return []string{"http://127.0.0.1:79", "http://127.0.0.1:80", "http://127.0.0.1:81"}
+	return []string{"http://127.0.0.1:79", "http://127.0.0.1:80"}
 }
 
-// rciProbe GETs /ci/running-config.txt + /rci/show/version on each
+// rciProbe GETs /rci/show/version + /rci/show/running-config on each
 // candidate and returns the first base that answers both, plus a short
 // human detail block. Quiet -- callers decide whether to print.
 func rciProbe(explicit string) (base, detail string, err error) {
 	hc := &http.Client{Timeout: 6 * time.Second, Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true}}
 	var lastErr error
 	for _, b := range rciCandidates(explicit) {
-		cfgBytes, e := rciGet(hc, b+"/ci/running-config.txt")
-		if e != nil {
-			lastErr = fmt.Errorf("%s: %w", b, e)
-			continue
-		}
 		verBytes, e := rciGet(hc, b+"/rci/show/version")
 		if e != nil {
 			lastErr = fmt.Errorf("%s: /rci/show/version: %w", b, e)
 			continue
 		}
-		return b, fmt.Sprintf("  running-config: %d байт\n  show/version:   %s\n",
-			len(cfgBytes), firstLine(string(verBytes))), nil
+		cfgBytes, e := rciGet(hc, b+"/rci/show/running-config")
+		if e != nil {
+			lastErr = fmt.Errorf("%s: /rci/show/running-config: %w", b, e)
+			continue
+		}
+		return b, fmt.Sprintf("  show/version:        %s\n  show/running-config: %d байт\n",
+			firstLine(string(verBytes)), len(cfgBytes)), nil
 	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("ни один адрес не ответил")

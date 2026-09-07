@@ -14,10 +14,10 @@ func init() { Register(&unboundAddon{}) }
 // servers directly instead of trusting an upstream that can be poisoned.
 // Two modes:
 //
-//	local  (default) -- listens on 127.0.0.1:5353. Nothing on the router
+//	local  (default) -- listens on 127.0.0.1:5335. Nothing on the router
 //	        uses it; it's just available.
-//	router (router-dns=on) -- also listens on the LAN IP:5353 and
-//	        KeeneticOS gets an `ip name-server <LAN-IP>:5353` entry, so
+//	router (router-dns=on) -- also listens on the LAN IP:5335 and
+//	        KeeneticOS gets an `ip name-server <LAN-IP>:5335` entry, so
 //	        the router's dns-proxy forwards to unbound. dns-proxy stays
 //	        in the path (unlike `opkg dns-override`), so its DNS-name →
 //	        route snooping -- the thing keenetic-xray's own domain
@@ -28,10 +28,14 @@ func init() { Register(&unboundAddon{}) }
 // tls/https upstream), dns-proxy may keep preferring those -- router-dns
 // replaces a plain ISP resolver, it doesn't override DoT/DoH.
 const (
-	unboundPkg      = "unbound-daemon"
-	unboundInit     = "S61unbound"
-	unboundConf     = "/opt/etc/unbound/unbound.conf"
-	unboundPort     = 5353
+	unboundPkg  = "unbound-daemon"
+	unboundInit = "S61unbound"
+	unboundConf = "/opt/etc/unbound/unbound.conf"
+	// 5335 is the pi-hole+unbound convention -- it dodges :53 (Keenetic's
+	// dns-proxy) and :5353 (Keenetic's mDNS responder), both of which are
+	// already bound on this firmware. The stock Entware conf has no
+	// `port:` line so it defaults to 53 and never starts here.
+	unboundPort     = 5335
 	unboundDefCache = 8 // MB, per rrset/msg cache
 	unboundRtrMark  = "# mode: router"
 	// unboundManagedMark tags a conf this component wrote, so Install
@@ -59,7 +63,7 @@ func (*unboundAddon) About() string {
 		"доверяет провайдерскому DNS, который может подменять ответы. Проверяет DNSSEC.\n\n" +
 		"Настройки (addon configure unbound …):\n" +
 		"  router-dns=on|off  подключить unbound резолвером роутера: он слушает и на LAN-IP,\n" +
-		"                     на роутер добавляется `ip name-server <LAN-IP>:5353`. dns-proxy\n" +
+		"                     на роутер добавляется `ip name-server <LAN-IP>:5335`. dns-proxy\n" +
 		"                     остаётся в цепочке — маршрутизация по доменам продолжает работать.\n" +
 		"  cache=8            размер кэша, МБ (на каждый из rrset/msg)\n" +
 		"  dnssec=on|off      проверка DNSSEC\n\n" +
@@ -332,13 +336,18 @@ func unboundConfBody(cacheMB int, dnssec, routerMode bool, lanIP string) string 
 	return fmt.Sprintf(`# Managed by keenetic-xray (addons: unbound). Regenerated on
 # `+"`addon configure unbound …`"+` -- local edits do not stick.
 %sserver:
-    verbosity: 0
-%s
-    port: %d
+    verbosity: 1
+    use-syslog: yes
+    username: ""
+    chroot: ""
+    directory: "/opt/var/lib/unbound"
+    pidfile: "/opt/var/run/unbound.pid"
     do-ip4: yes
     do-ip6: no
     do-udp: yes
     do-tcp: yes
+    port: %d
+%s
     hide-identity: yes
     hide-version: yes
     harden-glue: yes
@@ -353,7 +362,6 @@ func unboundConfBody(cacheMB int, dnssec, routerMode bool, lanIP string) string 
     cache-min-ttl: 60
     cache-max-ttl: 86400
     num-threads: 1
-    so-reuseport: yes
     %s
-`, marker, listen, unboundPort, bytesPerCache, bytesPerCache, dnssecLine)
+`, marker, unboundPort, listen, bytesPerCache, bytesPerCache, dnssecLine)
 }

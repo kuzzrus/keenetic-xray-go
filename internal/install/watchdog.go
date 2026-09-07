@@ -177,10 +177,10 @@ func CronRunning() bool {
 
 // EnsureCron makes sure a cron daemon is installed and running,
 // installing the Entware `cron` package via opkg first if needed, then
-// enabling and starting it. A no-op if one's already running. This is
-// what the bot's watchdog-enable button and `keenetic-xray watchdog
-// enable` call before SetWatchdogCron, so "enable the watchdog" is a
-// single action rather than requiring cron to already be present.
+// starting it. A no-op if one's already running. This is what the bot's
+// watchdog-enable button and `keenetic-xray watchdog enable` call before
+// SetWatchdogCron, so "enable the watchdog" is a single action rather
+// than requiring cron to already be present.
 func EnsureCron() error {
 	if CronRunning() {
 		return nil
@@ -188,9 +188,12 @@ func EnsureCron() error {
 	if err := cronOpkgInstall(); err != nil {
 		return fmt.Errorf("installing the cron package: %w", err)
 	}
-	if err := cronInitEnable(); err != nil {
-		return fmt.Errorf("enabling cron at boot: %w", err)
-	}
+	// No explicit "enable at boot" step: Entware's S10cron ships
+	// ENABLED=yes and Entware runs every S* init script at boot, so it's
+	// persistent already. This rc.func build has no `enable` action at
+	// all -- it errors "Usage: ..." -- so call it only for the builds
+	// that do have it and ignore the failure otherwise.
+	_ = cronInitEnable()
 	if err := cronInitStart(); err != nil {
 		return fmt.Errorf("starting cron: %w", err)
 	}

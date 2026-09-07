@@ -50,11 +50,12 @@ on `:853`). DoH over `:443` usually survives where DoT doesn't.
 ## Providers
 
 ~20 public resolvers (`internal/dnsupstream/providers.go`): Cloudflare
-(+Security), Google, Quad9 (+Unsecured), AdGuard (+Family, +Unfiltered),
-Yandex (+Safe, DoT), Mullvad (+Adblock), dns0.eu (+ZERO), DNS.SB,
-Comss.one (DoH), OpenDNS, CleanBrowsing, UncensoredDNS, ControlD
-Unfiltered. A filtering resolver (AdGuard, CleanBrowsing) can return
-NXDOMAIN for ad/tracker domains — which can interfere with routing.
+(+Security), Google, Quad9 (+Unsecured), AdGuard (+Family), Yandex
+(+Safe, DoT), Mullvad (+Adblock), Gcore, DNS4EU, DNS.SB, Comss.one (DoH),
+OpenDNS, CleanBrowsing, UncensoredDNS, ControlD Unfiltered, LibreDNS. A
+filtering resolver (AdGuard, CleanBrowsing) can return NXDOMAIN for
+ad/tracker domains — which can interfere with routing. Run `dns test` on
+the router to see which are actually reachable from your ISP.
 
 ## Not done
 

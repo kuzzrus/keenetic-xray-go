@@ -93,14 +93,14 @@ var providers = []Provider{
 		DoH: []HTTPS{{"https://adblock.dns.mullvad.net/dns-query"}},
 	},
 	{
-		ID: "dns0", Name: "dns0.eu", Note: "EU, НКО",
-		DoT: []TLS{{"193.110.81.0", "dns0.eu"}, {"185.253.5.0", "dns0.eu"}},
-		DoH: []HTTPS{{"https://dns0.eu/"}},
+		ID: "gcore", Name: "Gcore", Note: "много точек присутствия, в т.ч. рядом с РФ",
+		DoT: []TLS{{"95.85.95.85", "dns.gcore.com"}, {"2.56.220.2", "dns.gcore.com"}},
+		DoH: []HTTPS{{"https://dns.gcore.com/dns-query"}},
 	},
 	{
-		ID: "dns0-zero", Name: "dns0.eu ZERO", Note: "EU, агрессивная защита",
-		DoT: []TLS{{"193.110.81.9", "zero.dns0.eu"}, {"185.253.5.9", "zero.dns0.eu"}},
-		DoH: []HTTPS{{"https://zero.dns0.eu/"}},
+		ID: "dns4eu", Name: "DNS4EU", Note: "официальный резолвер ЕС, блокирует малварь/фишинг",
+		DoT: []TLS{{"86.54.11.1", "protective.joindns4.eu"}, {"86.54.11.201", "protective.joindns4.eu"}},
+		DoH: []HTTPS{{"https://protective.joindns4.eu/dns-query"}},
 	},
 	{
 		ID: "dnssb", Name: "DNS.SB", Note: "без логов, anycast",
@@ -130,6 +130,11 @@ var providers = []Provider{
 		ID: "controld-unfiltered", Name: "ControlD Unfiltered", Note: "без фильтрации",
 		DoT: []TLS{{"76.76.2.0", "p0.freedns.controld.com"}, {"76.76.10.0", "p0.freedns.controld.com"}},
 		DoH: []HTTPS{{"https://freedns.controld.com/p0"}},
+	},
+	{
+		ID: "libredns", Name: "LibreDNS", Note: "община, без логов, Hetzner DE",
+		DoT: []TLS{{"88.198.92.222", "dot.libredns.gr"}},
+		DoH: []HTTPS{{"https://doh.libredns.gr/dns-query"}},
 	},
 }
 

@@ -8,10 +8,10 @@ Keenetic с Entware. Собирается только под **mipsel** и **aa
 работают от начала до конца.
 
 Подробнее: [`docs/architecture.md`](docs/architecture.md) — как всё
-устроено, [`docs/full-vs-mini.md`](docs/full-vs-mini.md) — разница
-вариантов Mini/Full, [`docs/bot-control-design.md`](docs/bot-control-design.md)
+устроено, [`docs/full-vs-mini.md`](docs/full-vs-mini.md) — про варианты
+Full/Mini, [`docs/bot-control-design.md`](docs/bot-control-design.md)
 — дизайн удалённого управления, [`docs/routing.md`](docs/routing.md) —
-маршрутизация по доменам.
+маршрутизация по доменам, [`docs/dns.md`](docs/dns.md) — защищённый DNS.
 
 ---
 
@@ -97,12 +97,14 @@ MSS-правило и WG-интерфейс.
 **Целостность конфига.** `config.json` пишется атомарно (временный файл →
 `fsync` → `rename`), потеря питания в момент записи не бьёт файл.
 
-**Удалённое управление (только Full).** Отдельный бинарь
+**Удалённое управление.** Отдельный бинарь
 `keenetic-xray-control-server` на VPS: очередь команд из Telegram-бота,
 роутеры опрашивают его по self-signed TLS с пиннингом отпечатка.
 
-**Mini vs Full.** Mini не запускает polling-агента (нет бота), в остальном
-идентичен. На диске занимают одинаково.
+**Mini vs Full.** По умолчанию Full. Mini — явная опция (`install.sh
+--mini`), отличается только объёмом хранимых логов/истории (и то оба
+уже ограничены). Бинарь, фичи и бот доступны в обоих. См.
+[`docs/full-vs-mini.md`](docs/full-vs-mini.md).
 
 ---
 
@@ -116,8 +118,9 @@ MSS-правило и WG-интерфейс.
 curl -fsSL https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/install.sh | sh -s -- --sub="https://provider.example/sub/token"
 ```
 
-Без ссылки — поставит и сразу откроет интерактивный мастер в этой же
-SSH-сессии (primary, backup, порты SOCKS/HTTP, затем Proxy0):
+Без ссылки — поставит и сразу откроет интерактивный русский мастер в этой
+же SSH-сессии (основной и резервный профили — резервный можно пропустить,
+порты SOCKS/HTTP, транспорт), с проверкой доступности сервера в конце:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/install.sh | sh
@@ -126,8 +129,9 @@ curl -fsSL https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/insta
 `curl`, не `wget`: busybox-`wget` на части Keenetic не умеет `https://`
 вообще. Нет `curl` — сначала `opkg update && opkg install curl`.
 
-Флаги: `--no-proxy0` — не трогать `Proxy0`, `--xray-core=entware` — ядро
-из фида Entware, `--xray-core-tag=vX.Y.Z` — конкретная сборка ядра.
+Флаги: `--no-proxy0` — не трогать `Proxy0`, `--mini` — вариант Mini
+(по умолчанию Full), `--xray-core=entware` — ядро из фида Entware,
+`--xray-core-tag=vX.Y.Z` — конкретная сборка ядра.
 
 ### Вручную
 

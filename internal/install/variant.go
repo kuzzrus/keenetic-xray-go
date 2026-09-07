@@ -1,5 +1,5 @@
 // Package install holds the logic behind the .ipk's postinst/prerm
-// scripts: creating the runtime directory layout, deciding Mini vs Full,
+// scripts: creating the runtime directory layout, choosing Mini vs Full,
 // and writing an initial config.json without ever clobbering one that
 // already exists (the upgrade case).
 package install
@@ -7,22 +7,21 @@ package install
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
-	"github.com/kuzzrus/keenetic-xray-go/internal/diskspace"
 )
 
-// DefaultMiniThresholdBytes is the free-space cutoff below which a fresh
-// install gets the Mini variant instead of Full. Measured at postinst
-// time, after opkg has already unpacked the xray-core dependency (that's
-// what Depends: guarantees), so this reading already nets out xray-core's
-// own footprint for free -- no subtraction needed.
-const DefaultMiniThresholdBytes = 43 * 1024 * 1024
+// VariantEnv is the environment variable install.sh sets from its
+// `--mini` flag. Anything other than "mini" (case-insensitive), or
+// unset, means Full -- Full is the default and the only variant that was
+// ever meaningfully different is a small log/history retention cap.
+const VariantEnv = "KEENETIC_XRAY_VARIANT"
 
-// DecideVariant picks Mini or Full based on free space at the point
-// postinst runs.
-func DecideVariant(freeBytes, thresholdBytes int64) string {
-	if freeBytes < thresholdBytes {
+// VariantFromEnv returns the variant a fresh install should get: Mini
+// only when explicitly asked for, Full otherwise.
+func VariantFromEnv() string {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv(VariantEnv)), config.VariantMini) {
 		return config.VariantMini
 	}
 	return config.VariantFull
@@ -30,19 +29,18 @@ func DecideVariant(freeBytes, thresholdBytes int64) string {
 
 // Paths are the directories/files postinst and prerm operate on.
 type Paths struct {
-	ConfigDir     string // e.g. /opt/etc/keenetic-xray
-	ConfigFile    string // e.g. /opt/etc/keenetic-xray/config.json
-	LibDir        string // e.g. /opt/var/lib/keenetic-xray
-	LogDir        string // e.g. /opt/var/log/keenetic-xray
-	RunDir        string // e.g. /opt/var/run
-	DiskCheckPath string // e.g. /opt -- where free space is measured
+	ConfigDir  string // e.g. /opt/etc/keenetic-xray
+	ConfigFile string // e.g. /opt/etc/keenetic-xray/config.json
+	LibDir     string // e.g. /opt/var/lib/keenetic-xray
+	LogDir     string // e.g. /opt/var/log/keenetic-xray
+	RunDir     string // e.g. /opt/var/run
 }
 
 // PostinstSetup creates the runtime directory layout and, only if no
-// config.json exists yet, decides Mini/Full from free space and writes a
-// fresh skeleton config. An existing config.json (the upgrade case) is
-// left completely untouched.
-func PostinstSetup(paths Paths, thresholdBytes int64) error {
+// config.json exists yet, writes a fresh skeleton config with the
+// chosen variant (Full unless KEENETIC_XRAY_VARIANT=mini). An existing
+// config.json (the upgrade case) is left completely untouched.
+func PostinstSetup(paths Paths) error {
 	for _, dir := range []string{paths.ConfigDir, paths.LibDir, paths.LogDir, paths.RunDir} {
 		if dir == "" {
 			continue
@@ -58,13 +56,8 @@ func PostinstSetup(paths Paths, thresholdBytes int64) error {
 		return fmt.Errorf("checking %s: %w", paths.ConfigFile, err)
 	}
 
-	free, err := diskspace.FreeBytes(paths.DiskCheckPath)
-	if err != nil {
-		return fmt.Errorf("checking free disk space: %w", err)
-	}
-
 	cfg := config.Default()
-	cfg.Variant = DecideVariant(free, thresholdBytes)
+	cfg.Variant = VariantFromEnv()
 	if err := cfg.Save(paths.ConfigFile); err != nil {
 		return fmt.Errorf("writing initial config: %w", err)
 	}

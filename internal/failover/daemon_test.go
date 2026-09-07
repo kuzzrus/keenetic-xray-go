@@ -38,48 +38,77 @@ func TestMain(m *testing.M) {
 // the whole opkg installation register as failed (confirmed on real
 // hardware). It must instead idle until ctx is cancelled.
 func TestDaemon_Run_IdlesWithoutProfiles(t *testing.T) {
-	cases := []struct {
-		name string
-		cfg  *config.Config
-	}{
-		{"no profiles at all", config.Default()},
-		{"primary only", func() *config.Config {
-			c := config.Default()
-			c.Profiles = []config.Profile{{
-				UUID: "u", Address: "a", Port: 443, Network: "tcp", Security: "none", Encryption: "none",
-			}}
-			c.PrimaryIndex = 0
-			return c
-		}()},
+	d := NewDaemon(Paths{}, config.Default()) // no profiles at all
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- d.Run(ctx) }()
+
+	// Run must still be idling, not already returned, a short moment
+	// after starting -- this is what actually caught the bug: the old
+	// code returned an error near-instantly here.
+	select {
+	case err := <-runErr:
+		t.Fatalf("Run returned early (%v) instead of idling without a primary configured", err)
+	case <-time.After(100 * time.Millisecond):
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			d := NewDaemon(Paths{}, tc.cfg)
+	cancel()
+	select {
+	case err := <-runErr:
+		if err != context.Canceled {
+			t.Errorf("Run returned %v after cancellation, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return after ctx cancellation")
+	}
+}
 
-			ctx, cancel := context.WithCancel(context.Background())
-			runErr := make(chan error, 1)
-			go func() { runErr <- d.Run(ctx) }()
+// TestDaemon_Run_SingleProfile: a config with a primary but no distinct
+// backup (BackupIndex == PrimaryIndex, the "skip backup" setup path)
+// must actually start serving -- production instance up, Snapshot works,
+// LiveRole primary -- and just supervise it, no failover loop.
+func TestDaemon_Run_SingleProfile(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.Profiles = []config.Profile{
+		{UUID: "p", Address: "primary.invalid", Port: 443, Network: "tcp", Security: "none", Encryption: "none", Remark: "solo"},
+	}
+	cfg.PrimaryIndex = 0
+	cfg.BackupIndex = 0 // no separate backup
 
-			// Run must still be idling, not already returned, a short
-			// moment after starting -- this is what actually caught the
-			// bug: the old code returned an error near-instantly here.
-			select {
-			case err := <-runErr:
-				t.Fatalf("Run returned early (%v) instead of idling without primary/backup configured", err)
-			case <-time.After(100 * time.Millisecond):
-			}
+	paths := Paths{
+		XrayBinary:       os.Args[0],
+		ProductionConfig: filepath.Join(dir, "production.json"),
+		PretestConfig:    filepath.Join(dir, "pretest.json"),
+		Env:              []string{"FAILOVER_TEST_HELPER=1"},
+	}
+	d := NewDaemon(paths, cfg)
 
-			cancel()
-			select {
-			case err := <-runErr:
-				if err != context.Canceled {
-					t.Errorf("Run returned %v after cancellation, want context.Canceled", err)
-				}
-			case <-time.After(2 * time.Second):
-				t.Fatal("Run did not return after ctx cancellation")
-			}
-		})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runErr := make(chan error, 1)
+	go func() { runErr <- d.Run(ctx) }()
+
+	snap, ran := d.Snapshot(ctx)
+	if !ran {
+		t.Fatal("Snapshot: daemon reported not running in single-profile mode")
+	}
+	if snap.State != StateActivePrimary || snap.LiveRole != RolePrimary {
+		t.Errorf("single-profile: State=%v LiveRole=%v, want ACTIVE_PRIMARY/primary", snap.State, snap.LiveRole)
+	}
+	if _, err := os.Stat(paths.PretestConfig); err == nil {
+		t.Error("single-profile mode should not have spun an isolated pretest")
+	}
+
+	cancel()
+	select {
+	case err := <-runErr:
+		if err != context.Canceled {
+			t.Errorf("Run returned %v, want context.Canceled", err)
+		}
+	case <-time.After(20 * time.Second): // prod.Stop() on the fake xray can be slow to reap
+		t.Fatal("Run did not return after cancel")
 	}
 }
 

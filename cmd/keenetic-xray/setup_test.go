@@ -121,6 +121,36 @@ func TestRunSetupInteractive_BlankIndexDefaultsToZero(t *testing.T) {
 	}
 }
 
+func TestRunSetupInteractive_SkipBackup(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	t.Setenv("KEENETIC_XRAY_CONFIG", path)
+
+	// primary link, empty Enter for backup (skip), Enter/Enter for ports,
+	// Enter for transport.
+	input := strings.NewReader(testVLESSURI + "\n\n\n\n\n")
+	if err := runSetup(input, setupOpts{}); err != nil {
+		t.Fatalf("runSetup: %v", err)
+	}
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Profiles) != 1 {
+		t.Fatalf("len(Profiles) = %d, want 1 (backup skipped)", len(cfg.Profiles))
+	}
+	if cfg.BackupSource != nil {
+		t.Errorf("BackupSource = %+v, want nil after skip", cfg.BackupSource)
+	}
+	if cfg.BackupIndex != cfg.PrimaryIndex {
+		t.Errorf("BackupIndex = %d, want == PrimaryIndex %d (single-profile marker)", cfg.BackupIndex, cfg.PrimaryIndex)
+	}
+	if cfg.PrimarySource == nil || cfg.PrimarySource.URL != testVLESSURI {
+		t.Errorf("PrimarySource = %+v", cfg.PrimarySource)
+	}
+}
+
 func TestRunSetupInteractive_CustomPorts(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")

@@ -42,7 +42,9 @@ func TestCmdVariant_SetRejectsUnknown(t *testing.T) {
 	}
 }
 
-func TestCmdVariant_SetMiniDisablesEnabledAgent(t *testing.T) {
+// The agent is no longer Full-gated: enabling it on Mini works, and
+// setting the variant to Mini leaves an enabled agent alone.
+func TestCmdVariant_MiniKeepsAgentEnabled(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 	t.Setenv("KEENETIC_XRAY_CONFIG", path)
@@ -51,19 +53,18 @@ func TestCmdVariant_SetMiniDisablesEnabledAgent(t *testing.T) {
 	if err := run([]string{"agent", "configure", "https://vps.example.com:8443", "router-1", "deadbeef", "s3cr3t"}); err != nil {
 		t.Fatalf("agent configure: %v", err)
 	}
-	if err := run([]string{"agent", "enable"}); err != nil {
-		t.Fatalf("agent enable: %v", err)
-	}
-
 	if err := run([]string{"variant", "set", "mini"}); err != nil {
 		t.Fatalf("variant set mini: %v", err)
+	}
+	if err := run([]string{"agent", "enable"}); err != nil {
+		t.Fatalf("agent enable on mini should be allowed: %v", err)
 	}
 
 	cfg, err := config.Load(path)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Agent.Enabled {
-		t.Error("Agent.Enabled should be forced false after downgrading to mini")
+	if !cfg.Agent.Enabled || cfg.Variant != config.VariantMini {
+		t.Errorf("want enabled agent on mini, got enabled=%v variant=%q", cfg.Agent.Enabled, cfg.Variant)
 	}
 }

@@ -208,7 +208,7 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 	case ActionDNSShow:
 		return h.dnsShow(ctx)
 	case ActionDNSTest:
-		return h.dnsTest(ctx)
+		return h.dnsTest(ctx, cmd.Args)
 	case ActionDNSPreset:
 		return h.dnsPreset(ctx, cmd.Args)
 	case ActionDNSSet:

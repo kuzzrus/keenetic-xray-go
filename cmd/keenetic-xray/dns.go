@@ -28,7 +28,7 @@ func cmdDNS(args []string) error {
 	case "show":
 		return dnsShow(cfg)
 	case "test":
-		return dnsTest()
+		return dnsTest(len(args) > 1 && (args[1] == "--all" || args[1] == "-a"))
 	case "list":
 		return dnsList()
 	case "preset":
@@ -106,16 +106,26 @@ func mark(ours bool) string {
 	return ""
 }
 
-func dnsTest() error {
-	fmt.Println("проверяю провайдеров с роутера (DoT :853 / DoH :443, таймаут 3с)…")
-	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
-	defer cancel()
-	res := dnsupstream.ProbeAll(ctx, dnsupstream.Providers())
-	fmt.Printf("\n%-22s %-16s %s\n", "провайдер", "DoT", "DoH")
-	for _, r := range res {
-		fmt.Printf("%-22s %-16s %s\n", r.Provider.ID, r.DoT.String(), r.DoH.String())
+func dnsTest(all bool) error {
+	pool := dnsupstream.Providers()
+	if all {
+		pool = dnsupstream.TestPool()
+		fmt.Printf("проверяю %d провайдеров (пул --all) с роутера, таймаут 3с…\n", len(pool))
+	} else {
+		fmt.Println("проверяю провайдеров с роутера (DoT :853 / DoH :443, таймаут 3с)…")
 	}
-	fmt.Println("\nвыбрать:  keenetic-xray dns preset <id>")
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	res := dnsupstream.ProbeAll(ctx, pool)
+	fmt.Printf("\n%-24s %-16s %-16s %s\n", "провайдер", "DoT", "DoH", "")
+	for _, r := range res {
+		flag := ""
+		if all && !dnsupstream.InCatalogue(r.Provider.ID) {
+			flag = "·кандидат"
+		}
+		fmt.Printf("%-24s %-16s %-16s %s\n", r.Provider.ID, r.DoT.String(), r.DoH.String(), flag)
+	}
+	fmt.Println("\nвыбрать:  keenetic-xray dns preset <id>   (кандидаты — только в --all)")
 	return nil
 }
 

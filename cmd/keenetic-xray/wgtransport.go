@@ -42,6 +42,17 @@ func transportWG(cfg *config.Config, args []string) error {
 }
 
 func wgTransportOn(cfg *config.Config) error {
+	if err := wgTransportApply(cfg); err != nil {
+		return err
+	}
+	applyDaemonChange(bufio.NewReader(os.Stdin), true)
+	return nil
+}
+
+// wgTransportApply reconciles the in-router WG transport and saves the
+// config, but does NOT touch the daemon -- the setup wizard calls this
+// so it can apply the daemon change once at the end instead of twice.
+func wgTransportApply(cfg *config.Config) error {
 	if !keenetic.Available() {
 		return fmt.Errorf("ndmc не найден — WG-транспорт работает только на роутере Keenetic")
 	}
@@ -80,7 +91,6 @@ func wgTransportOn(cfg *config.Config) error {
 	}
 	fmt.Printf("WG-транспорт включён: %s (MTU %d), xray слушает :%d\n", spec.Iface, spec.MTU, cfg.WGTransport.WGPort())
 	fmt.Printf("заворачивай трафик: keenetic-xray routes set <список> --iface=%s (или политикой Keenetic)\n", spec.Iface)
-	applyDaemonChange(bufio.NewReader(os.Stdin), true)
 	return nil
 }
 

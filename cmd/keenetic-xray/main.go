@@ -98,7 +98,7 @@ func printUsage() {
 
 commands:
   version                                          print version and exit
-  setup                                             interactive first-run configuration menu
+  setup [--wizard]                                  first run: full wizard; later: show current config and edit one field (--wizard forces the wizard)
   menu                                              interactive control panel (manage the router over SSH, no bot)
   daemon                                            run the failover daemon in the foreground
   profile {add <vless-uri>|list|remove <index>}

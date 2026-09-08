@@ -341,7 +341,7 @@ func TestConfigValidate_WGTransport(t *testing.T) {
 }
 
 func TestValidXrayCoreTag(t *testing.T) {
-	for _, ok := range []string{"", "v26.3.27", "v26.7.28", "v1.0.0"} {
+	for _, ok := range []string{"", "v26.3.27", "v26.9.8", "v1.0.0"} {
 		if !ValidXrayCoreTag(ok) {
 			t.Errorf("ValidXrayCoreTag(%q) = false, want true", ok)
 		}
@@ -355,9 +355,9 @@ func TestValidXrayCoreTag(t *testing.T) {
 
 func TestConfigValidate_XrayCoreTag(t *testing.T) {
 	c := Default()
-	c.XrayCoreTag = "v26.7.28"
+	c.XrayCoreTag = "v26.9.8"
 	if err := c.Validate(); err != nil {
-		t.Errorf("xray_core_tag v26.7.28: unexpected error %v", err)
+		t.Errorf("xray_core_tag v26.9.8: unexpected error %v", err)
 	}
 	c.XrayCoreTag = "nightly"
 	if err := c.Validate(); err == nil {

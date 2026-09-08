@@ -433,18 +433,18 @@ func TestRouterHandler_UpdateCore(t *testing.T) {
 	}
 
 	// Switch onto a specific tag -> fetched with Force, and the pin persists.
-	out, err := h.Handle(context.Background(), Command{Action: ActionUpdateCore, Args: []string{"v26.7.28"}})
+	out, err := h.Handle(context.Background(), Command{Action: ActionUpdateCore, Args: []string{"v26.9.8"}})
 	if err != nil {
-		t.Fatalf("update_core v26.7.28: %v", err)
+		t.Fatalf("update_core v26.9.8: %v", err)
 	}
-	if !strings.Contains(out, "v26.7.28") {
+	if !strings.Contains(out, "v26.9.8") {
 		t.Errorf("out = %q, want it to name the new pin", out)
 	}
-	if gotOpts.Tag != "v26.7.28" || !gotOpts.Force || gotOpts.Prefer != "vendored" {
-		t.Errorf("Ensure opts = %+v, want Tag=v26.7.28 Force=true Prefer=vendored", gotOpts)
+	if gotOpts.Tag != "v26.9.8" || !gotOpts.Force || gotOpts.Prefer != "vendored" {
+		t.Errorf("Ensure opts = %+v, want Tag=v26.9.8 Force=true Prefer=vendored", gotOpts)
 	}
-	if saved, _ := config.Load(cfgPath); saved.XrayCoreTag != "v26.7.28" {
-		t.Errorf("saved XrayCoreTag = %q, want v26.7.28", saved.XrayCoreTag)
+	if saved, _ := config.Load(cfgPath); saved.XrayCoreTag != "v26.9.8" {
+		t.Errorf("saved XrayCoreTag = %q, want v26.9.8", saved.XrayCoreTag)
 	}
 
 	// "stable" clears the pin back to the default.
@@ -459,7 +459,7 @@ func TestRouterHandler_UpdateCore(t *testing.T) {
 	}
 
 	// A junk tag errors, never calls Ensure, and leaves the pin as-is.
-	h.Config.XrayCoreTag = "v26.7.28"
+	h.Config.XrayCoreTag = "v26.9.8"
 	gotOpts = xraycore.Options{}
 	if _, err := h.Handle(context.Background(), Command{Action: ActionUpdateCore, Args: []string{"nightly"}}); err == nil {
 		t.Error("update_core nightly: expected an error for a malformed tag")
@@ -467,7 +467,7 @@ func TestRouterHandler_UpdateCore(t *testing.T) {
 	if gotOpts.Dest != "" {
 		t.Error("Ensure was called despite a malformed tag")
 	}
-	if h.Config.XrayCoreTag != "v26.7.28" {
+	if h.Config.XrayCoreTag != "v26.9.8" {
 		t.Errorf("XrayCoreTag = %q, want it unchanged after a rejected tag", h.Config.XrayCoreTag)
 	}
 }

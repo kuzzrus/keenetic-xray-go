@@ -34,15 +34,17 @@ func TestApplyResult_UniqueMatches(t *testing.T) {
 	}
 }
 
-// TestApplyResult_UnmatchedDoesNotGuess covers the >1-profile case: with
+// TestApplyResult_UnmatchedKeepsLastGood covers the >1-profile case: with
 // a real choice to make and no confident match, ApplyResult must not
-// guess. (With exactly one fetched profile there's no guess involved --
-// see TestApplyResult_SingleProfileDefaultsUnmatchedSlots.)
-func TestApplyResult_UnmatchedDoesNotGuess(t *testing.T) {
+// adopt some other fresh server -- it keeps the slot's last-good profile
+// (re-added to the pool) and warns. (With exactly one fetched profile
+// there's no choice -- see TestApplyResult_SingleProfileDefaultsUnmatchedSlots.)
+func TestApplyResult_UnmatchedKeepsLastGood(t *testing.T) {
+	oldPrimary := config.Profile{Remark: "old-primary", UUID: "op", Address: "op.example.com", Port: 443, Network: "tcp", Security: "none", Encryption: "none"}
+	oldBackup := config.Profile{Remark: "old-backup", UUID: "ob", Address: "ob.example.com", Port: 443, Network: "tcp", Security: "none", Encryption: "none"}
 	cfg := config.Default()
-	cfg.Profiles = []config.Profile{{Remark: "old-primary"}}
-	cfg.PrimaryIndex = 0
-	cfg.BackupIndex = 0
+	cfg.Profiles = []config.Profile{oldPrimary, oldBackup}
+	cfg.PrimaryIndex, cfg.BackupIndex = 0, 1
 
 	result := RefreshResult{
 		Profiles: []config.Profile{
@@ -55,10 +57,50 @@ func TestApplyResult_UnmatchedDoesNotGuess(t *testing.T) {
 
 	warnings := ApplyResult(cfg, result)
 	if len(warnings) != 2 {
-		t.Fatalf("warnings = %v, want 2 (primary not found, backup ambiguous)", warnings)
+		t.Fatalf("warnings = %v, want 2 (primary + backup both vanished)", warnings)
 	}
-	if cfg.PrimaryIndex != -1 || cfg.BackupIndex != -1 {
-		t.Errorf("PrimaryIndex/BackupIndex = %d/%d, want -1/-1 (must not guess)", cfg.PrimaryIndex, cfg.BackupIndex)
+	if got := cfg.Primary(); got == nil || got.UUID != "op" {
+		t.Errorf("Primary() = %+v, want the kept old-primary (uuid op), not a fresh guess", got)
+	}
+	if got := cfg.Backup(); got == nil || got.UUID != "ob" {
+		t.Errorf("Backup() = %+v, want the kept old-backup (uuid ob)", got)
+	}
+	// The two fresh profiles are in the pool, plus the two preserved ones.
+	if len(cfg.Profiles) != 4 {
+		t.Errorf("Profiles len = %d, want 4 (2 fresh + 2 preserved)", len(cfg.Profiles))
+	}
+}
+
+// TestApplyResult_RenamedNodeRematchedByFingerprint: the provider kept
+// the same server but changed its display name (and rotated the UUID).
+// Remark match fails, but the ImportKey still lines up, so the slot
+// follows the server to its new name instead of being dropped.
+func TestApplyResult_RenamedNodeRematchedByFingerprint(t *testing.T) {
+	cfg := config.Default()
+	cfg.Subscription = &config.Subscription{URL: "https://example.com/sub", PrimaryKey: "Old Name"}
+	cfg.Profiles = []config.Profile{
+		{Remark: "Old Name", UUID: "u1", Address: "keep.example.com", Port: 443, Network: "tcp", Security: "none", Encryption: "none"},
+	}
+	cfg.PrimaryIndex, cfg.BackupIndex = 0, 0
+
+	result := RefreshResult{
+		Profiles: []config.Profile{
+			{Remark: "Fresh Name", UUID: "u2-rotated", Address: "keep.example.com", Port: 443, Network: "tcp", Security: "none", Encryption: "none"},
+			{Remark: "Decoy", UUID: "d", Address: "decoy.example.com", Port: 443, Network: "tcp", Security: "none", Encryption: "none"},
+		},
+		PrimaryIndex: -1, PrimaryStatus: MatchNotFound,
+		BackupIndex: -1, BackupStatus: MatchNotFound,
+	}
+
+	warnings := ApplyResult(cfg, result)
+	if got := cfg.Primary(); got == nil || got.Address != "keep.example.com" || got.Remark != "Fresh Name" {
+		t.Fatalf("Primary() = %+v, want the same server under its new name", got)
+	}
+	if cfg.Subscription.PrimaryKey != "Fresh Name" {
+		t.Errorf("PrimaryKey = %q, want it updated to the new remark", cfg.Subscription.PrimaryKey)
+	}
+	if len(warnings) == 0 {
+		t.Error("a fingerprint re-match should still warn that the name changed")
 	}
 }
 

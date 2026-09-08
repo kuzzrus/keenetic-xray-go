@@ -13,56 +13,59 @@ import (
 // responsible for cfg.Save afterward; this is the one place that logic
 // lives so both frontends apply a refresh identically.
 //
-// Two safety nets on top of Refresh's own remark-matching:
+// Refresh itself already fails a fetch that errored or came back with no
+// usable entries, so a *failed* or *empty* refresh never reaches here.
+// On top of that, three safety nets keep a *successful but changed*
+// refresh from losing the server that's actually carrying traffic:
 //
 //   - A slot fed by its own independent SlotSource (PrimarySource /
-//     BackupSource, set via the bot's 🔗 Источники) is never touched by a
-//     refresh of the *shared* Subscription -- that slot's profile isn't
-//     from this subscription at all, so replacing Profiles wholesale must
-//     not silently discard it. This is what protects a mixed primary/
-//     backup-from-different-sources setup.
-//   - If a slot still has no match (not independently sourced, remark
-//     gone) but the fresh list has exactly one usable profile, that slot
-//     defaults to it rather than being left unset -- same convenience
-//     `keenetic-xray setup` already applies for a single-profile source,
-//     now also on refresh. Leaving both primary and backup unset idles
-//     the daemon entirely, which is a worse outcome than a failover-free
-//     single profile the operator can fix at their leisure.
+//     BackupSource, the bot's 🔗 Источники) is never touched by a refresh
+//     of the *shared* Subscription -- see SnapshotIndependentSlots.
+//   - If the shared active/backup profile can't be re-matched by remark
+//     but a fresh profile has the same Profile.ImportKey (the provider
+//     renamed the node), that fresh profile is adopted and the stored key
+//     updated -- a rename no longer drops the slot.
+//   - If it still can't be found and there's more than one fresh profile
+//     to choose from, the slot *keeps its last-good profile* (re-added to
+//     the pool) rather than being left unset. Idling the daemon, or
+//     guessing some other server, is worse than staying put on a server
+//     that may simply have vanished from the list; the operator gets a
+//     loud warning to re-pick. With exactly one fresh profile the slot
+//     defaults to it instead (no real choice to make).
 func ApplyResult(cfg *config.Config, result RefreshResult) (warnings []string) {
 	warnings = append(warnings, result.Warnings...)
 	independent := cfg.SnapshotIndependentSlots()
 
+	// Snapshot the shared-subscription primary/backup *before* the pool is
+	// replaced, so an unmatched slot can fall back to its last-good entry.
+	var oldPrimary, oldBackup *config.Profile
+	if independent.Primary == nil {
+		if p := cfg.Primary(); p != nil {
+			cp := *p
+			oldPrimary = &cp
+		}
+	}
+	if independent.Backup == nil {
+		if p := cfg.Backup(); p != nil {
+			cp := *p
+			oldBackup = &cp
+		}
+	}
+
 	cfg.Profiles = result.Profiles
+	var primaryKey, backupKey *string
 	if cfg.Subscription != nil {
 		cfg.Subscription.LastFetchedAt = time.Now()
+		primaryKey, backupKey = &cfg.Subscription.PrimaryKey, &cfg.Subscription.BackupKey
 	}
 
-	if result.PrimaryStatus == MatchUnique {
-		cfg.PrimaryIndex = result.PrimaryIndex
-		if cfg.Subscription != nil {
-			cfg.Subscription.PrimaryKey = result.Profiles[result.PrimaryIndex].Remark
-		}
-	} else {
-		cfg.PrimaryIndex = -1
-		if independent.Primary == nil && len(result.Profiles) != 1 {
-			warnings = append(warnings, fmt.Sprintf("could not re-match primary (%s) -- pick one with subscription set-primary", matchStatusReason(result.PrimaryStatus)))
-		}
-	}
+	cfg.PrimaryIndex, warnings = resolveSharedSlot(cfg, "основной",
+		result.PrimaryIndex, result.PrimaryStatus, oldPrimary, primaryKey, warnings)
+	cfg.BackupIndex, warnings = resolveSharedSlot(cfg, "резервный",
+		result.BackupIndex, result.BackupStatus, oldBackup, backupKey, warnings)
 
-	if result.BackupStatus == MatchUnique {
-		cfg.BackupIndex = result.BackupIndex
-		if cfg.Subscription != nil {
-			cfg.Subscription.BackupKey = result.Profiles[result.BackupIndex].Remark
-		}
-	} else {
-		cfg.BackupIndex = -1
-		if independent.Backup == nil && len(result.Profiles) != 1 {
-			warnings = append(warnings, fmt.Sprintf("could not re-match backup (%s) -- pick one with subscription set-backup", matchStatusReason(result.BackupStatus)))
-		}
-	}
-
-	// Single-profile default: only for a slot that isn't independently
-	// sourced (that always wins via Restore below) and still unset.
+	// Single-profile default: a slot that isn't independently sourced and
+	// is still unset takes the sole fresh profile (see the doc comment).
 	if len(result.Profiles) == 1 {
 		if cfg.PrimaryIndex < 0 && independent.Primary == nil {
 			cfg.PrimaryIndex = 0
@@ -75,6 +78,55 @@ func ApplyResult(cfg *config.Config, result RefreshResult) (warnings []string) {
 	independent.Restore(cfg)
 
 	return warnings
+}
+
+// resolveSharedSlot decides one shared-subscription slot's index against a
+// freshly-replaced cfg.Profiles: a confident remark match wins; else an
+// ImportKey match (renamed node) wins and updates the stored key; else,
+// when there's a real choice among several fresh profiles, the slot keeps
+// its last-good profile (old) re-added to the pool; else -1 for the
+// caller's single-profile default / "re-pick" warning.
+func resolveSharedSlot(cfg *config.Config, label string, matchIndex int, status MatchResult, old *config.Profile, key *string, warnings []string) (int, []string) {
+	setKey := func(k string) {
+		if key != nil {
+			*key = k
+		}
+	}
+	if status == MatchUnique {
+		setKey(cfg.Profiles[matchIndex].Remark)
+		return matchIndex, warnings
+	}
+
+	if old != nil {
+		want := old.ImportKey()
+		for i := range cfg.Profiles {
+			if cfg.Profiles[i].ImportKey() == want {
+				setKey(cfg.Profiles[i].Remark)
+				warnings = append(warnings, fmt.Sprintf("%s: сервер переименован в подписке — сопоставлен по отпечатку соединения (%s)", label, cfg.Profiles[i].Remark))
+				return i, warnings
+			}
+		}
+	}
+
+	if len(cfg.Profiles) == 1 {
+		return -1, warnings // caller defaults it to the sole profile
+	}
+
+	if old != nil {
+		idx := cfg.UpsertProfile(*old)
+		warnings = append(warnings, fmt.Sprintf("%s: «%s» пропал из подписки — оставлен прежний сервер; выбери новый через 🔗 Источники / subscription set-%s", label, old.Remark, slotWord(label)))
+		return idx, warnings
+	}
+
+	warnings = append(warnings, fmt.Sprintf("could not re-match %s (%s) -- pick one with subscription set-%s", slotWord(label), matchStatusReason(status), slotWord(label)))
+	return -1, warnings
+}
+
+func slotWord(label string) string {
+	if label == "основной" {
+		return "primary"
+	}
+	return "backup"
 }
 
 func matchStatusReason(s MatchResult) string {

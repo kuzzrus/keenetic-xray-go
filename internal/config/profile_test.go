@@ -552,6 +552,62 @@ func TestConfig_Proxy0Port(t *testing.T) {
 	}
 }
 
+func TestProfileImportKey(t *testing.T) {
+	base := Profile{
+		Remark: "Alpha", UUID: "11111111-2222-3333-4444-555555555555",
+		Address: "a.example.com", Port: 443, Network: "tcp", Security: "none",
+	}
+	key := base.ImportKey()
+	if len(key) != 16 {
+		t.Fatalf("ImportKey = %q, want 16 hex chars", key)
+	}
+
+	// Identity fields that must NOT change the key: display name, every
+	// credential, and pure tuning.
+	for _, mut := range []func(p *Profile){
+		func(p *Profile) { p.Remark = "totally different name" },
+		func(p *Profile) { p.UUID = "99999999-9999-9999-9999-999999999999" },
+		func(p *Profile) { p.PublicKey = "rotatedREALITYkey"; p.ShortID = "ff00ff00" },
+		func(p *Profile) { p.Flow = "xtls-rprx-vision" },
+		func(p *Profile) { p.Fingerprint = "chrome" },
+		func(p *Profile) { p.ALPN = []string{"h2"} },
+		func(p *Profile) { p.XHTTPExtra = json.RawMessage(`{"xmux":{"maxConcurrency":"8"}}`) },
+		func(p *Profile) { p.Address = "  A.EXAMPLE.COM " }, // trim + case fold
+	} {
+		p := base
+		mut(&p)
+		if got := p.ImportKey(); got != key {
+			t.Errorf("ImportKey changed on a non-identity mutation: %q != %q", got, key)
+		}
+	}
+
+	// Fields that MUST fork the identity (different server / endpoint).
+	for name, mut := range map[string]func(p *Profile){
+		"address":     func(p *Profile) { p.Address = "b.example.com" },
+		"port":        func(p *Profile) { p.Port = 8443 },
+		"network":     func(p *Profile) { p.Network = "ws" },
+		"security":    func(p *Profile) { p.Security = "tls" },
+		"sni":         func(p *Profile) { p.SNI = "cdn.example.com" },
+		"host":        func(p *Profile) { p.Host = "front.example.com" },
+		"path":        func(p *Profile) { p.Path = "/other" },
+		"serviceName": func(p *Profile) { p.ServiceName = "grpcSvc" },
+		"mode":        func(p *Profile) { p.Mode = "stream-up" },
+	} {
+		p := base
+		mut(&p)
+		if p.ImportKey() == key {
+			t.Errorf("ImportKey did NOT change when %s changed", name)
+		}
+	}
+
+	// h2 and http are the same transport.
+	h2, htReq := base, base
+	h2.Network, htReq.Network = "h2", "http"
+	if h2.ImportKey() != htReq.ImportKey() {
+		t.Error("h2 and http should hash to the same ImportKey")
+	}
+}
+
 func TestRedacted(t *testing.T) {
 	c := &Config{
 		Profiles: []Profile{{

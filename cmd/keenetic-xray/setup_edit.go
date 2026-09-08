@@ -142,7 +142,7 @@ func editPrimary(reader *bufio.Reader, cfg *config.Config) bool {
 		return false
 	}
 	cfg.PrimaryIndex = cfg.UpsertProfile(res.profile)
-	cfg.PrimarySource = &config.SlotSource{URL: res.src, Selector: res.selector}
+	cfg.PrimarySource = &config.SlotSource{URL: res.src, Selector: res.selector, ImportKey: res.profile.ImportKey()}
 	// No independent backup means single-profile mode: keep the backup
 	// slot mirroring the (now new) primary so the daemon just supervises.
 	if cfg.BackupSource == nil {
@@ -168,7 +168,7 @@ func editBackup(reader *bufio.Reader, cfg *config.Config) bool {
 		return false
 	default:
 		cfg.BackupIndex = cfg.UpsertProfile(res.profile)
-		cfg.BackupSource = &config.SlotSource{URL: res.src, Selector: res.selector}
+		cfg.BackupSource = &config.SlotSource{URL: res.src, Selector: res.selector, ImportKey: res.profile.ImportKey()}
 		fmt.Printf("  резервный: %s\n", res.profile.Remark)
 	}
 	if err := cfg.Save(configPath()); err != nil {

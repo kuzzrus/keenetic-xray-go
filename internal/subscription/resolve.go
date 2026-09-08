@@ -14,18 +14,46 @@ import (
 // single Profile. Shared by the bot's 🔗 Источники flow and by a refresh
 // that re-fetches independently-sourced slots.
 func ResolveSource(ctx context.Context, src, selector string) (config.Profile, error) {
+	p, _, err := ResolveSourcePinned(ctx, src, selector, "")
+	return p, err
+}
+
+// ResolveSourcePinned is ResolveSource with a stable anchor. When
+// importKey is non-empty and a fetched subscription still contains a
+// profile with that Profile.ImportKey, that profile wins -- regardless of
+// what the provider did to node order or names. Only if the anchored
+// server is genuinely gone does it fall back to selector (old behaviour).
+// It also returns the ImportKey of whatever it resolved, so the caller
+// can persist it as the slot's new anchor (backfilling configs written
+// before the field existed).
+func ResolveSourcePinned(ctx context.Context, src, selector, importKey string) (config.Profile, string, error) {
 	src = strings.TrimSpace(src)
 	switch {
 	case strings.HasPrefix(src, "vless://"):
-		return config.ParseVLESSURI(src)
+		p, err := config.ParseVLESSURI(src)
+		if err != nil {
+			return config.Profile{}, "", err
+		}
+		return p, p.ImportKey(), nil
 	case strings.HasPrefix(src, "http://"), strings.HasPrefix(src, "https://"):
 		res, err := Refresh(ctx, src, "", "")
 		if err != nil {
-			return config.Profile{}, err
+			return config.Profile{}, "", err
 		}
-		return Pick(res.Profiles, selector)
+		if importKey != "" {
+			for _, p := range res.Profiles {
+				if p.ImportKey() == importKey {
+					return p, importKey, nil
+				}
+			}
+		}
+		p, err := Pick(res.Profiles, selector)
+		if err != nil {
+			return config.Profile{}, "", err
+		}
+		return p, p.ImportKey(), nil
 	default:
-		return config.Profile{}, fmt.Errorf("нужна vless:// ссылка или http(s):// URL")
+		return config.Profile{}, "", fmt.Errorf("нужна vless:// ссылка или http(s):// URL")
 	}
 }
 

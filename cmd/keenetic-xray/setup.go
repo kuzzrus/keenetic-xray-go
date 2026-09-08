@@ -222,7 +222,7 @@ func runSetupInteractive(reader *bufio.Reader, cfg *config.Config, o setupOpts) 
 		return err
 	}
 	cfg.PrimaryIndex = cfg.UpsertProfile(primary.profile)
-	cfg.PrimarySource = &config.SlotSource{URL: primary.src, Selector: primary.selector}
+	cfg.PrimarySource = &config.SlotSource{URL: primary.src, Selector: primary.selector, ImportKey: primary.profile.ImportKey()}
 	fmt.Printf("  основной: %s\n\n", primary.profile.Remark)
 
 	haveBackup := true
@@ -237,7 +237,7 @@ func runSetupInteractive(reader *bufio.Reader, cfg *config.Config, o setupOpts) 
 		return err
 	default:
 		cfg.BackupIndex = cfg.UpsertProfile(backup.profile)
-		cfg.BackupSource = &config.SlotSource{URL: backup.src, Selector: backup.selector}
+		cfg.BackupSource = &config.SlotSource{URL: backup.src, Selector: backup.selector, ImportKey: backup.profile.ImportKey()}
 		fmt.Printf("  резервный: %s\n\n", backup.profile.Remark)
 	}
 

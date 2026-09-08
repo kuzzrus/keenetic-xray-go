@@ -1129,7 +1129,7 @@ func (h *RouterHandler) updateCore(ctx context.Context, args []string) (string, 
 			want = ""
 		default:
 			if !config.ValidXrayCoreTag(a) {
-				return "", fmt.Errorf("тег %q: нужен вид v26.7.28 или \"stable\"", args[0])
+				return "", fmt.Errorf("тег %q: нужен вид v26.9.8 или \"stable\"", args[0])
 			}
 			want = a
 		}

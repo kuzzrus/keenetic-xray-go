@@ -155,9 +155,9 @@ func TestCmdEnsureXrayCore_TagPersistsBeforeDownload(t *testing.T) {
 
 	// An explicit --tag is recorded to config even though the fetch that
 	// follows can't succeed in a test.
-	_ = run([]string{"internal", "ensure-xray-core", "--tag=v26.7.28"})
-	if cfg, err := config.Load(configFile); err != nil || cfg.XrayCoreTag != "v26.7.28" {
-		t.Fatalf("XrayCoreTag = %q (err %v), want v26.7.28 persisted", cfg.XrayCoreTag, err)
+	_ = run([]string{"internal", "ensure-xray-core", "--tag=v26.9.8"})
+	if cfg, err := config.Load(configFile); err != nil || cfg.XrayCoreTag != "v26.9.8" {
+		t.Fatalf("XrayCoreTag = %q (err %v), want v26.9.8 persisted", cfg.XrayCoreTag, err)
 	}
 
 	// "stable" clears it again.

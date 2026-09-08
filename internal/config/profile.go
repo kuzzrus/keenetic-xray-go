@@ -802,7 +802,7 @@ func (l RouteList) RouteIface() string {
 }
 
 // xrayTagRe is the shape of an XTLS/Xray-core release tag: vMAJOR.MINOR
-// .PATCH (upstream uses calendar-ish v26.7.28). Kept loose on the
+// .PATCH (upstream uses calendar-ish v26.9.8). Kept loose on the
 // numbers; it only needs to reject obvious junk before it reaches a
 // download URL.
 var xrayTagRe = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
@@ -947,7 +947,7 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("proxy0.mss_clamp %d out of range (1200..1452, 0 for default, negative to disable)", v)
 	}
 	if !ValidXrayCoreTag(c.XrayCoreTag) {
-		return fmt.Errorf("xray_core_tag %q: want a release tag like v26.7.28", c.XrayCoreTag)
+		return fmt.Errorf("xray_core_tag %q: want a release tag like v26.9.8", c.XrayCoreTag)
 	}
 	if err := c.Routing.Validate(); err != nil {
 		return err

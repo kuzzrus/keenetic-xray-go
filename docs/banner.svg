@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" width="1200" height="300" role="img" aria-label="keenetic-xray-go">
+  <title>keenetic-xray-go</title>
+  <desc>Xray (VLESS) installer and failover manager for Keenetic routers</desc>
+  <defs>
+    <linearGradient id="neon" gradientUnits="userSpaceOnUse" x1="120" y1="0" x2="1080" y2="0">
+      <stop offset="0"    stop-color="#22e0ff"/>
+      <stop offset="0.34" stop-color="#3b82f6"/>
+      <stop offset="0.60" stop-color="#a855f7"/>
+      <stop offset="0.82" stop-color="#e0369a"/>
+      <stop offset="1"    stop-color="#ff2d95"/>
+    </linearGradient>
+    <filter id="glow" x="-15%" y="-140%" width="130%" height="380%" color-interpolation-filters="sRGB">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="1.7" result="a"/>
+      <feGaussianBlur in="SourceGraphic" stdDeviation="7"   result="b"/>
+      <feGaussianBlur in="SourceGraphic" stdDeviation="20"  result="c"/>
+      <feMerge>
+        <feMergeNode in="c"/>
+        <feMergeNode in="b"/>
+        <feMergeNode in="b"/>
+        <feMergeNode in="a"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="300" fill="#000000"/>
+
+  <g font-family="'Trebuchet MS','Century Gothic','Segoe UI','DejaVu Sans',Verdana,sans-serif"
+     font-size="128" font-weight="600" letter-spacing="3"
+     text-anchor="middle" fill="none"
+     stroke-linejoin="round" stroke-linecap="round">
+    <text x="600" y="190" textLength="1000" lengthAdjust="spacing"
+          stroke="url(#neon)" stroke-width="3.6" opacity="0.82" filter="url(#glow)">keenetic-xray-go</text>
+    <text x="600" y="190" textLength="1000" lengthAdjust="spacing"
+          stroke="url(#neon)" stroke-width="2">keenetic-xray-go</text>
+    <text x="600" y="190" textLength="1000" lengthAdjust="spacing"
+          stroke="#ffffff" stroke-width="0.7" opacity="0.32">keenetic-xray-go</text>
+  </g>
+</svg>

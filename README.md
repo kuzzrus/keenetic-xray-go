@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/banner.svg" alt="keenetic-xray-go" width="760">
+</p>
+
 # keenetic-xray-go
 
 Установщик и менеджер Xray (VLESS) с автоматическим failover для роутеров

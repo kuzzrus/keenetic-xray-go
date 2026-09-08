@@ -3,24 +3,25 @@ package keenetic
 import (
 	"encoding/json"
 	"fmt"
-	"net"
-	"sort"
 	"strconv"
 	"strings"
 )
 
-// This file turns two more RCI reads into the exact indented `key: value`
-// text their existing ndmc parsers expect, so `tryRead` can serve them
-// over HTTP on firmware that fences off the ndmc binary:
+// This file turns one more RCI read into the exact indented `key: value`
+// text its existing ndmc parsers expect, so `tryRead` can serve it over
+// HTTP on firmware that fences off the ndmc binary:
 //
-//   show interface <iface>          -> /rci/show/interface/<iface>
-//   show object-group fqdn <name>   -> /rci/show/object-group/fqdn/<name>
+//	show interface <iface>   -> /rci/show/interface/<iface>
 //
 // The parsers on the other side (lanIPFromShowInterface,
-// WGInterfacePublicKey, WGInterfaceUp, ShowWGTransport, objectGroupIPs)
-// only ever do strings.Fields(line) and match on the first token, so the
-// reformatters just need the right `key:` tokens in the right order --
-// indentation and extra fields are ignored.
+// WGInterfacePublicKey, WGInterfaceUp, ShowWGTransport) only ever do
+// strings.Fields(line) and match on the first token, so the reformatter
+// just needs the right `key:` tokens in the right order -- indentation
+// and extra fields are ignored.
+//
+// `show object-group fqdn` has no RCI node on the no-auth :79 port
+// (/rci/show/object-group is `{}` on 5.1.x), so objectGroupIPs keeps
+// going through ndmc.
 
 // interfaceTextFromRCI renders /rci/show/interface/<iface> JSON as
 // `show interface` text. RCI may return the interface object bare or
@@ -136,51 +137,4 @@ func scalarString(raw json.RawMessage) string {
 	default:
 		return ""
 	}
-}
-
-// objectGroupTextFromRCI renders /rci/show/object-group/fqdn/<name> JSON
-// as `show object-group fqdn` text: one resolved IPv4 per line.
-// objectGroupIPs on the other side just harvests dotted-quads, so we
-// walk the whole structure, collect every IPv4 string not under an
-// "excluded-*" key, de-dup, and emit them. Valid JSON with zero
-// addresses is still "handled" (an unresolved group legitimately has
-// none) -- only a parse failure falls through to ndmc.
-func objectGroupTextFromRCI(b []byte) (string, error) {
-	var v any
-	if err := json.Unmarshal(b, &v); err != nil {
-		return "", fmt.Errorf("show object-group: RCI JSON: %w", err)
-	}
-	seen := map[string]bool{}
-	var ips []string
-	var walk func(node any, excluded bool)
-	walk = func(node any, excluded bool) {
-		switch n := node.(type) {
-		case string:
-			if !excluded && isDottedQuadV4(n) && !seen[n] {
-				seen[n] = true
-				ips = append(ips, n)
-			}
-		case []any:
-			for _, e := range n {
-				walk(e, excluded)
-			}
-		case map[string]any:
-			for k, e := range n {
-				walk(e, excluded || strings.Contains(strings.ToLower(k), "exclud"))
-			}
-		}
-	}
-	walk(v, false)
-	sort.Strings(ips)
-	if len(ips) == 0 {
-		return "", nil
-	}
-	return strings.Join(ips, "\n") + "\n", nil
-}
-
-// isDottedQuadV4 reports whether s is a bare IPv4 dotted-quad (no CIDR,
-// no port).
-func isDottedQuadV4(s string) bool {
-	ip := net.ParseIP(s)
-	return ip != nil && ip.To4() != nil && strings.Count(s, ".") == 3 && !strings.ContainsAny(s, ":/")
 }

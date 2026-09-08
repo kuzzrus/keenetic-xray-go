@@ -223,37 +223,6 @@ func TestNdmcRun_RCIServesInterface(t *testing.T) {
 	}
 }
 
-func TestNdmcRun_RCIServesObjectGroup(t *testing.T) {
-	const groupJSON = `{"fqdn":[
-	  {"name":"api.telegram.org","address":["149.154.167.220","149.154.167.221"]},
-	  {"name":"core.telegram.org","address":["149.154.167.99"]}
-	],"excluded-address":["10.0.0.1"]}`
-	srv := rciTestServer(t, "system\n", `{"release":"5.1.3"}`,
-		rciJSONRoute("/rci/show/object-group/fqdn/keenetic-xray-telegram", groupJSON),
-	)
-	withRCIOff(t)
-	origExec := ndmcExec
-	ndmcExec = func(_ context.Context, cmd string) (string, error) {
-		t.Errorf("ndmcExec called for %q -- RCI should have served it", cmd)
-		return "", nil
-	}
-	t.Cleanup(func() { ndmcExec = origExec })
-	if _, err := UseRCI(srv.URL); err != nil {
-		t.Fatalf("UseRCI: %v", err)
-	}
-
-	ips := objectGroupIPs(context.Background(), "keenetic-xray-telegram")
-	want := map[string]bool{"149.154.167.220": true, "149.154.167.221": true, "149.154.167.99": true}
-	if len(ips) != 3 {
-		t.Fatalf("objectGroupIPs via RCI = %v, want the 3 resolved addresses (not the excluded one)", ips)
-	}
-	for _, ip := range ips {
-		if !want[ip] {
-			t.Errorf("unexpected IP %q (excluded-address leaked?)", ip)
-		}
-	}
-}
-
 func TestNdmcRun_RCIInterfaceFetchErrorFallsThrough(t *testing.T) {
 	// Server has no /rci/show/interface route -> 404 -> ndmc still gets a shot.
 	srv := rciTestServer(t, "system\n", `{"release":"5.1.3"}`)
@@ -313,33 +282,6 @@ func TestInterfaceTextFromRCI(t *testing.T) {
 	}
 }
 
-func TestObjectGroupTextFromRCI(t *testing.T) {
-	cases := []struct {
-		name, json string
-		want       string
-	}{
-		{"nested fqdn list", `{"fqdn":[{"address":["1.1.1.1","8.8.8.8"]}]}`, "1.1.1.1\n8.8.8.8\n"},
-		{"flat address array", `{"address":["8.8.8.8","1.1.1.1"]}`, "1.1.1.1\n8.8.8.8\n"},
-		{"dedup + sort", `{"a":["9.9.9.9","1.1.1.1","9.9.9.9"]}`, "1.1.1.1\n9.9.9.9\n"},
-		{"excluded key skipped", `{"address":["1.1.1.1"],"excluded-address":["2.2.2.2"]}`, "1.1.1.1\n"},
-		{"no v6, no cidr", `{"a":["2001:db8::1","1.1.1.1/32","1.1.1.1"]}`, "1.1.1.1\n"},
-		{"empty is handled", `{"fqdn":[]}`, ""},
-	}
-	for _, c := range cases {
-		got, err := objectGroupTextFromRCI([]byte(c.json))
-		if err != nil {
-			t.Errorf("%s: %v", c.name, err)
-			continue
-		}
-		if got != c.want {
-			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
-		}
-	}
-	if _, err := objectGroupTextFromRCI([]byte(`nope`)); err == nil {
-		t.Error("expected an error for non-JSON")
-	}
-}
-
 func TestScalarString(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{`"up"`, "up"},
@@ -355,21 +297,6 @@ func TestScalarString(t *testing.T) {
 	for _, c := range cases {
 		if got := scalarString([]byte(c.in)); got != c.want {
 			t.Errorf("scalarString(%s) = %q, want %q", c.in, got, c.want)
-		}
-	}
-}
-
-func TestIsDottedQuadV4(t *testing.T) {
-	yes := []string{"1.1.1.1", "192.168.0.1", "255.255.255.255", "0.0.0.0"}
-	no := []string{"1.1.1.1/32", "1.1.1.1:53", "2001:db8::1", "1.1.1", "example.com", "999.1.1.1"}
-	for _, s := range yes {
-		if !isDottedQuadV4(s) {
-			t.Errorf("isDottedQuadV4(%q) = false, want true", s)
-		}
-	}
-	for _, s := range no {
-		if isDottedQuadV4(s) {
-			t.Errorf("isDottedQuadV4(%q) = true, want false", s)
 		}
 	}
 }

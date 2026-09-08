@@ -23,12 +23,12 @@ the new tag.
 
 A **second**, newer tag can be built and offered as an explicit opt-in
 without becoming the default — `xraycore.PrereleaseTag` (currently
-`v26.7.28`, an upstream *pre-release*). A router runs it only if asked:
+`v26.9.8`, an upstream *pre-release*). A router runs it only if asked:
 
-- at install: `curl … | sh -s -- --xray-core-tag=v26.7.28`
-- later, over SSH: `keenetic-xray internal ensure-xray-core --tag=v26.7.28`
+- at install: `curl … | sh -s -- --xray-core-tag=v26.9.8`
+- later, over SSH: `keenetic-xray internal ensure-xray-core --tag=v26.9.8`
 - from the bot: `🧩 Ядро xray` on the router card, or `/update_core
-  <router> v26.7.28`
+  <router> v26.9.8`
 
 The choice is stored in `config.json` as `xray_core_tag`, so a package
 self-update keeps it. `--tag=stable` (or the bot's *Стабильное* button)

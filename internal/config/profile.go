@@ -185,7 +185,17 @@ type FailoverConfig struct {
 	// bot (the operator otherwise only learns it by opening /doctor).
 	// Re-armed once primary is live again. 0 disables.
 	PrimaryStuckWarnHours int `json:"primary_stuck_warn_hours,omitempty"`
+	// QualitySweepMinutes: how often the daemon probes *every* saved
+	// profile (not just the live one) through a throwaway isolated xray,
+	// so `status` can show which backups are actually reachable before a
+	// failover ever picks one. Sequential, never touches live traffic.
+	// 0 disables; otherwise 15..1440.
+	QualitySweepMinutes int `json:"quality_sweep_minutes,omitempty"`
 }
+
+// QualitySweepEnabled reports whether the periodic all-profiles health
+// sweep is configured to run.
+func (f FailoverConfig) QualitySweepEnabled() bool { return f.QualitySweepMinutes > 0 }
 
 // PrimaryStuckWarnAfter is PrimaryStuckWarnHours as a Duration; zero
 // means the advisory is off.
@@ -944,6 +954,9 @@ func (c *Config) Validate() error {
 	}
 	if !ValidXHTTPMode(c.XHTTPMode) {
 		return fmt.Errorf("xhttp_mode %q: want auto|packet-up|stream-up|stream-one", c.XHTTPMode)
+	}
+	if m := c.Failover.QualitySweepMinutes; m != 0 && (m < 15 || m > 1440) {
+		return fmt.Errorf("failover.quality_sweep_minutes %d out of range (0 to disable, or 15..1440)", m)
 	}
 	if err := c.WGTransport.validate(); err != nil {
 		return err

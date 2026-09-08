@@ -8,6 +8,7 @@ import (
 	"github.com/kuzzrus/keenetic-xray-go/internal/addons"
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 	"github.com/kuzzrus/keenetic-xray-go/internal/diskspace"
+	"github.com/kuzzrus/keenetic-xray-go/internal/health"
 	"github.com/kuzzrus/keenetic-xray-go/internal/keenetic"
 	"github.com/kuzzrus/keenetic-xray-go/internal/xraycore"
 )
@@ -71,6 +72,11 @@ func cmdStatus(args []string) error {
 		fmt.Printf("xray-core: not installed (%v)\n", err)
 	} else {
 		fmt.Printf("xray-core: %s\n", line)
+	}
+	if cfg.Failover.QualitySweepEnabled() {
+		if block := health.StatusLines(health.Load(qualityStatePath()), time.Now()); block != "" {
+			fmt.Println(block)
+		}
 	}
 	fmt.Println("note: this reports saved configuration, not live daemon state (no IPC layer yet)")
 	return nil

@@ -29,6 +29,18 @@ func pretestConfigPath() string {
 	return envOr("KEENETIC_XRAY_PRETEST_CONFIG", defaultPretestConfigPath)
 }
 
+// qualitySweepConfigPath is the scratch xray config the all-profiles
+// quality sweep rewrites once per probed profile.
+func qualitySweepConfigPath() string {
+	return envOr("KEENETIC_XRAY_SWEEP_CONFIG", "/opt/var/lib/keenetic-xray/xray-sweep.json")
+}
+
+// qualityStatePath is where the quality sweep persists its last run, read
+// by `keenetic-xray status` and the bot heartbeat.
+func qualityStatePath() string {
+	return envOr("KEENETIC_XRAY_QUALITY_STATE", logDir()+"/quality.json")
+}
+
 const defaultOptPath = "/opt"
 
 func optPath() string {

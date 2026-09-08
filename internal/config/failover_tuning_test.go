@@ -27,6 +27,11 @@ func TestFailoverConfig_SetTunable(t *testing.T) {
 		{"check_retry_delay_seconds", "5", false},
 		{"health_check_url", "https://example.com/204", false},
 		{"health_check_url", "ftp://example.com", true},
+		{"quality_sweep_minutes", "60", false},
+		{"quality_sweep_minutes", "0", false}, // 0 = disabled
+		{"quality_sweep_minutes", "5", true},  // below the 15-min floor
+		{"quality_sweep_minutes", "5000", true},
+		{"quality_sweep_minutes", "-1", true},
 		{"nonsense_key", "1", true},
 	}
 	for _, c := range cases {
@@ -39,7 +44,7 @@ func TestFailoverConfig_SetTunable(t *testing.T) {
 		}
 	}
 
-	if f.CheckIntervalSeconds != 20 || f.FailuresRequired != 5 || f.CheckRetries != 3 {
+	if f.CheckIntervalSeconds != 20 || f.FailuresRequired != 5 || f.CheckRetries != 3 || f.QualitySweepMinutes != 0 {
 		t.Errorf("valid sets did not stick: %+v", f)
 	}
 }
@@ -47,7 +52,7 @@ func TestFailoverConfig_SetTunable(t *testing.T) {
 func TestFailoverConfig_TunablesText(t *testing.T) {
 	f := DefaultFailoverConfig()
 	text := f.TunablesText()
-	for _, want := range []string{"check_interval_seconds: 10", "failures_required: 3", "check_retries: 1", "health_check_url: https://www.gstatic.com/generate_204", "health_check_fallback_urls:"} {
+	for _, want := range []string{"check_interval_seconds: 10", "failures_required: 3", "check_retries: 1", "quality_sweep_minutes: 0", "health_check_url: https://www.gstatic.com/generate_204", "health_check_fallback_urls:"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("TunablesText() missing %q:\n%s", want, text)
 		}

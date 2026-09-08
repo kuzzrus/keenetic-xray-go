@@ -215,6 +215,7 @@ func cmdDaemon(args []string) error {
 	applyDNSAtStartup(cfg, logf)
 	go routerReconcileLoop(ctx, logf)
 	go presetRefreshLoop(ctx, logf)
+	startQualitySweep(ctx, cfg, logf)
 	watchReconcileSignal(ctx, func() { reconcileOnce(ctx, logf) }) // SIGUSR1 from the netfilter.d hook
 
 	if cfg.Agent.Enabled {
@@ -228,11 +229,12 @@ func cmdDaemon(args []string) error {
 		handler := &botcontrol.RouterHandler{
 			Daemon: d, Config: cfg, ConfigPath: configPath(),
 			XrayBinary: xrayBinaryPath(), OptPath: optPath(),
-			InitScript:     initScript,
-			CronFile:       cronFilePath(),
-			WatchdogScript: watchdogScriptPath(),
-			WatchdogLog:    watchdogLogPath(),
-			DaemonLog:      daemonLogPath(),
+			InitScript:       initScript,
+			CronFile:         cronFilePath(),
+			WatchdogScript:   watchdogScriptPath(),
+			WatchdogLog:      watchdogLogPath(),
+			DaemonLog:        daemonLogPath(),
+			QualityStatePath: qualityStatePath(),
 		}
 		opts.StatusFunc = func(ctx context.Context) string {
 			out, _ := handler.Handle(ctx, botcontrol.Command{Action: botcontrol.ActionStatus})

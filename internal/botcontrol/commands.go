@@ -15,6 +15,7 @@ import (
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 	"github.com/kuzzrus/keenetic-xray-go/internal/diskspace"
 	"github.com/kuzzrus/keenetic-xray-go/internal/failover"
+	"github.com/kuzzrus/keenetic-xray-go/internal/health"
 	"github.com/kuzzrus/keenetic-xray-go/internal/install"
 	"github.com/kuzzrus/keenetic-xray-go/internal/keenetic"
 	"github.com/kuzzrus/keenetic-xray-go/internal/subscription"
@@ -68,6 +69,10 @@ type RouterHandler struct {
 	// DaemonLog is the daemon's own rolling log file (applog), tailed by
 	// the daemon_log action. Empty -> that action returns an error.
 	DaemonLog string
+
+	// QualityStatePath is the all-profiles quality-sweep result file
+	// (health.State). Empty or absent -> status just omits that block.
+	QualityStatePath string
 }
 
 const defaultInstallURL = "https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/install.sh"
@@ -313,6 +318,13 @@ func (h *RouterHandler) status(ctx context.Context) string {
 		} else {
 			fmt.Fprintf(&b, "подписка: %d профилей, обновлена %s назад\n",
 				len(h.Config.Profiles), shortDur(time.Since(s.LastFetchedAt)))
+		}
+	}
+
+	if h.QualityStatePath != "" {
+		if block := health.StatusLines(health.Load(h.QualityStatePath), time.Now()); block != "" {
+			b.WriteString(block)
+			b.WriteByte('\n')
 		}
 	}
 

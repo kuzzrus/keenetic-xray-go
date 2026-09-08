@@ -4,6 +4,8 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -91,6 +93,42 @@ func (p *Profile) Validate() error {
 	return nil
 }
 
+// ImportKey is a stable identity for the *server endpoint* a Profile
+// points at: the connection coordinates that decide which server this
+// is, with the display name and every credential deliberately left out.
+// Renaming a profile or rotating its UUID / REALITY keys keeps the same
+// ImportKey; changing host, port, transport, security mode, SNI, Host
+// header, path, gRPC service or xhttp mode makes it a different server.
+//
+// It exists so a failover slot fed from a subscription can be re-found in
+// a later fetch whose provider reordered or renamed its nodes -- a
+// positional or Remark selector would silently resolve to a different
+// server. 16 hex chars (64 bits) is far more than enough to tell a
+// handful of subscription entries apart.
+func (p *Profile) ImportKey() string {
+	lc := func(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
+	network := lc(p.Network)
+	if network == "h2" {
+		network = "http"
+	}
+	// Path and ServiceName stay case-sensitive (URL paths and gRPC
+	// service names are); everything else is lowercased so trivial
+	// provider formatting differences don't fork the identity.
+	fields := []string{
+		lc(p.Address),
+		strconv.Itoa(p.Port),
+		network,
+		lc(p.Security),
+		lc(p.SNI),
+		lc(p.Host),
+		strings.TrimSpace(p.Path),
+		strings.TrimSpace(p.ServiceName),
+		lc(p.Mode),
+	}
+	sum := sha256.Sum256([]byte(strings.Join(fields, "\x1f")))
+	return hex.EncodeToString(sum[:8])
+}
+
 // Subscription is the persisted metadata for a configured subscription URL.
 // Fetch/decode/parse/refresh logic lives in internal/subscription (M2);
 // this is just the storage shape, kept here since it's part of Config.
@@ -106,9 +144,18 @@ type Subscription struct {
 // URL is a secret (kept in the 0600 config.json, never echoed); Selector
 // picks one entry from a multi-profile subscription (an index, a Remark
 // substring, or "" / "first" for the first).
+//
+// ImportKey is the stable identity (Profile.ImportKey) of the profile
+// this slot last resolved to. It's the real anchor: a subscription
+// provider that reorders or renames its nodes would make a positional or
+// Remark Selector silently point at a different server, so once a slot
+// has resolved once we re-find that same server by ImportKey and only
+// fall back to Selector if it's genuinely gone. Empty on configs written
+// before this field existed; backfilled on the next refresh.
 type SlotSource struct {
-	URL      string `json:"url"`
-	Selector string `json:"selector,omitempty"`
+	URL       string `json:"url"`
+	Selector  string `json:"selector,omitempty"`
+	ImportKey string `json:"import_key,omitempty"`
 }
 
 // FailoverConfig holds the tunable health-check/failover parameters.

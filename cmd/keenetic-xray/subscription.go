@@ -89,11 +89,12 @@ func subscriptionRefresh() error {
 		if s.src == nil {
 			continue
 		}
-		prof, err := subscription.ResolveSource(ctx, s.src.URL, s.src.Selector)
+		prof, key, err := subscription.ResolveSourcePinned(ctx, s.src.URL, s.src.Selector, s.src.ImportKey)
 		if err != nil {
 			fmt.Printf("warning: source (%s): %v\n", s.name, err)
 			continue
 		}
+		s.src.ImportKey = key // anchor (or backfill) so future refreshes stay on this server
 		idx := cfg.UpsertProfile(prof)
 		if s.primary {
 			cfg.PrimaryIndex = idx

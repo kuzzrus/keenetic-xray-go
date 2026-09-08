@@ -1163,7 +1163,7 @@ func (h *RouterHandler) setSlotSource(ctx context.Context, primary bool, args []
 		return "", err
 	}
 	idx := h.Config.UpsertProfile(prof)
-	slot := &config.SlotSource{URL: src, Selector: selector}
+	slot := &config.SlotSource{URL: src, Selector: selector, ImportKey: prof.ImportKey()}
 
 	// Never touch the *other* slot's index here: an earlier version
 	// mirrored this profile into an empty other slot "so the daemon can
@@ -1254,11 +1254,12 @@ func (h *RouterHandler) subRefresh(ctx context.Context) (string, error) {
 		if s.src == nil {
 			continue
 		}
-		prof, err := subscription.ResolveSource(ctx, s.src.URL, s.src.Selector)
+		prof, key, err := subscription.ResolveSourcePinned(ctx, s.src.URL, s.src.Selector, s.src.ImportKey)
 		if err != nil {
 			fmt.Fprintf(&b, "⚠️ источник (%s): %v\n", s.name, err)
 			continue
 		}
+		s.src.ImportKey = key // anchor (or backfill) so future refreshes stay on this server
 		idx := h.Config.UpsertProfile(prof)
 		if s.primary {
 			h.Config.PrimaryIndex = idx

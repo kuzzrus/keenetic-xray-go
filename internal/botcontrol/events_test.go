@@ -10,6 +10,46 @@ import (
 	"github.com/kuzzrus/keenetic-xray-go/internal/failover"
 )
 
+func TestMerge(t *testing.T) {
+	a := make(chan Event, 2)
+	b := make(chan Event, 1)
+	a <- Event{Kind: "a1"}
+	b <- Event{Kind: "b1"}
+	a <- Event{Kind: "a2"}
+	close(a)
+	close(b)
+
+	got := map[string]bool{}
+	out := Merge(context.Background(), a, b, nil)
+	for ev := range out {
+		got[ev.Kind] = true
+	}
+	for _, k := range []string{"a1", "a2", "b1"} {
+		if !got[k] {
+			t.Errorf("Merge dropped %q (got %v)", k, got)
+		}
+	}
+}
+
+func TestMerge_ClosesWhenInputsClose(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	// A realistic input: forwards nothing and closes when ctx is done,
+	// like FailoverEvents/WatchStuckPrimary do.
+	in := make(chan Event)
+	go func() { <-ctx.Done(); close(in) }()
+
+	out := Merge(ctx, in)
+	cancel()
+	select {
+	case _, ok := <-out:
+		if ok {
+			t.Error("expected the merged channel to close once its input closed")
+		}
+	case <-time.After(time.Second):
+		t.Error("Merge did not close after its input closed")
+	}
+}
+
 func TestWatchStuckPrimary(t *testing.T) {
 	old := stuckWatchInterval
 	stuckWatchInterval = 20 * time.Millisecond

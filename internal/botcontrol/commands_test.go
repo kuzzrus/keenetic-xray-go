@@ -1081,12 +1081,19 @@ func TestRouterHandler_SelfUpdate(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("no sh on PATH to exercise the update spawn")
 	}
-	h := &RouterHandler{Config: config.Default(), InstallURL: "file:///dev/null"}
+	// SelfUpdateMarker set: the marker write is best-effort (needs opkg to
+	// detect the arch) and must never block the update -- the base
+	// message is always returned, with at most a parenthetical note.
+	h := &RouterHandler{
+		Config:           config.Default(),
+		InstallURL:       "file:///dev/null",
+		SelfUpdateMarker: filepath.Join(t.TempDir(), "self-update.json"),
+	}
 	out, err := h.Handle(context.Background(), Command{Action: ActionSelfUpdate})
 	if err != nil {
 		t.Fatalf("self_update: %v", err)
 	}
-	if !strings.Contains(out, "обновление агента запущено") {
+	if !strings.HasPrefix(out, "обновление агента запущено") {
 		t.Errorf("self_update output = %q", out)
 	}
 }

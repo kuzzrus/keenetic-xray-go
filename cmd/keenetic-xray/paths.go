@@ -41,6 +41,13 @@ func qualityStatePath() string {
 	return envOr("KEENETIC_XRAY_QUALITY_STATE", logDir()+"/quality.json")
 }
 
+// selfUpdateMarkerPath is where a self-update drops its rollback marker
+// (selfupdate.Marker): the version it left + the .ipk URL to get back.
+// Read by the post-update watcher and `internal self-rollback`.
+func selfUpdateMarkerPath() string {
+	return envOr("KEENETIC_XRAY_SELFUPDATE_MARKER", logDir()+"/self-update.json")
+}
+
 const defaultOptPath = "/opt"
 
 func optPath() string {

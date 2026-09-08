@@ -3,10 +3,38 @@ package botcontrol
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/failover"
 )
+
+// Merge fans several Event channels into one. The output closes once
+// every input has closed (or ctx is done); nil inputs are ignored. Used
+// to fold a one-off stream (the post-update watcher) in alongside the
+// failover events.
+func Merge(ctx context.Context, chans ...<-chan Event) <-chan Event {
+	out := make(chan Event)
+	var wg sync.WaitGroup
+	for _, c := range chans {
+		if c == nil {
+			continue
+		}
+		wg.Add(1)
+		go func(c <-chan Event) {
+			defer wg.Done()
+			for ev := range c {
+				select {
+				case out <- ev:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}(c)
+	}
+	go func() { wg.Wait(); close(out) }()
+	return out
+}
 
 // FailoverEvents adapts a failover.Daemon's event stream into the
 // protocol Event values the agent forwards, rendering each to Russian

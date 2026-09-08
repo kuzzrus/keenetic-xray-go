@@ -223,9 +223,14 @@ func cmdDaemon(args []string) error {
 		if err != nil {
 			return fmt.Errorf("agent is enabled but misconfigured: %w", err)
 		}
-		opts.Events = botcontrol.WatchStuckPrimary(ctx, d.Snapshot,
-			cfg.Failover.PrimaryStuckWarnAfter(),
-			botcontrol.FailoverEvents(ctx, d.Events()))
+		postUpd := make(chan botcontrol.Event, 1)
+		go watchPostUpdate(ctx, d.State, selfUpdateMarkerPath(), postUpd, logf)
+		opts.Events = botcontrol.Merge(ctx,
+			botcontrol.WatchStuckPrimary(ctx, d.Snapshot,
+				cfg.Failover.PrimaryStuckWarnAfter(),
+				botcontrol.FailoverEvents(ctx, d.Events())),
+			postUpd,
+		)
 		handler := &botcontrol.RouterHandler{
 			Daemon: d, Config: cfg, ConfigPath: configPath(),
 			XrayBinary: xrayBinaryPath(), OptPath: optPath(),
@@ -235,6 +240,7 @@ func cmdDaemon(args []string) error {
 			WatchdogLog:      watchdogLogPath(),
 			DaemonLog:        daemonLogPath(),
 			QualityStatePath: qualityStatePath(),
+			SelfUpdateMarker: selfUpdateMarkerPath(),
 		}
 		opts.StatusFunc = func(ctx context.Context) string {
 			out, _ := handler.Handle(ctx, botcontrol.Command{Action: botcontrol.ActionStatus})

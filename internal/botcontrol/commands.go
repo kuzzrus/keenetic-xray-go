@@ -18,6 +18,7 @@ import (
 	"github.com/kuzzrus/keenetic-xray-go/internal/health"
 	"github.com/kuzzrus/keenetic-xray-go/internal/install"
 	"github.com/kuzzrus/keenetic-xray-go/internal/keenetic"
+	"github.com/kuzzrus/keenetic-xray-go/internal/selfupdate"
 	"github.com/kuzzrus/keenetic-xray-go/internal/subscription"
 	"github.com/kuzzrus/keenetic-xray-go/internal/version"
 	"github.com/kuzzrus/keenetic-xray-go/internal/xraycore"
@@ -73,6 +74,11 @@ type RouterHandler struct {
 	// QualityStatePath is the all-profiles quality-sweep result file
 	// (health.State). Empty or absent -> status just omits that block.
 	QualityStatePath string
+
+	// SelfUpdateMarker is where selfUpdate drops its rollback marker
+	// (selfupdate.Marker) before re-running install.sh. Empty -> no
+	// rollback point is recorded (the update still runs).
+	SelfUpdateMarker string
 }
 
 const defaultInstallURL = "https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/install.sh"
@@ -1040,17 +1046,32 @@ func (h *RouterHandler) setPorts(ctx context.Context, args []string) (string, er
 // opkg install, postinst, daemon restart). Detached with a short delay
 // so this process can post the result before opkg replaces the binary
 // under it.
+//
+// First it drops a rollback marker (the version being left + the exact
+// .ipk URL to get back to it) so the restarted daemon can watch itself
+// come up and, if it doesn't, hand the operator a one-line
+// `keenetic-xray internal self-rollback`.
 func (h *RouterHandler) selfUpdate() (string, error) {
 	url := h.InstallURL
 	if url == "" {
 		url = defaultInstallURL
 	}
+
+	rollbackNote := ""
+	if h.SelfUpdateMarker != "" {
+		if m, err := selfupdate.NewMarker(version.Version, nil); err != nil {
+			rollbackNote = " (без точки отката: " + err.Error() + ")"
+		} else if err := selfupdate.WriteMarker(h.SelfUpdateMarker, m); err != nil {
+			rollbackNote = " (маркер отката не записан: " + err.Error() + ")"
+		}
+	}
+
 	c := exec.Command("sh", "-c", "sleep 2; curl -fsSL "+url+" | sh")
 	if err := c.Start(); err != nil {
 		return "", fmt.Errorf("запуск обновления: %w", err)
 	}
 	go func() { _ = c.Wait() }()
-	return "обновление агента запущено — переустановка .ipk и рестарт демона через ~2с", nil
+	return "обновление агента запущено — переустановка .ipk и рестарт демона через ~2с" + rollbackNote, nil
 }
 
 // ensureCore retries the xray-core install (vendored build, opkg

@@ -1018,14 +1018,18 @@ func (c *Config) profileAt(i int) *Profile {
 }
 
 // UpsertProfile ensures p is in c.Profiles -- updating the existing entry
-// if one already matches by identity (UUID+Address+Port), appending
-// otherwise -- and returns its index either way. Shared by the bot's
-// per-slot source flow (🔗 Источники) and subscription refresh's
-// independent-slot preservation, so a profile from one source is never
-// silently duplicated by another.
+// if one already matches by identity (Profile.ImportKey: connection
+// fingerprint, deliberately not UUID -- a provider that issues a fresh
+// UUID/REALITY credential per link (e.g. a shared subscription and a
+// per-slot 🔗 Источники link both naming the same physical endpoint) must
+// not fork one server into two pool entries), appending otherwise -- and
+// returns its index either way. Shared by the bot's per-slot source flow
+// and subscription refresh's independent-slot preservation, so a profile
+// from one source is never silently duplicated by another.
 func (c *Config) UpsertProfile(p Profile) int {
+	key := p.ImportKey()
 	for i, e := range c.Profiles {
-		if e.UUID == p.UUID && e.Address == p.Address && e.Port == p.Port {
+		if e.ImportKey() == key {
 			c.Profiles[i] = p
 			return i
 		}

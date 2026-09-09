@@ -608,6 +608,56 @@ func TestProfileImportKey(t *testing.T) {
 	}
 }
 
+// TestConfig_UpsertProfile_MatchesByImportKeyNotUUID is the regression
+// test for a live incident: a shared Subscription and a slot's own
+// PrimarySource both listed the same physical REALITY endpoint, but the
+// provider issues a fresh UUID/public_key/short_id per link -- so the old
+// UUID+Address+Port identity check never recognized them as the same
+// server and every sub_refresh left the subscription's stale copy
+// orphaned in the pool. UpsertProfile must key on Profile.ImportKey (the
+// connection fingerprint) so the second insert overwrites the first
+// instead of forking it.
+func TestConfig_UpsertProfile_MatchesByImportKeyNotUUID(t *testing.T) {
+	c := &Config{}
+	first := Profile{
+		Remark: "🇷🇺-Роутер|📊405.50GB", UUID: "929467d7-7048-4ff2-8f77-f4bef0522c23",
+		Address: "iiadmin.info", Port: 443, Network: "xhttp", Security: "reality",
+		SNI: "iiadmin.info", Path: "/", Mode: "auto",
+		Fingerprint: "edge", PublicKey: "hg4eus4ztjbggu6hjI-j3Iq06fqxrvMkyfD-3wGadBI", ShortID: "945fa0",
+	}
+	idx := c.UpsertProfile(first)
+	if idx != 0 || len(c.Profiles) != 1 {
+		t.Fatalf("after first insert: idx=%d len=%d, want 0,1", idx, len(c.Profiles))
+	}
+
+	// Same endpoint, reissued credentials (different link, e.g. 🔗
+	// Источники pinned on top of the shared subscription).
+	reissued := first
+	reissued.Remark = "🇷🇺-Роутер|📊489.78GB"
+	reissued.UUID = "e1b3c36b-c20c-4076-973a-964df4a36f7e"
+	reissued.Fingerprint = "chrome"
+	reissued.PublicKey = "Euo9L-qNgLhXcm1xHYb8oTqDL7VvX9cQM5RUL8OnPlY"
+	reissued.ShortID = "1b60111267"
+
+	idx = c.UpsertProfile(reissued)
+	if idx != 0 || len(c.Profiles) != 1 {
+		t.Fatalf("after reissued insert: idx=%d len=%d, want 0,1 (must overwrite, not duplicate)", idx, len(c.Profiles))
+	}
+	if c.Profiles[0].UUID != reissued.UUID {
+		t.Errorf("Profiles[0].UUID = %q, want the reissued %q", c.Profiles[0].UUID, reissued.UUID)
+	}
+
+	// A genuinely different endpoint must still append, not collide.
+	other := first
+	other.Remark = "🇷🇺|📊496.13GB"
+	other.Address = "ccr.852654.xyz"
+	other.SNI = "ccr.852654.xyz"
+	idx = c.UpsertProfile(other)
+	if idx != 1 || len(c.Profiles) != 2 {
+		t.Fatalf("after distinct endpoint insert: idx=%d len=%d, want 1,2", idx, len(c.Profiles))
+	}
+}
+
 func TestRedacted(t *testing.T) {
 	c := &Config{
 		Profiles: []Profile{{

@@ -627,6 +627,13 @@ type RouteList struct {
 	// offer a re-sync; a plain hand-made list leaves both empty.
 	Preset    string `json:"preset,omitempty"`
 	PresetRev string `json:"preset_rev,omitempty"`
+
+	// NotifiedRev is the preset revision the bot last sent a drift
+	// notification for (see internal/presets.NewDrift). Distinct from
+	// PresetRev -- that one moves on Sync, this one moves on notify --
+	// so the daemon's daily preset refresh tells the operator about a
+	// new upstream revision exactly once, not every day until they sync.
+	NotifiedRev string `json:"notified_rev,omitempty"`
 }
 
 // MaxRouteEntriesPerList caps one list. Generous -- the point is to stop

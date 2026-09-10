@@ -92,6 +92,63 @@ func TestDriftAndSync(t *testing.T) {
 	}
 }
 
+func TestNewDrift(t *testing.T) {
+	cfg := &config.Config{}
+	if _, err := Apply(cfg, "reddit", false, "", false); err != nil {
+		t.Fatal(err)
+	}
+	l := BoundList(cfg, "reddit")
+
+	// A fresh apply matches the preset -- nothing to notify.
+	if notes := NewDrift(cfg); len(notes) != 0 {
+		t.Fatalf("fresh apply should have nothing to notify, got %+v", notes)
+	}
+
+	// Simulate the real trigger: config.json still holds an older
+	// snapshot of entries (the daemon hasn't synced since a geo-update
+	// commit landed upstream), so it drifts from what's embedded/
+	// overlaid right now -- exactly what TestDriftAndSync exercises.
+	l.Entries = append(l.Entries[:len(l.Entries)-2], "totally-made-up-domain.example")
+	curRev := l.PresetRev // Drift() reports the *registry's* current rev, which equals this here
+
+	notes := NewDrift(cfg)
+	if len(notes) != 1 || notes[0].Name != "reddit" || notes[0].Added != 2 || notes[0].Removed != 1 {
+		t.Fatalf("NewDrift = %+v, want one note for reddit +2 -1", notes)
+	}
+	if got := BoundList(cfg, "reddit").NotifiedRev; got != curRev {
+		t.Errorf("NotifiedRev = %q, want it stamped to the reported revision %q", got, curRev)
+	}
+
+	// Calling again with the same still-current revision must report
+	// nothing -- this is the anti-spam guarantee the whole feature
+	// exists for: notify once per new revision, not once per call.
+	if notes := NewDrift(cfg); len(notes) != 0 {
+		t.Fatalf("second call with no new revision should be silent, got %+v", notes)
+	}
+
+	// A revision this list was notified about *before* the registry's
+	// current one (e.g. NotifiedRev survived from an earlier, now-
+	// superseded upstream commit) must notify again.
+	l.NotifiedRev = "some-older-already-notified-revision"
+	if notes := NewDrift(cfg); len(notes) != 1 {
+		t.Fatalf("a stale NotifiedRev must re-notify once the registry moved past it, got %+v", notes)
+	}
+}
+
+func TestNewDrift_UnboundAndInSyncListsAreSilent(t *testing.T) {
+	cfg := &config.Config{Routing: config.RoutingConfig{Lists: []config.RouteList{
+		{Name: "manual", Entries: []string{"example.com"}}, // hand-made, no Preset
+	}}}
+	if _, err := Apply(cfg, "reddit", false, "", false); err != nil {
+		t.Fatal(err)
+	}
+	// Both lists are drift-free right now: the hand-made one is never
+	// bound, and the fresh apply matches the embedded preset exactly.
+	if notes := NewDrift(cfg); len(notes) != 0 {
+		t.Fatalf("nothing should need notifying yet, got %+v", notes)
+	}
+}
+
 func TestDriftUnboundList(t *testing.T) {
 	l := config.RouteList{Name: "x", Entries: []string{"a.com"}}
 	if _, _, _, bound := Drift(l); bound {

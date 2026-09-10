@@ -7,7 +7,8 @@ set -e
 /opt/sbin/keenetic-xray internal ensure-xray-core \
     || echo "keenetic-xray: xray-core not installed yet -- run: keenetic-xray internal ensure-xray-core"
 
-/opt/sbin/keenetic-xray internal postinst-setup
+/opt/sbin/keenetic-xray internal postinst-setup \
+    || echo "keenetic-xray: postinst-setup failed (see above) -- run 'keenetic-xray internal postinst-setup' by hand, then 'keenetic-xray setup'"
 
 # postinst-setup above already best-effort ensures a cron daemon is
 # installed/running and writes the watchdog's cron entry (restarts the
@@ -55,6 +56,12 @@ else
 fi
 
 # Start last, so it comes up with the full config -- no restart needed.
-/opt/etc/init.d/S99keenetic-xray start
+# Guarded like every other step above: under `set -e`, an unguarded
+# non-zero here would make opkg report the whole install as failed even
+# though the package itself is in place -- and, since this is the last
+# command in the script, silently skip the "run it by hand" advice a
+# user actually needs to recover.
+/opt/etc/init.d/S99keenetic-xray start \
+    || echo "keenetic-xray: daemon did not start -- run 'keenetic-xray daemon' by hand, or check 'keenetic-xray logs'"
 
 exit 0

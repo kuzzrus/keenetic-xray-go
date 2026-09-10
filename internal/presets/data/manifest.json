@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated": "2026-09-06",
+  "generated": "2026-09-10",
   "categories": [
     "Мессенджеры",
     "Видео",
@@ -72,6 +72,18 @@
       "rev": "265e022f5a16",
       "sources": [
         "Geo-Aggregator: category-remote-control"
+      ]
+    },
+    {
+      "name": "apple",
+      "service": "apple",
+      "title": "Apple",
+      "category": "Работа и инструменты",
+      "kind": "domains",
+      "count": 200,
+      "rev": "dbfb375047f2",
+      "sources": [
+        "Geo-Aggregator: apple"
       ]
     },
     {
@@ -999,6 +1011,18 @@
       ]
     },
     {
+      "name": "speedtest",
+      "service": "speedtest",
+      "title": "Speedtest (Ookla)",
+      "category": "Работа и инструменты",
+      "kind": "domains",
+      "count": 13,
+      "rev": "96a698b9e1f1",
+      "sources": [
+        "Geo-Aggregator: speedtest"
+      ]
+    },
+    {
       "name": "spotify",
       "service": "spotify",
       "title": "Spotify",
@@ -1129,6 +1153,18 @@
       "rev": "b1960de67980",
       "sources": [
         "Geo-Aggregator: tiktok"
+      ]
+    },
+    {
+      "name": "tmdb",
+      "service": "tmdb",
+      "title": "TMDB",
+      "category": "Видео",
+      "kind": "domains",
+      "count": 4,
+      "rev": "af0ca9ec3dbb",
+      "sources": [
+        "Geo-Aggregator: tmdb"
       ]
     },
     {

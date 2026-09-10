@@ -43,6 +43,7 @@
     { "name": "hulu",        "title": "Hulu",                 "category": "Видео", "ga_tags": ["hulu"] },
     { "name": "plex",        "title": "Plex",                 "category": "Видео", "ga_tags": ["plex"] },
     { "name": "bbc",         "title": "BBC",                  "category": "Видео", "ga_tags": ["bbc"] },
+    { "name": "tmdb",        "title": "TMDB",                 "category": "Видео", "ga_tags": ["tmdb"] },
 
     { "name": "facebook",    "title": "Facebook",             "category": "Соцсети", "ga_tags": ["facebook"], "cidr_providers": ["facebook"] },
     { "name": "instagram",   "title": "Instagram",            "category": "Соцсети", "ga_tags": ["instagram"], "cidr_providers": ["facebook"] },
@@ -98,6 +99,8 @@
     { "name": "atlassian",   "title": "Atlassian (Jira/Confluence/Trello)", "category": "Работа и инструменты", "ga_tags": ["atlassian"] },
     { "name": "canva",       "title": "Canva",                "category": "Работа и инструменты", "ga_tags": ["canva"] },
     { "name": "dropbox",     "title": "Dropbox",              "category": "Работа и инструменты", "ga_tags": ["dropbox"] },
+    { "name": "apple",       "title": "Apple",                "category": "Работа и инструменты", "ga_tags": ["apple"] },
+    { "name": "speedtest",   "title": "Speedtest (Ookla)",    "category": "Работа и инструменты", "ga_tags": ["speedtest", "ookla-speedtest"] },
 
     { "name": "github",      "title": "GitHub",               "category": "Разработка", "ga_tags": ["github"] },
     { "name": "gitlab",      "title": "GitLab",               "category": "Разработка", "ga_tags": ["gitlab"] },

@@ -45,7 +45,11 @@ func TestTelegramBot_RoutesStatusStaysOnRoutesScreen(t *testing.T) {
 	}()
 
 	fake.pushCallback(1, msgID, "rtm:home")
-	fake.waitForEditContaining(t, 3*time.Second, "Маршруты")
+	// "Списков пока нет" only appears once the list snapshot has come back
+	// and routesListKB is drawn -- routesBackKB's own transient "⏳
+	// загружаю списки…" edit also contains "Маршруты", so waiting on that
+	// word alone can race and catch the loading edit instead.
+	fake.waitForEditContaining(t, 3*time.Second, "Списков пока нет")
 	if !fake.lastEdit(t).hasButton("rtSt:home") {
 		t.Fatalf("routes screen buttons = %v, want rtSt:home", fake.lastEdit(t).Buttons)
 	}

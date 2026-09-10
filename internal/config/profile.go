@@ -98,7 +98,8 @@ func (p *Profile) Validate() error {
 // is, with the display name and every credential deliberately left out.
 // Renaming a profile or rotating its UUID / REALITY keys keeps the same
 // ImportKey; changing host, port, transport, security mode, SNI, Host
-// header, path, gRPC service or xhttp mode makes it a different server.
+// header, path, gRPC service, tcp header type, or xhttp mode makes it a
+// different server.
 //
 // It exists so a failover slot fed from a subscription can be re-found in
 // a later fetch whose provider reordered or renamed its nodes -- a
@@ -124,6 +125,7 @@ func (p *Profile) ImportKey() string {
 		strings.TrimSpace(p.Path),
 		strings.TrimSpace(p.ServiceName),
 		lc(p.Mode),
+		lc(p.HeaderType),
 	}
 	sum := sha256.Sum256([]byte(strings.Join(fields, "\x1f")))
 	return hex.EncodeToString(sum[:8])

@@ -61,6 +61,35 @@ func Drift(l config.RouteList) (added, removed int, curRev string, bound bool) {
 	return added, removed, p.Rev, true
 }
 
+// DriftNote is one preset-bound list with new drift the operator hasn't
+// been told about yet.
+type DriftNote struct {
+	Name           string
+	Added, Removed int
+}
+
+// NewDrift reports every preset-bound list in cfg that both has drift
+// (see Drift) and is at a preset revision the caller hasn't reported
+// before (RouteList.NotifiedRev) -- so a daily caller can tell the
+// operator about a changed upstream list exactly once, not on every
+// call until they get around to syncing. It stamps NotifiedRev on each
+// list it reports so a second call with the same data returns nothing;
+// the caller is responsible for saving cfg (matching Apply/Sync, which
+// also mutate in place and leave saving to the caller).
+func NewDrift(cfg *config.Config) []DriftNote {
+	var out []DriftNote
+	for i := range cfg.Routing.Lists {
+		l := &cfg.Routing.Lists[i]
+		added, removed, curRev, bound := Drift(*l)
+		if !bound || (added == 0 && removed == 0) || curRev == l.NotifiedRev {
+			continue
+		}
+		out = append(out, DriftNote{Name: l.Name, Added: added, Removed: removed})
+		l.NotifiedRev = curRev
+	}
+	return out
+}
+
 func lowerSet(xs []string) map[string]struct{} {
 	m := make(map[string]struct{}, len(xs))
 	for _, x := range xs {

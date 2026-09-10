@@ -213,8 +213,15 @@ func cmdDaemon(args []string) error {
 	applyWGTransportAtStartup(cfg, logf)
 	applyMSSClamp(cfg, logf)
 	applyDNSAtStartup(cfg, logf)
+	// Only built when the agent can actually deliver it -- presetRefreshLoop
+	// runs regardless (it also keeps the local overlay fresh for CLI-only
+	// use), so a nil channel here just means it skips the notify step.
+	var presetDrift chan botcontrol.Event
+	if cfg.Agent.Enabled {
+		presetDrift = make(chan botcontrol.Event, 1)
+	}
 	go routerReconcileLoop(ctx, logf)
-	go presetRefreshLoop(ctx, logf)
+	go presetRefreshLoop(ctx, logf, presetDrift)
 	startQualitySweep(ctx, cfg, logf)
 	watchReconcileSignal(ctx, func() { reconcileOnce(ctx, logf) }) // SIGUSR1 from the netfilter.d hook
 
@@ -230,6 +237,7 @@ func cmdDaemon(args []string) error {
 				cfg.Failover.PrimaryStuckWarnAfter(),
 				botcontrol.FailoverEvents(ctx, d.Events())),
 			postUpd,
+			presetDrift,
 		)
 		handler := &botcontrol.RouterHandler{
 			Daemon: d, Config: cfg, ConfigPath: configPath(),

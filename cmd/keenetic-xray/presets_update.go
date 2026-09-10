@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/kuzzrus/keenetic-xray-go/internal/botcontrol"
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 	"github.com/kuzzrus/keenetic-xray-go/internal/presets"
 )
@@ -21,7 +23,13 @@ const presetRefreshDelay = 90 * time.Second
 // repo, so a router picks up refreshed lists without a reinstall. Off
 // when config sets presets_no_auto_update. Best-effort: a failed pull
 // just leaves the last good copy (or the embed) in place.
-func presetRefreshLoop(ctx context.Context, logf func(string, ...any)) {
+//
+// events, when non-nil, receives one Event per refresh that leaves any
+// preset-bound route list newly drifted from what the operator's config
+// says it should contain -- so 📦 Готовые списки changing upstream
+// reaches the bot as a push, not just as something to notice next time
+// the screen is opened. nil (agent disabled) just skips the send.
+func presetRefreshLoop(ctx context.Context, logf func(string, ...any), events chan<- botcontrol.Event) {
 	timer := time.NewTimer(presetRefreshDelay)
 	defer timer.Stop()
 	for {
@@ -30,12 +38,12 @@ func presetRefreshLoop(ctx context.Context, logf func(string, ...any)) {
 			return
 		case <-timer.C:
 		}
-		runPresetRefresh(ctx, logf)
+		runPresetRefresh(ctx, logf, events)
 		timer.Reset(presetRefreshInterval)
 	}
 }
 
-func runPresetRefresh(ctx context.Context, logf func(string, ...any)) {
+func runPresetRefresh(ctx context.Context, logf func(string, ...any), events chan<- botcontrol.Event) {
 	cfg, err := config.Load(configPath())
 	if err != nil || cfg.PresetsNoAutoUpdate {
 		return
@@ -50,6 +58,50 @@ func runPresetRefresh(ctx context.Context, logf func(string, ...any)) {
 	if res.Updated > 0 || res.Failed > 0 {
 		logf("presets: %s", res.String())
 	}
+
+	// Checked every run, not just when Refresh itself reports changes:
+	// on the first run after upgrading to this feature, a list can
+	// already be drifting from an earlier day's pull that nobody was
+	// ever told about -- that backlog should surface once too, not be
+	// silently skipped because today's fetch happened to be a no-op.
+	notes := presets.NewDrift(cfg)
+	if len(notes) == 0 {
+		return
+	}
+	if err := cfg.Save(configPath()); err != nil {
+		logf("presets: could not persist notified-drift state: %v", err)
+		return
+	}
+	logf("presets: %d %s changed upstream, notifying", len(notes), pluralLists(len(notes)))
+	if events == nil {
+		return
+	}
+	select {
+	case events <- botcontrol.Event{Kind: "preset_drift", Text: presetDriftText(notes), Time: time.Now()}:
+	case <-ctx.Done():
+	}
+}
+
+func pluralLists(n int) string {
+	if n == 1 {
+		return "list"
+	}
+	return "lists"
+}
+
+// presetDriftText renders NewDrift's result as the message the operator
+// sees in Telegram/CLI -- one line per changed list, plus how to act on
+// it (the existing 📦 Готовые списки sync flow; this only notifies, it
+// never re-syncs on its own -- same reasoning as everywhere else in this
+// project that a list carrying live traffic is never silently swapped).
+func presetDriftText(notes []presets.DriftNote) string {
+	var b strings.Builder
+	b.WriteString("📦 Готовые списки обновились:\n")
+	for _, n := range notes {
+		fmt.Fprintf(&b, "  • %s: +%d −%d\n", n.Name, n.Added, n.Removed)
+	}
+	b.WriteString("Синхронизировать: 📦 Готовые списки → список → 🔄 Синхронизировать (или /routes <router> preset sync <имя>)")
+	return b.String()
 }
 
 // cmdRoutesPresetUpdate is `keenetic-xray routes preset update` -- pull

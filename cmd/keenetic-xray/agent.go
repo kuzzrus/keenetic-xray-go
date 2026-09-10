@@ -28,10 +28,19 @@ func cmdAgent(args []string) error {
 }
 
 func agentConfigure(args []string) error {
-	if len(args) != 4 {
-		return fmt.Errorf("usage: keenetic-xray agent configure <control-server-url> <router-id> <fingerprint-sha256> <token>")
+	var serverURL, routerID, fingerprint, token string
+	switch len(args) {
+	case 3:
+		// No pinned fingerprint: serverURL must resolve to a domain
+		// serving a CA-issued certificate (the control server's
+		// ACME/autocert support) -- trust goes through the ordinary
+		// chain instead of a hardcoded leaf hash.
+		serverURL, routerID, token = args[0], args[1], args[2]
+	case 4:
+		serverURL, routerID, fingerprint, token = args[0], args[1], args[2], args[3]
+	default:
+		return fmt.Errorf("usage: keenetic-xray agent configure <control-server-url> <router-id> [fingerprint-sha256] <token>")
 	}
-	serverURL, routerID, fingerprint, token := args[0], args[1], args[2], args[3]
 
 	cfg, err := config.Load(configPath())
 	if err != nil {
@@ -66,7 +75,10 @@ func agentSetEnabled(enabled bool) error {
 		return err
 	}
 	if enabled {
-		if cfg.Agent.ControlServerURL == "" || cfg.Agent.RouterID == "" || cfg.Agent.FingerprintSHA256 == "" || cfg.Agent.TokenFile == "" {
+		// FingerprintSHA256 is deliberately not required here: empty
+		// means CA-trust mode (a domain with an ACME-issued cert), not
+		// "not configured" -- see agentConfigure and AgentOptions.validate.
+		if cfg.Agent.ControlServerURL == "" || cfg.Agent.RouterID == "" || cfg.Agent.TokenFile == "" {
 			return fmt.Errorf("agent is not configured -- run `keenetic-xray agent configure` first")
 		}
 	}

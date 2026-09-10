@@ -69,6 +69,58 @@ func TestCmdAgent_ConfigureEnableDisable(t *testing.T) {
 	}
 }
 
+// TestCmdAgent_ConfigureWithoutFingerprintEnablesCleanly is the 3-arg
+// form (no fingerprint -- CA-trust mode via a domain with an ACME-issued
+// certificate, see internal/botcontrol's autocert support). Enable must
+// succeed too: a stale "fingerprint required" check here would let
+// `configure` pass but then block `enable` right after, contradicting
+// the 3-arg form configure itself accepts.
+func TestCmdAgent_ConfigureWithoutFingerprintEnablesCleanly(t *testing.T) {
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "config.json")
+	tokenFile := filepath.Join(dir, "token.secret")
+	t.Setenv("KEENETIC_XRAY_CONFIG", configFile)
+	t.Setenv("KEENETIC_XRAY_AGENT_TOKEN_FILE", tokenFile)
+
+	if err := run([]string{"agent", "configure", "https://vps.example.com:8443", "router-1", "s3cr3t"}); err != nil {
+		t.Fatalf("agent configure (3-arg): %v", err)
+	}
+
+	cfg, err := config.Load(configFile)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Agent.ControlServerURL != "https://vps.example.com:8443" || cfg.Agent.RouterID != "router-1" {
+		t.Errorf("Agent config = %+v", cfg.Agent)
+	}
+	if cfg.Agent.FingerprintSHA256 != "" {
+		t.Errorf("FingerprintSHA256 = %q, want empty for the 3-arg CA-trust form", cfg.Agent.FingerprintSHA256)
+	}
+
+	if err := run([]string{"agent", "enable"}); err != nil {
+		t.Fatalf("agent enable after fingerprint-less configure: %v", err)
+	}
+	cfg, _ = config.Load(configFile)
+	if !cfg.Agent.Enabled {
+		t.Error("Agent should be enabled")
+	}
+}
+
+func TestCmdAgent_ConfigureBadArgCount(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("KEENETIC_XRAY_CONFIG", filepath.Join(dir, "config.json"))
+	for _, args := range [][]string{
+		{"agent", "configure"},
+		{"agent", "configure", "url"},
+		{"agent", "configure", "url", "id"},
+		{"agent", "configure", "url", "id", "fp", "token", "extra"},
+	} {
+		if err := run(args); err == nil {
+			t.Errorf("run(%v) expected a usage error", args)
+		}
+	}
+}
+
 func TestCmdAgent_EnableWithoutConfigureErrors(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("KEENETIC_XRAY_CONFIG", filepath.Join(dir, "config.json"))

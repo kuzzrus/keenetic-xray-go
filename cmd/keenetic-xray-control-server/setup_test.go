@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -22,8 +23,8 @@ func TestRunSetup_WritesValidConfig(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
 
-	// bot token / chat IDs / listen addr (blank = default) / public URL
-	in := strings.NewReader("111222333:AA_this_is_a_pretend_bot_token_value_00\n111, 222\n\nhttps://vps.example.com:8443\n")
+	// bot token / chat IDs / listen addr (blank = default) / public URL / has domain?
+	in := strings.NewReader("111222333:AA_this_is_a_pretend_bot_token_value_00\n111, 222\n\nhttps://vps.example.com:8443\nn\n")
 	var out strings.Builder
 
 	if err := runSetup(in, &out, cfgPath, testDefaults(dir)); err != nil {
@@ -74,7 +75,7 @@ func TestRunSetup_WritesValidConfig(t *testing.T) {
 func TestRunSetup_RejectsBadChatIDsThenRecovers(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
-	in := strings.NewReader("123:token_token_token_token_token_token\nnope\n42\n\n\n")
+	in := strings.NewReader("123:token_token_token_token_token_token\nnope\n42\n\n\nn\n")
 	var out strings.Builder
 
 	if err := runSetup(in, &out, cfgPath, testDefaults(dir)); err != nil {
@@ -121,7 +122,7 @@ func TestRunSetup_OverwritesExistingConfigOnConfirm(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	in := strings.NewReader("y\n999:brand_new_token_brand_new_token_brand\n7\n\n\n")
+	in := strings.NewReader("y\n999:brand_new_token_brand_new_token_brand\n7\n\n\nn\n")
 	var out strings.Builder
 	if err := runSetup(in, &out, cfgPath, testDefaults(dir)); err != nil {
 		t.Fatalf("runSetup: %v", err)
@@ -146,6 +147,77 @@ func TestRunSetup_TruncatedInputErrors(t *testing.T) {
 	if _, err := os.Stat(cfgPath); err == nil {
 		t.Error("config.json should not have been written on a failed run")
 	}
+}
+
+func TestRunSetup_DomainStepSetsFieldsAndDerivesPublicURL(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+
+	old := lookupHost
+	lookupHost = func(string) ([]string, error) { return []string{"203.0.113.1"}, nil }
+	defer func() { lookupHost = old }()
+
+	// token / chat IDs / listen addr (blank) / public URL (blank, derived
+	// from domain instead) / has domain? / domain
+	in := strings.NewReader("123:token_token_token_token_token_token\n42\n\n\ny\nvps.example.com\n")
+	var out strings.Builder
+	if err := runSetup(in, &out, cfgPath, testDefaults(dir)); err != nil {
+		t.Fatalf("runSetup: %v", err)
+	}
+
+	s, err := loadSettings(cfgPath)
+	if err != nil {
+		t.Fatalf("loadSettings: %v", err)
+	}
+	if s.Domain != "vps.example.com" {
+		t.Errorf("Domain = %q, want vps.example.com", s.Domain)
+	}
+	if s.PublicURL != "https://vps.example.com:8443" {
+		t.Errorf("PublicURL = %q, want derived from domain + default port", s.PublicURL)
+	}
+	if s.AutocertCacheDir == "" {
+		t.Error("AutocertCacheDir should default, not stay empty")
+	}
+	for _, want := range []string{"Let's Encrypt", "БЕЗ отпечатка"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("wizard output missing %q\n---\n%s", want, out.String())
+		}
+	}
+}
+
+func TestRunSetup_DomainNotResolvingAsksToContinue(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+
+	old := lookupHost
+	lookupHost = func(string) ([]string, error) { return nil, errors.New("no such host") }
+	defer func() { lookupHost = old }()
+
+	t.Run("declines -> aborts", func(t *testing.T) {
+		in := strings.NewReader("123:token_token_token_token_token_token\n42\n\n\ny\nnew.example.com\nn\n")
+		var out strings.Builder
+		if err := runSetup(in, &out, cfgPath, testDefaults(dir)); err == nil {
+			t.Fatal("expected runSetup to abort when the operator declines to continue on a non-resolving domain")
+		}
+		if _, err := os.Stat(cfgPath); err == nil {
+			t.Error("config.json should not have been written")
+		}
+	})
+
+	t.Run("confirms -> proceeds anyway", func(t *testing.T) {
+		in := strings.NewReader("123:token_token_token_token_token_token\n42\n\n\ny\nnew.example.com\ny\n")
+		var out strings.Builder
+		if err := runSetup(in, &out, cfgPath, testDefaults(dir)); err != nil {
+			t.Fatalf("runSetup: %v", err)
+		}
+		s, err := loadSettings(cfgPath)
+		if err != nil {
+			t.Fatalf("loadSettings: %v", err)
+		}
+		if s.Domain != "new.example.com" {
+			t.Errorf("Domain = %q, want new.example.com", s.Domain)
+		}
+	})
 }
 
 func TestLooksLikeTelegramToken(t *testing.T) {

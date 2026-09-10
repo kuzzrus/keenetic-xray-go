@@ -68,16 +68,62 @@ func TestAgentOptions_Validate(t *testing.T) {
 		t.Errorf("valid options should validate: %v", err)
 	}
 
+	// A missing fingerprint is valid on its own -- it means "trust the
+	// ordinary CA chain" (a domain with an ACME-issued cert), not "not
+	// configured". Only URL/RouterID/Token are actually required.
+	validNoFingerprint := AgentOptions{ControlServerURL: "https://x", RouterID: "r", Token: "t"}
+	if err := validNoFingerprint.validate(); err != nil {
+		t.Errorf("options with no fingerprint (CA-trust mode) should validate: %v", err)
+	}
+
 	cases := []AgentOptions{
 		{RouterID: "r", Token: "t", FingerprintSHA256: "ab"},
 		{ControlServerURL: "https://x", Token: "t", FingerprintSHA256: "ab"},
 		{ControlServerURL: "https://x", RouterID: "r", FingerprintSHA256: "ab"},
-		{ControlServerURL: "https://x", RouterID: "r", Token: "t"},
 	}
 	for i, c := range cases {
 		if err := c.validate(); err == nil {
 			t.Errorf("case %d: expected error for incomplete options %+v", i, c)
 		}
+	}
+}
+
+func TestNewAgentClient_EmptyFingerprintUsesOrdinaryCATrust(t *testing.T) {
+	// A real CA-signed server (httptest's own generated cert isn't
+	// CA-trusted, so this must fail exactly the way a normal
+	// http.Client talking to a self-signed server would -- proving
+	// newAgentClient("") did NOT fall back to InsecureSkipVerify).
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	client, err := newAgentClient("")
+	if err != nil {
+		t.Fatalf("newAgentClient: %v", err)
+	}
+	if _, err := client.Get(srv.URL); err == nil {
+		t.Error("expected a self-signed server to fail ordinary CA verification")
+	}
+}
+
+func TestNewAgentClient_NonEmptyFingerprintPins(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	client, err := newAgentClient(fingerprintOf(t, srv))
+	if err != nil {
+		t.Fatalf("newAgentClient: %v", err)
+	}
+	resp, err := client.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
 	}
 }
 

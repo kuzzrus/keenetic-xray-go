@@ -36,6 +36,7 @@ type TelegramBot struct {
 	AllowedChats  map[int64]bool
 	Store         *Store        // router registry + command queues
 	Fingerprint   string        // control-server cert SHA-256, echoed in `agent configure` hints
+	Domain        string        // "" -> fingerprint-pinned self-signed mode; set -> agentConfigureLines omits the fingerprint (CA trust via ACME, see the control server's autocert support)
 	ServerURL     string        // public URL routers dial, e.g. https://vps.example.com:8443; "" -> derived from ListenAddr + the detected outbound IP
 	ListenAddr    string        // the server's own listen address, used to derive a URL when ServerURL is unset
 	APIBase       string        // "" -> telegramAPIBase
@@ -915,8 +916,16 @@ func (b *TelegramBot) dispatchRename(args []string) string {
 }
 
 // agentConfigureLines is the two-command block to run on a router to bind
-// it to this control server.
+// it to this control server. With a domain configured, the fingerprint
+// arg is omitted -- `agent configure` accepts 3 or 4 args -- since
+// routers dialing a domain trust the ACME-issued certificate the
+// ordinary CA way instead of pinning a leaf hash (see
+// internal/botcontrol/agent.go's newAgentClient).
 func (b *TelegramBot) agentConfigureLines(id, token string) string {
+	if b.Domain != "" {
+		return fmt.Sprintf("keenetic-xray agent configure %s %s %s\nkeenetic-xray agent enable",
+			b.serverURL(), id, token)
+	}
 	return fmt.Sprintf("keenetic-xray agent configure %s %s %s %s\nkeenetic-xray agent enable",
 		b.serverURL(), id, b.Fingerprint, token)
 }

@@ -7,8 +7,10 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -16,6 +18,7 @@ import (
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/botcontrol"
 	"github.com/kuzzrus/keenetic-xray-go/internal/version"
+	"golang.org/x/crypto/acme/autocert"
 )
 
 func main() {
@@ -51,6 +54,17 @@ func run(args []string) error {
 		return fmt.Errorf("computing certificate fingerprint: %w", err)
 	}
 
+	// tlsConfig serves the self-signed cert generated/loaded above by
+	// default; with a domain configured, ACME-issued certs join it via
+	// SNI so already-pinned agents and newly-migrated domain agents are
+	// both served correctly off the same listener (see dualCertGetter).
+	tlsConfig := &tls.Config{Certificates: []tls.Certificate{cert}}
+	var acmeMgr *autocert.Manager
+	if cfg.Domain != "" {
+		acmeMgr = newAutocertManager(cfg.Domain, cfg.AutocertCacheDir)
+		tlsConfig = &tls.Config{GetCertificate: dualCertGetter(cert, cfg.Domain, acmeMgr)}
+	}
+
 	store, err := botcontrol.LoadStore(cfg.QueuePath)
 	if err != nil {
 		return fmt.Errorf("loading queue store: %w", err)
@@ -77,6 +91,7 @@ func run(args []string) error {
 		AllowedChats: allowedChats,
 		Store:        store,
 		Fingerprint:  fingerprint,
+		Domain:       cfg.Domain,
 		ServerURL:    cfg.PublicURL,
 		ListenAddr:   cfg.ListenAddr,
 		Logger:       logger,
@@ -113,11 +128,27 @@ func run(args []string) error {
 	}()
 
 	errCh := make(chan error, 2)
-	go func() { errCh <- botcontrol.ListenAndServeTLS(ctx, cfg.ListenAddr, cert, server) }()
+	go func() { errCh <- botcontrol.ListenAndServeTLSDynamic(ctx, cfg.ListenAddr, tlsConfig, server) }()
 	go func() { errCh <- bot.Run(ctx) }()
 	go (&botcontrol.OfflineWatcher{Store: store, Notify: bot.NotifyOffline}).Run(ctx)
 
-	logger.Printf("listening on %s (fingerprint %s, %d router(s) registered)", cfg.ListenAddr, fingerprint, len(store.Routers()))
+	if acmeMgr != nil {
+		// Let's Encrypt's HTTP-01 challenge always dials :80, regardless
+		// of cfg.ListenAddr -- a second, plain-HTTP listener just for
+		// that. Fire-and-forget like OfflineWatcher above: nothing here
+		// holds state worth a graceful drain, so an ungraceful stop on
+		// process exit is fine; only log if it fails outright (most
+		// likely cause: nothing granted CAP_NET_BIND_SERVICE for :80).
+		go func() {
+			if err := http.ListenAndServe(":80", acmeMgr.HTTPHandler(nil)); err != nil && ctx.Err() == nil {
+				logger.Printf("acme: :80 challenge listener failed (Let's Encrypt can't reach it to issue/renew for %s): %v", cfg.Domain, err)
+			}
+		}()
+		logger.Printf("listening on %s and :80 (domain %s, ACME cert + fingerprint %s fallback, %d router(s) registered)",
+			cfg.ListenAddr, cfg.Domain, fingerprint, len(store.Routers()))
+	} else {
+		logger.Printf("listening on %s (fingerprint %s, %d router(s) registered)", cfg.ListenAddr, fingerprint, len(store.Routers()))
+	}
 
 	firstErr := <-errCh
 	shuttingDown := ctx.Err() != nil // true if the signal handler already cancelled ctx

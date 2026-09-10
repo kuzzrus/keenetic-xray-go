@@ -915,19 +915,31 @@ func (b *TelegramBot) dispatchRename(args []string) string {
 	return "✅ теперь: " + name
 }
 
-// agentConfigureLines is the two-command block to run on a router to bind
-// it to this control server. With a domain configured, the fingerprint
-// arg is omitted -- `agent configure` accepts 3 or 4 args -- since
-// routers dialing a domain trust the ACME-issued certificate the
-// ordinary CA way instead of pinning a leaf hash (see
-// internal/botcontrol/agent.go's newAgentClient).
+// agentConfigureLines is the command block to run on a router to bind it
+// to this control server. With a domain configured, the fingerprint arg
+// is omitted -- `agent configure` accepts 3 or 4 args -- since routers
+// dialing a domain trust the ACME-issued certificate the ordinary CA
+// way instead of pinning a leaf hash (see internal/botcontrol/agent.go's
+// newAgentClient).
+//
+// The restart line matters more than it looks: `agent configure` and
+// `agent enable` only write config.json -- a daemon that's already
+// running (this is a reconfigure, e.g. after 📦 Установка агента on an
+// existing router, not a fresh install) keeps using the
+// AgentOptions/*http.Client it built at its own startup and won't pick
+// up a changed URL/fingerprint until restarted; there's no SIGHUP-live-
+// reload path for agent settings the way there is for RCI/failover
+// tunables. Harmless to include on a fresh install too -- rc.func's
+// restart is stop-if-running-then-start, so it's really just "start"
+// when nothing is running yet.
 func (b *TelegramBot) agentConfigureLines(id, token string) string {
+	const restart = "/opt/etc/init.d/S99keenetic-xray restart"
 	if b.Domain != "" {
-		return fmt.Sprintf("keenetic-xray agent configure %s %s %s\nkeenetic-xray agent enable",
-			b.serverURL(), id, token)
+		return fmt.Sprintf("keenetic-xray agent configure %s %s %s\nkeenetic-xray agent enable\n%s",
+			b.serverURL(), id, token, restart)
 	}
-	return fmt.Sprintf("keenetic-xray agent configure %s %s %s %s\nkeenetic-xray agent enable",
-		b.serverURL(), id, b.Fingerprint, token)
+	return fmt.Sprintf("keenetic-xray agent configure %s %s %s %s\nkeenetic-xray agent enable\n%s",
+		b.serverURL(), id, b.Fingerprint, token, restart)
 }
 
 // serverURL is what routers should dial. ServerURL (config public_url)

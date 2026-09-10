@@ -37,7 +37,7 @@ func run(args []string) error {
 	configPath := envOr("KEENETIC_XRAY_CS_CONFIG", defaultConfigPath)
 
 	if len(args) >= 1 && args[0] == "setup" {
-		return cmdSetup(configPath)
+		return cmdSetup(configPath, args[1:])
 	}
 
 	cfg, err := loadSettings(configPath)

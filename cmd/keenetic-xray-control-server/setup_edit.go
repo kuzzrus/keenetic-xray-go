@@ -49,7 +49,13 @@ func runSetupEdit(in *bufio.Reader, out io.Writer, configPath string, s settings
 			// it in its own bufio.NewReader, which is harmless (an extra
 			// buffering layer, not a double-read) since nothing here
 			// reads from `in` again after handing off control.
-			return runSetup(in, out, configPath, defaultSettings())
+			//
+			// Starts from s (the settings already on disk), not
+			// defaultSettings() -- otherwise CertPath/KeyPath/QueuePath/
+			// AutocertCacheDir, none of which the wizard ever prompts
+			// for, would silently reset to hardcoded defaults (the same
+			// bug cmdSetup's own --wizard dispatch had).
+			return runSetup(in, out, configPath, s)
 		default:
 			p("нет такого пункта\n")
 		}

@@ -45,7 +45,7 @@ func ParseVLESSURI(raw string) (Profile, error) {
 		Flow:       q.Get("flow"),
 
 		Network:  normalizeNetwork(firstNonEmpty(q.Get("type"), "tcp")),
-		Security: firstNonEmpty(q.Get("security"), "none"),
+		Security: strings.ToLower(firstNonEmpty(q.Get("security"), "none")),
 
 		SNI:         q.Get("sni"),
 		Fingerprint: q.Get("fp"),
@@ -118,8 +118,14 @@ func (p Profile) URI() string {
 
 // normalizeNetwork maps share-link transport aliases onto the value Xray's
 // config expects. "h2" is an older name some providers still emit for the
-// HTTP/2 transport; Xray calls it "http".
+// HTTP/2 transport; Xray calls it "http". Profile.Validate and Xray config
+// generation both compare Network/Security case-sensitively against
+// lowercase literals, so a differently-cased but well-formed link (some
+// providers/clients emit "TCP", "NONE", ...) must be folded here at the
+// one parse boundary rather than rejected downstream with a confusing
+// "unsupported network" error.
 func normalizeNetwork(n string) string {
+	n = strings.ToLower(n)
 	if n == "h2" {
 		return "http"
 	}

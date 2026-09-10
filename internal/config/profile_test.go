@@ -592,6 +592,13 @@ func TestProfileImportKey(t *testing.T) {
 		"path":        func(p *Profile) { p.Path = "/other" },
 		"serviceName": func(p *Profile) { p.ServiceName = "grpcSvc" },
 		"mode":        func(p *Profile) { p.Mode = "stream-up" },
+		// Regression: a tcp-network profile's headerType (plain vs HTTP
+		// header camouflage) changes wire behavior exactly like the other
+		// per-transport tuning fields above, but was left out of the
+		// identity tuple -- two profiles at the same endpoint differing
+		// only by headerType collided to one ImportKey, so UpsertProfile
+		// silently overwrote one with the other instead of keeping both.
+		"headerType": func(p *Profile) { p.HeaderType = "http" },
 	} {
 		p := base
 		mut(&p)

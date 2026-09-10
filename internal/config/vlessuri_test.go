@@ -110,6 +110,24 @@ func TestParseVLESSURI(t *testing.T) {
 			},
 		},
 		{
+			// A regression case: type/security are folded to lowercase at
+			// this one parse boundary because Profile.Validate and Xray
+			// config generation both compare them case-sensitively -- an
+			// uppercase but well-formed link must not become permanently
+			// unimportable with a confusing "unsupported network" error.
+			name: "uppercase type and security are folded to lowercase",
+			uri:  "vless://uuid-9@upper.example:443?type=TCP&security=NONE#upper",
+			want: Profile{
+				Remark:     "upper",
+				UUID:       "uuid-9",
+				Address:    "upper.example",
+				Port:       443,
+				Encryption: "none",
+				Network:    "tcp",
+				Security:   "none",
+			},
+		},
+		{
 			name: "no fragment falls back to address as remark",
 			uri:  "vless://uuid-3@host.example:443?type=tcp&security=none",
 			want: Profile{

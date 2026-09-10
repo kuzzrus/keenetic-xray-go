@@ -407,4 +407,14 @@ func TestGenerateXrayConfig_Errors(t *testing.T) {
 			t.Error("expected error for invalid outbound profile")
 		}
 	})
+	t.Run("grpc with no serviceName or path", func(t *testing.T) {
+		p := validProfile()
+		p.Network = "grpc"
+		p.ServiceName = ""
+		p.Path = ""
+		_, err := GenerateXrayConfig(XrayConfigOptions{SOCKSPort: 1080, Outbound: p})
+		if err == nil {
+			t.Error("expected error for grpc network with no serviceName/path -- an empty grpcSettings.serviceName silently generates a non-functional tunnel")
+		}
+	})
 }

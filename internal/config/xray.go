@@ -243,9 +243,11 @@ func buildStreamSettings(p Profile, xhttpMode string) (map[string]any, error) {
 		}
 		stream["wsSettings"] = wsSettings
 	case "grpc":
-		stream["grpcSettings"] = map[string]any{
-			"serviceName": firstNonEmpty(p.ServiceName, p.Path),
+		svc := firstNonEmpty(p.ServiceName, p.Path)
+		if svc == "" {
+			return nil, fmt.Errorf("grpc network requires a serviceName or path")
 		}
+		stream["grpcSettings"] = map[string]any{"serviceName": svc}
 	case "h2", "http":
 		stream["network"] = "http" // Xray's canonical name; some share links say "h2"
 		httpSettings := map[string]any{}

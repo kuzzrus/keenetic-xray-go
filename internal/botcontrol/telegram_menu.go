@@ -53,9 +53,9 @@ func routerCardKB(id string) inlineKeyboard {
 		{{Text: "🔗 Источники", CallbackData: "srcm:" + id}, {Text: "🐕 Вотчдог", CallbackData: "wdm:" + id}},
 		{{Text: "⚙️ Порты и транспорт", CallbackData: "ptm:" + id}, {Text: "🧩 Ядро xray", CallbackData: "corem:" + id}},
 		{{Text: "📍 Маршруты", CallbackData: "rtm:" + id}, {Text: "🧩 Дополнения", CallbackData: "adnm:" + id}},
-		{{Text: "🔄 Обновить подписку", CallbackData: "act:sub_refresh:" + id}, {Text: "♻️ Рестарт демона", CallbackData: "act:restart:" + id}, {Text: "🔁 Обновить агент", CallbackData: "upd:" + id}},
-		{{Text: "✏️ Переименовать", CallbackData: "rename:" + id}, {Text: "📦 Установка агента", CallbackData: "install:" + id}},
-		{{Text: "🗑 Удалить роутер", CallbackData: "del:" + id}},
+		{{Text: "🔄 Обновить подписку", CallbackData: "act:sub_refresh:" + id}, {Text: "♻️ Рестарт демона", CallbackData: "act:restart:" + id}},
+		{{Text: "🔁 Обновить агент", CallbackData: "upd:" + id}, {Text: "✏️ Переименовать", CallbackData: "rename:" + id}},
+		{{Text: "📦 Установка агента", CallbackData: "install:" + id}, {Text: "🗑 Удалить роутер", CallbackData: "del:" + id}},
 		{{Text: "🔄 Обновить", CallbackData: "router:" + id}, {Text: "⬅️ Роутеры", CallbackData: "routers"}, {Text: "🏠 Меню", CallbackData: "menu"}},
 	}}
 }
@@ -210,8 +210,6 @@ func callbackAction(name string) string {
 		return ActionProxy0Show
 	case "routes_list":
 		return ActionRoutesList
-	case "routes_show":
-		return ActionRoutesShow
 	case "restart":
 		return ActionDaemonRestart
 	case "self_update":

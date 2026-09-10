@@ -107,7 +107,7 @@ func routesListKB(id string, items []routeItem) inlineKeyboard {
 	}
 	rows = append(rows,
 		[]inlineButton{{Text: "📦 Готовые списки", CallbackData: "rtp:" + id}},
-		[]inlineButton{{Text: "➕ Новый список", CallbackData: "rtNew:" + id}, {Text: "📊 Статус", CallbackData: "act:routes_show:" + id}},
+		[]inlineButton{{Text: "➕ Новый список", CallbackData: "rtNew:" + id}, {Text: "📊 Статус", CallbackData: "rtSt:" + id}},
 		[]inlineButton{{Text: "⬅️ Назад", CallbackData: "router:" + id}},
 	)
 	return inlineKeyboard{InlineKeyboard: rows}
@@ -263,6 +263,8 @@ func (b *TelegramBot) handleRouteCallback(ctx context.Context, cb tgCallbackQuer
 		b.enqueueRouteAction(ctx, cb, id, ActionRoutesRemoveList, []string{it.name})
 	case strings.HasPrefix(data, "rtNew:"):
 		b.startRouteEntriesWizard(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "rtNew:"), false)
+	case strings.HasPrefix(data, "rtSt:"):
+		b.enqueueRoutesStatus(ctx, cb, strings.TrimPrefix(data, "rtSt:"))
 	default:
 		return false
 	}
@@ -325,6 +327,33 @@ func (b *TelegramBot) enqueueRouteAction(ctx context.Context, cb tgCallbackQuery
 		items := parseRouteNames(nr.Output)
 		b.setRouteMenu(chatID, routeMenu{routerID: id, items: items})
 		b.editMessageText(ctx, chatID, msgID, head+"\n\n"+routesListText(id, items), routesListKB(id, items))
+	}()
+}
+
+// enqueueRoutesStatus runs the router-vs-config drift check and shows the
+// result in place on the 📍 Маршруты screen (routesBackKB). It deliberately
+// doesn't go through the generic act: pipeline (enqueueCardArgs in
+// telegram_menu.go) -- that always lands back on routerCardKB, which for a
+// button that lives inside 📍 Маршруты reads as being bounced out of the
+// screen entirely.
+func (b *TelegramBot) enqueueRoutesStatus(ctx context.Context, cb tgCallbackQuery, id string) {
+	chatID, msgID := cb.Message.Chat.ID, cb.Message.MessageID
+	cmdID, err := b.Store.Enqueue(id, ActionRoutesShow, nil)
+	if err != nil {
+		b.editCB(ctx, cb, "не поставлено в очередь: "+err.Error(), routesBackKB(id))
+		return
+	}
+	b.editMessageText(ctx, chatID, msgID, "📍 Маршруты "+id+"\n\n⏳ …", routesBackKB(id))
+	go func() {
+		res, ok := b.Store.AwaitResult(ctx, id, cmdID, b.resultTimeout())
+		body := res.Output
+		switch {
+		case !ok:
+			body = "⌛ роутер не ответил"
+		case res.Err != "":
+			body = "⚠️ " + res.Err
+		}
+		b.editMessageText(ctx, chatID, msgID, "📍 Маршруты "+id+"\n\n"+body, routesBackKB(id))
 	}()
 }
 

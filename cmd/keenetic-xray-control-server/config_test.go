@@ -86,3 +86,26 @@ func TestLoadSettings_InvalidJSON(t *testing.T) {
 		t.Error("expected error for invalid JSON")
 	}
 }
+
+func TestLoadSettings_DomainAutocertCacheDirDefaultsWhenUnset(t *testing.T) {
+	path := writeConfig(t, `{"telegram_token":"x","allowed_chat_ids":[1],"domain":"vps.example.com"}`)
+	s, err := loadSettings(path)
+	if err != nil {
+		t.Fatalf("loadSettings: %v", err)
+	}
+	if s.Domain != "vps.example.com" {
+		t.Errorf("Domain = %q, want vps.example.com", s.Domain)
+	}
+	if s.AutocertCacheDir == "" {
+		t.Error("AutocertCacheDir should default rather than stay empty")
+	}
+}
+
+func TestLoadSettings_DomainRejectsURLShape(t *testing.T) {
+	for _, bad := range []string{"https://vps.example.com", "vps.example.com:8443", "vps.example.com/path"} {
+		path := writeConfig(t, `{"telegram_token":"x","allowed_chat_ids":[1],"domain":"`+bad+`"}`)
+		if _, err := loadSettings(path); err == nil {
+			t.Errorf("domain %q: expected validate() to reject a non-bare-hostname value", bad)
+		}
+	}
+}

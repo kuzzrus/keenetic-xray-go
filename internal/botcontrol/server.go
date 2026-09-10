@@ -174,12 +174,24 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request, routerI
 
 // ListenAndServeTLS runs handler as an HTTPS server on addr using cert
 // until ctx is cancelled, at which point it shuts down gracefully (5s
-// grace period) and returns ctx.Err().
+// grace period) and returns ctx.Err(). A thin wrapper around
+// ListenAndServeTLSDynamic for the common case of a single static
+// certificate -- see that doc comment for the shutdown/timeout details.
 func ListenAndServeTLS(ctx context.Context, addr string, cert tls.Certificate, handler http.Handler) error {
+	return ListenAndServeTLSDynamic(ctx, addr, &tls.Config{Certificates: []tls.Certificate{cert}}, handler)
+}
+
+// ListenAndServeTLSDynamic is ListenAndServeTLS for a caller-built
+// *tls.Config instead of a single static certificate -- used when the
+// server must serve more than one certificate depending on the
+// connection (see DualCertGetter: an ACME-issued cert for a configured
+// domain alongside the self-signed fallback every already-pinned agent
+// trusts). Shuts down gracefully (5s grace period) on ctx cancellation.
+func ListenAndServeTLSDynamic(ctx context.Context, addr string, tlsConfig *tls.Config, handler http.Handler) error {
 	srv := &http.Server{
 		Addr:      addr,
 		Handler:   handler,
-		TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}},
+		TLSConfig: tlsConfig,
 		// The API exchanges only small JSON over a fast path; bounded
 		// timeouts keep a slow or idle peer (this is a public endpoint)
 		// from tying up a connection indefinitely.

@@ -51,10 +51,17 @@ type Handler interface {
 
 // AgentOptions configures Run.
 type AgentOptions struct {
-	ControlServerURL  string // e.g. "https://vps.example.com:8443"
-	RouterID          string
-	Token             string        // Bearer token; compared constant-time server-side
-	FingerprintSHA256 string        // hex SHA256 of the server's leaf cert, pinned SSH-host-key style
+	ControlServerURL string // e.g. "https://vps.example.com:8443"
+	RouterID         string
+	Token            string // Bearer token; compared constant-time server-side
+	// FingerprintSHA256, when set, pins the server's leaf certificate by
+	// hex SHA256, SSH-host-key style -- no CA trust needed, but a new
+	// certificate (the server's own, or an operator migrating hosts)
+	// means reconfiguring every agent. Empty means the opposite trade:
+	// ControlServerURL must resolve to a domain serving a CA-issued
+	// certificate (see the control server's ACME/autocert support), and
+	// the agent verifies it the ordinary way instead.
+	FingerprintSHA256 string
 	PollInterval      time.Duration // 0 -> DefaultPollInterval
 	HeartbeatInterval time.Duration // 0 -> DefaultHeartbeatInterval
 	CommandTimeout    time.Duration // 0 -> DefaultCommandTimeout
@@ -71,8 +78,8 @@ type AgentOptions struct {
 }
 
 func (o AgentOptions) validate() error {
-	if o.ControlServerURL == "" || o.RouterID == "" || o.Token == "" || o.FingerprintSHA256 == "" {
-		return fmt.Errorf("control server URL, router ID, token, and fingerprint are all required")
+	if o.ControlServerURL == "" || o.RouterID == "" || o.Token == "" {
+		return fmt.Errorf("control server URL, router ID, and token are all required")
 	}
 	return nil
 }
@@ -86,7 +93,7 @@ func Run(ctx context.Context, opts AgentOptions, handle Handler) error {
 		return fmt.Errorf("botcontrol: %w", err)
 	}
 
-	client, err := newPinnedClient(opts.FingerprintSHA256)
+	client, err := newAgentClient(opts.FingerprintSHA256)
 	if err != nil {
 		return fmt.Errorf("botcontrol: %w", err)
 	}
@@ -219,11 +226,23 @@ func doJSON(ctx context.Context, client *http.Client, opts AgentOptions, path st
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
-// newPinnedClient returns an *http.Client that trusts exactly one TLS
-// leaf certificate: the one whose SHA256 fingerprint matches
-// fingerprintHex, SSH-host-key style -- not a CA chain. This is
-// deliberate, not a workaround: the control server's certificate is
-// self-signed, so ordinary CA verification would always fail.
+// newAgentClient returns the *http.Client the agent dials the control
+// server with. An empty fingerprintHex means ControlServerURL is trusted
+// the ordinary way -- a real CA-issued certificate for a domain (see the
+// control server's ACME/autocert support) -- and this is just
+// http.Client with sane defaults, no custom TLSClientConfig at all.
+// Otherwise it's newPinnedClient: trusts exactly one TLS leaf
+// certificate, the one whose SHA256 fingerprint matches fingerprintHex,
+// SSH-host-key style, not a CA chain -- deliberate, not a workaround,
+// for a self-signed certificate ordinary CA verification would always
+// reject.
+func newAgentClient(fingerprintHex string) (*http.Client, error) {
+	if fingerprintHex == "" {
+		return &http.Client{Timeout: 30 * time.Second}, nil
+	}
+	return newPinnedClient(fingerprintHex)
+}
+
 func newPinnedClient(fingerprintHex string) (*http.Client, error) {
 	want, err := hex.DecodeString(fingerprintHex)
 	if err != nil {

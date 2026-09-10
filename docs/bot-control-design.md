@@ -139,6 +139,48 @@ matters because the fingerprint is what every already-configured agent
 has pinned -- regenerating it on every start would lock out every router
 until each one is manually reconfigured.
 
+## Optional: a real domain + Let's Encrypt (`newAutocertManager`/`dualCertGetter` in `cmd/keenetic-xray-control-server/autocert.go`)
+
+`config.json`'s `domain` field (bare hostname, set by the setup wizard's
+domain step, or by hand) turns on ACME issuance via
+`golang.org/x/crypto/acme/autocert` -- the one external dependency this
+project has. It lives in `cmd/keenetic-xray-control-server` specifically
+(a `main` package, so nothing else can import it), not
+`internal/botcontrol` which `keenetic-xray` (the router side) also
+imports -- autocert carries package `init()` functions, which the
+linker can never dead-code-eliminate, so an import from the shared
+package would have silently grown the router binary for a feature it
+never uses. Motivation for the feature itself: moving the VPS to a new
+IP/provider used to mean regenerating the self-signed cert and hand-
+distributing a new fingerprint to every router; with a domain, it's just
+repointing the A record.
+
+Both trust schemes serve on the same listener at once, chosen per
+connection by SNI (`dualCertGetter`): a router dialing the *domain*
+(configured with the 3-arg `agent configure` above, no pinned
+fingerprint -- ordinary CA trust) gets the ACME-issued certificate;
+anything else -- an already-configured router still dialing the raw IP,
+pinned to the self-signed fingerprint -- gets exactly the certificate it
+already trusts. **Turning on a domain never requires reconfiguring an
+existing router.** To move one over deliberately, re-fetch its configure
+command (📦 Установка агента on the router's card, or `/add_router`'s
+own reply for a new one) -- it reuses that router's existing token, so
+this is a same-identity connection-detail change, not a new
+registration.
+
+Let's Encrypt's HTTP-01 challenge always dials port 80, independent of
+`listen_addr` -- `run()` in `main.go` opens a second, plain-HTTP
+listener on `:80` only when `domain` is set, serving
+`autocert.Manager.HTTPHandler(nil)`. That means the VPS's firewall /
+cloud security group needs port 80 reachable from the internet whenever
+a domain is configured (in addition to `listen_addr`, 8443 by default);
+the packaged systemd unit grants `CAP_NET_BIND_SERVICE` via
+`AmbientCapabilities` so the unprivileged service user can bind it.
+`autocert_cache_dir` (default `/var/lib/keenetic-xray-control-server/autocert-cache`)
+persists the issued certificate and ACME account across restarts --
+without it, a restart would re-issue, and Let's Encrypt rate-limits how
+often the same domain may be (re-)issued.
+
 ## Command queue and persistence (`queue.go`)
 
 `Store` holds one FIFO of pending commands and one most-recent `Result`
@@ -364,6 +406,14 @@ router to answer before replying (an online router, default poll interval
 ```sh
 keenetic-xray agent configure <control-server-url> <router-id> <fingerprint-sha256> <token>
 keenetic-xray agent enable   # requires the Full variant; see docs/full-vs-mini.md
+```
+
+Or, against a control server with `domain` set (see below), the same
+command with no fingerprint -- `agentConfigure` accepts either 3 or 4
+args:
+
+```sh
+keenetic-xray agent configure <control-server-url> <router-id> <token>
 ```
 
 The token is written to its own 0600 file (`agent.token_file` in

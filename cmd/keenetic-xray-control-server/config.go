@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 // settings is the control server's own on-disk configuration. It has
@@ -23,15 +24,33 @@ type settings struct {
 	TelegramToken  string            `json:"telegram_token"`
 	AllowedChatIDs []int64           `json:"allowed_chat_ids"`
 	Routers        map[string]string `json:"routers,omitempty"` // optional bootstrap seed: router ID -> bearer token, carried into the runtime registry once at startup
+
+	// Domain, when set, is a bare hostname (no scheme/port) with an A
+	// record pointing at this server -- turns on ACME (Let's Encrypt):
+	// the server issues and renews a real certificate for it via
+	// botcontrol.NewAutocertManager and serves it alongside the
+	// self-signed CertPath/KeyPath fallback, chosen per-connection by
+	// SNI (botcontrol.DualCertGetter). Routers configured with `agent
+	// configure` against this domain (no fingerprint arg) trust it the
+	// ordinary CA way; routers already pinned to the self-signed
+	// fingerprint keep working unchanged. Empty means no domain --
+	// CertPath/KeyPath self-signed only, exactly today's behavior.
+	Domain string `json:"domain,omitempty"`
+	// AutocertCacheDir persists the ACME account and issued certificate
+	// across restarts -- without it, a restart would re-issue, and
+	// Let's Encrypt rate-limits how often the same domain may be
+	// (re-)issued. Only read when Domain is set.
+	AutocertCacheDir string `json:"autocert_cache_dir,omitempty"`
 }
 
 func defaultSettings() settings {
 	return settings{
-		ListenAddr: ":8443",
-		CertPath:   "/etc/keenetic-xray-control-server/server.crt",
-		KeyPath:    "/etc/keenetic-xray-control-server/server.key",
-		QueuePath:  "/var/lib/keenetic-xray-control-server/queue.json",
-		Routers:    map[string]string{},
+		ListenAddr:       ":8443",
+		CertPath:         "/etc/keenetic-xray-control-server/server.crt",
+		KeyPath:          "/etc/keenetic-xray-control-server/server.key",
+		QueuePath:        "/var/lib/keenetic-xray-control-server/queue.json",
+		AutocertCacheDir: "/var/lib/keenetic-xray-control-server/autocert-cache",
+		Routers:          map[string]string{},
 	}
 }
 
@@ -71,6 +90,8 @@ func (s settings) validate() error {
 		return fmt.Errorf("telegram_token is required")
 	case len(s.AllowedChatIDs) == 0:
 		return fmt.Errorf("allowed_chat_ids must list at least one chat ID")
+	case s.Domain != "" && strings.ContainsAny(s.Domain, "/:"):
+		return fmt.Errorf("domain must be a bare hostname, not a URL (got %q)", s.Domain)
 	}
 	return nil
 }

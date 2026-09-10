@@ -380,6 +380,39 @@ func TestTelegramBot_AddRouterReturnsConfigureLine(t *testing.T) {
 	}
 }
 
+// TestTelegramBot_AddRouterOmitsFingerprintInDomainMode covers the other
+// half of the same live scenario TestTelegramBot_AddRouterReturnsConfigureLine
+// checks: with a domain configured (ACME/autocert instead of self-signed
+// + pinning), the printed command must have 3 args, not 4 -- a stray
+// fingerprint there would make `agent configure` reject it outright
+// (see cmd/keenetic-xray/agent.go's 3-or-4-arg agentConfigure).
+func TestTelegramBot_AddRouterOmitsFingerprintInDomainMode(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	bot := &TelegramBot{
+		Token:        "test-token",
+		AllowedChats: map[int64]bool{1: true},
+		Store:        store,
+		Fingerprint:  "deadbeef", // still generated/available for IP-mode routers
+		Domain:       "vps.example.com",
+		ServerURL:    "https://vps.example.com:8443",
+		APIBase:      srv.URL,
+	}
+	runBotInBackground(t, bot)
+
+	fake.push(1, "/add_router home Дом")
+	reply := fake.waitForReply(t, 3*time.Second)
+
+	tok, _ := store.TokenFor("home")
+	want := "keenetic-xray agent configure https://vps.example.com:8443 home " + tok
+	if !strings.Contains(reply, want) {
+		t.Errorf("reply = %q\nwant it to contain %q", reply, want)
+	}
+	if strings.Contains(reply, "deadbeef") {
+		t.Errorf("reply = %q\nmust not contain the fingerprint in domain mode", reply)
+	}
+}
+
 func TestTelegramBot_AddRouterRejectsBadID(t *testing.T) {
 	srv, fake := newFakeTelegram(t)
 	store := newBotStore(t)

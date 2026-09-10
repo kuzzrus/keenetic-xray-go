@@ -13,6 +13,17 @@ ExecStart=/usr/local/bin/keenetic-xray-control-server
 Restart=on-failure
 RestartSec=5
 
+# Only exercised when config.json sets "domain": the process binds :80
+# itself (no reverse proxy) to answer Let's Encrypt's HTTP-01 challenge
+# for ACME certificate issuance/renewal -- a privileged port an
+# unprivileged user can't bind without this. Compatible with
+# NoNewPrivileges=yes below: ambient capabilities are exactly the
+# mechanism systemd recommends for this, unlike setuid-style escalation.
+# A no-domain deployment never binds :80, so granting this ahead of time
+# costs it nothing in practice -- it's simply unused.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
 # The process only ever reads its config and TLS material under
 # /etc/keenetic-xray-control-server and reads/writes its queue file under
 # /var/lib/keenetic-xray-control-server. /etc stays writable too so a

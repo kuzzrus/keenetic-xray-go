@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -12,6 +13,10 @@ import (
 )
 
 const defaultConfigPath = "/etc/keenetic-xray-control-server/config.json"
+
+// lookupHost is net.LookupHost, overridable in tests so the domain step's
+// sanity check doesn't depend on real DNS/network access.
+var lookupHost = net.LookupHost
 
 // cmdSetup is the interactive first-run configurator: it walks the
 // operator through building config.json, generates a bearer token per
@@ -80,6 +85,32 @@ func runSetup(stdin io.Reader, stdout io.Writer, configPath string, defaults set
 	}
 	s.PublicURL = pub
 
+	hasDomain, err := askYesNo(in, stdout, "Есть домен, указывающий A-записью на этот сервер? (тогда сертификат получаем сами через Let's Encrypt, вместо self-signed + отпечатка)", false)
+	if err != nil {
+		return err
+	}
+	if hasDomain {
+		domain, err := askNonEmpty(in, stdout, "Домен (без схемы и порта, напр. vps.example.com)")
+		if err != nil {
+			return err
+		}
+		if _, lerr := lookupHost(domain); lerr != nil {
+			p("  не резолвится прямо сейчас (%v) -- если домен только что заведён, DNS ещё не разошёлся\n", lerr)
+			cont, err := askYesNo(in, stdout, "  продолжить всё равно?", true)
+			if err != nil {
+				return err
+			}
+			if !cont {
+				return fmt.Errorf("отменено; домен не резолвится")
+			}
+		}
+		s.Domain = domain
+		if s.AutocertCacheDir == "" {
+			s.AutocertCacheDir = defaultSettings().AutocertCacheDir
+		}
+		s.PublicURL = "https://" + domain + ":" + listenPort(s.ListenAddr)
+	}
+
 	if err := s.save(configPath); err != nil {
 		return err
 	}
@@ -96,10 +127,25 @@ func runSetup(stdin io.Reader, stdout io.Writer, configPath string, defaults set
 		return err
 	}
 
-	p("\nОтпечаток сертификата (SHA-256):\n  %s\n", fp)
+	p("\nОтпечаток self-signed сертификата (SHA-256):\n  %s\n", fp)
+	if s.Domain != "" {
+		p("\nДомен %s: сертификат получим сами через Let's Encrypt при первом запуске (нужен открытый порт 80 у VPS/security group).\n", s.Domain)
+		p("Новые роутеры настраивай БЕЗ отпечатка (3 аргумента agent configure, не 4) -- доверие идёт через сертификат, а не пиннинг.\n")
+		p("Отпечаток self-signed выше по-прежнему нужен, если когда-нибудь настроишь роутер по IP вместо домена.\n")
+	}
 	p("\nЗапустите сервер:\n  systemctl enable --now keenetic-xray-control-server\n")
 	p("\nЗатем добавляйте роутеры прямо в чате бота:\n  /add_router <id> [имя]\nБот вернёт готовую строку keenetic-xray agent configure для этого роутера.\n")
 	return nil
+}
+
+// listenPort pulls just the port out of a listen address like ":8443" or
+// "0.0.0.0:8443" -- used to build PublicURL from a bare domain without
+// asking the operator to retype the port they already gave above.
+func listenPort(addr string) string {
+	if _, port, err := net.SplitHostPort(addr); err == nil {
+		return port
+	}
+	return strings.TrimPrefix(addr, ":")
 }
 
 func askLine(in *bufio.Reader, out io.Writer, prompt string) (string, error) {

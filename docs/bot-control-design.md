@@ -469,19 +469,28 @@ update that mattered most). Silent only on an unchanged version -- a
 plain restart (a reboot, `systemctl restart` for some unrelated reason)
 is not an update and must not be reported as one.
 
-### The `setup` wizard
+### `setup`: first-run wizard, then a field editor
 
 ```sh
-keenetic-xray-control-server setup
+keenetic-xray-control-server setup            # wizard first time, field editor after
+keenetic-xray-control-server setup --wizard    # force the full walk-through either way
 ```
 
 Interactive, and usable with or without the installer -- it only writes
 `config.json` and generates the TLS certificate, it never touches
-systemd. It prompts for the bot token, the chat allowlist, the listen
-address, and the public URL routers dial, writes the config at mode
-0600, and prints the certificate fingerprint. Routers are added later
-from the chat with `/add_router`. Re-run it to reconfigure, then
-`systemctl restart keenetic-xray-control-server`.
+systemd. On a fresh install it's the linear wizard: prompts for the bot
+token, the chat allowlist, the listen address, and the public
+URL/domain (see above), writes the config at mode 0600, and prints the
+certificate fingerprint. Routers are added later from the chat with
+`/add_router`.
+
+Re-running it on an already-configured server opens the field editor
+instead (`setup_edit.go`, same "wizard first time, editor after" split
+as `keenetic-xray setup` on the router) -- prints all four settings,
+change one at a time, `w` to fall back to the full wizard. The bot
+token is never echoed, only whether one is set. Editing doesn't restart
+the service itself; the editor just reminds to run `systemctl restart
+keenetic-xray-control-server` when something actually changed.
 
 ### Config file
 

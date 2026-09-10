@@ -18,14 +18,40 @@ const defaultConfigPath = "/etc/keenetic-xray-control-server/config.json"
 // sanity check doesn't depend on real DNS/network access.
 var lookupHost = net.LookupHost
 
-// cmdSetup is the interactive first-run configurator: it walks the
-// operator through building config.json, generates a bearer token per
-// router, generates the TLS certificate, and prints the certificate
-// fingerprint plus a ready-to-paste `keenetic-xray agent configure` line
-// for each router. It is the server-side counterpart to `keenetic-xray
-// setup` on the router.
-func cmdSetup(configPath string) error {
-	return runSetup(os.Stdin, os.Stdout, configPath, defaultSettings())
+// cmdSetup is `keenetic-xray-control-server setup`: on a fresh install
+// it's the interactive first-run configurator (builds config.json,
+// generates the TLS certificate, prints the fingerprint plus a
+// ready-to-paste `keenetic-xray agent configure` line). On an
+// already-configured server it instead opens the field editor (show
+// every setting, change one) -- same "wizard first time, editor after"
+// split as `keenetic-xray setup` on the router (setup_edit.go there);
+// --wizard forces the full walk-through either way.
+func cmdSetup(configPath string, args []string) error {
+	wizard := false
+	for _, a := range args {
+		switch a {
+		case "--wizard":
+			wizard = true
+		default:
+			return fmt.Errorf("setup: unexpected argument %q", a)
+		}
+	}
+
+	existing, loadErr := loadSettings(configPath)
+	if !wizard && loadErr == nil {
+		return runSetupEdit(bufio.NewReader(os.Stdin), os.Stdout, configPath, existing)
+	}
+	// Also the --wizard-on-an-already-configured-server path: start from
+	// the existing settings (so CertPath/KeyPath/QueuePath/
+	// AutocertCacheDir -- none of which the wizard ever prompts for --
+	// carry over instead of silently resetting to hardcoded defaults)
+	// rather than defaultSettings(), unless there's truly nothing to
+	// carry over (first run).
+	defaults := defaultSettings()
+	if loadErr == nil {
+		defaults = existing
+	}
+	return runSetup(os.Stdin, os.Stdout, configPath, defaults)
 }
 
 func runSetup(stdin io.Reader, stdout io.Writer, configPath string, defaults settings) error {
@@ -79,36 +105,8 @@ func runSetup(stdin io.Reader, stdout io.Writer, configPath string, defaults set
 		s.ListenAddr = addr
 	}
 
-	pub, err := askLine(in, stdout, "Публичный адрес сервера для роутеров, напр. https://vps.example.com:8443 (можно пропустить)")
-	if err != nil {
+	if err := promptPublicAddress(in, stdout, &s); err != nil {
 		return err
-	}
-	s.PublicURL = pub
-
-	hasDomain, err := askYesNo(in, stdout, "Есть домен, указывающий A-записью на этот сервер? (тогда сертификат получаем сами через Let's Encrypt, вместо self-signed + отпечатка)", false)
-	if err != nil {
-		return err
-	}
-	if hasDomain {
-		domain, err := askNonEmpty(in, stdout, "Домен (без схемы и порта, напр. vps.example.com)")
-		if err != nil {
-			return err
-		}
-		if _, lerr := lookupHost(domain); lerr != nil {
-			p("  не резолвится прямо сейчас (%v) -- если домен только что заведён, DNS ещё не разошёлся\n", lerr)
-			cont, err := askYesNo(in, stdout, "  продолжить всё равно?", true)
-			if err != nil {
-				return err
-			}
-			if !cont {
-				return fmt.Errorf("отменено; домен не резолвится")
-			}
-		}
-		s.Domain = domain
-		if s.AutocertCacheDir == "" {
-			s.AutocertCacheDir = defaultSettings().AutocertCacheDir
-		}
-		s.PublicURL = "https://" + domain + ":" + listenPort(s.ListenAddr)
 	}
 
 	if err := s.save(configPath); err != nil {
@@ -146,6 +144,67 @@ func listenPort(addr string) string {
 		return port
 	}
 	return strings.TrimPrefix(addr, ":")
+}
+
+// promptPublicAddress asks for the plain PublicURL, then whether a
+// domain (ACME instead of self-signed + pinning) should override it --
+// shared by the first-run wizard and the field editor's own "публичный
+// адрес / домен" item so the two mean exactly the same thing. Mutates s
+// in place; a "yes" to the domain question always wins over whatever
+// PublicURL was just typed, matching the original wizard's ordering.
+func promptPublicAddress(in *bufio.Reader, out io.Writer, s *settings) error {
+	p := func(format string, a ...any) { fmt.Fprintf(out, format, a...) }
+
+	pub, err := askLine(in, out, fmt.Sprintf("Публичный адрес сервера для роутеров, напр. https://vps.example.com:8443 [%s]", orDash(s.PublicURL)))
+	if err != nil {
+		return err
+	}
+	if pub != "" {
+		s.PublicURL = pub
+	}
+
+	hasDomain, err := askYesNo(in, out, "Есть домен, указывающий A-записью на этот сервер? (тогда сертификат получаем сами через Let's Encrypt, вместо self-signed + отпечатка)", s.Domain != "")
+	if err != nil {
+		return err
+	}
+	if !hasDomain {
+		s.Domain = ""
+		return nil
+	}
+
+	domain, err := askLine(in, out, fmt.Sprintf("Домен (без схемы и порта, напр. vps.example.com) [%s]", orDash(s.Domain)))
+	if err != nil {
+		return err
+	}
+	if domain == "" {
+		domain = s.Domain
+	}
+	if domain == "" {
+		return fmt.Errorf("отменено; домен не указан")
+	}
+	if _, lerr := lookupHost(domain); lerr != nil {
+		p("  не резолвится прямо сейчас (%v) -- если домен только что заведён, DNS ещё не разошёлся\n", lerr)
+		cont, err := askYesNo(in, out, "  продолжить всё равно?", true)
+		if err != nil {
+			return err
+		}
+		if !cont {
+			return fmt.Errorf("отменено; домен не резолвится")
+		}
+	}
+	s.Domain = domain
+	if s.AutocertCacheDir == "" {
+		s.AutocertCacheDir = defaultSettings().AutocertCacheDir
+	}
+	s.PublicURL = "https://" + domain + ":" + listenPort(s.ListenAddr)
+	return nil
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }
 
 func askLine(in *bufio.Reader, out io.Writer, prompt string) (string, error) {

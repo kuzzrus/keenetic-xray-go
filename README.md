@@ -271,8 +271,10 @@ curl -fsSL https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/serve
 Скачивает бинарь под архитектуру хоста, ставит hardened systemd-юнит и
 гоняет мастер (`keenetic-xray-control-server setup`), который пишет
 `/etc/keenetic-xray-control-server/config.json` (токен бота, allowlist
-чатов, публичный URL для роутеров) и генерит сертификат. Перенастроить —
-`setup` ещё раз + `systemctl restart keenetic-xray-control-server`.
+чатов, публичный URL/домен для роутеров) и генерит сертификат.
+Перенастроить — `setup` ещё раз: на уже настроенном сервере это откроет
+редактор полей (поменять что-то одно), не визард заново (`--wizard`
+форсирует полный визард) — плюс `systemctl restart keenetic-xray-control-server`.
 
 **Обновление:** повторить `curl … | sudo sh`, либо кнопка
 `⬆️ Обновить сервер` в меню (через systemd path-unit + root-хелпер,

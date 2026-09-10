@@ -370,6 +370,9 @@ func TestTelegramBot_AddRouterReturnsConfigureLine(t *testing.T) {
 	if !strings.Contains(reply, want) {
 		t.Errorf("reply = %q\nwant it to contain %q", reply, want)
 	}
+	if !strings.Contains(reply, "S99keenetic-xray restart") {
+		t.Errorf("reply = %q\nwant a restart reminder -- an already-running daemon won't pick up new agent settings without one", reply)
+	}
 	// The command must be a separately-copyable <pre> block (HTML mode).
 	msg := fake.lastSent(t)
 	if msg.ParseMode != "HTML" {
@@ -410,6 +413,9 @@ func TestTelegramBot_AddRouterOmitsFingerprintInDomainMode(t *testing.T) {
 	}
 	if strings.Contains(reply, "deadbeef") {
 		t.Errorf("reply = %q\nmust not contain the fingerprint in domain mode", reply)
+	}
+	if !strings.Contains(reply, "S99keenetic-xray restart") {
+		t.Errorf("reply = %q\nwant a restart reminder in domain mode too", reply)
 	}
 }
 

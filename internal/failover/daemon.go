@@ -102,6 +102,18 @@ func (a *realActions) recordProbe(live bool, start time.Time, err error) {
 	}
 }
 
+// lastProbeReason returns the Reason of the most recent probe if it
+// failed, "" otherwise. recordTransition calls this right after a probe
+// failure is what triggered the transition (ProbeLive/ProbeIsolated append
+// to probes synchronously, in the same Tick, before the state machine
+// acts on the error) -- so the last entry is always the one responsible.
+func (a *realActions) lastProbeReason() string {
+	if n := len(a.probes); n > 0 && !a.probes[n-1].OK {
+		return a.probes[n-1].Reason
+	}
+	return ""
+}
+
 // classifyProbeErr reduces a probe error to a short Russian class for the
 // doctor summary. It matches on the error text because xrayctl.Probe
 // wraps net/http and SOCKS errors as strings rather than typed values.
@@ -298,7 +310,10 @@ type EventKind int
 const (
 	// EventDaemonStart: Run has started and production is up on primary.
 	EventDaemonStart EventKind = iota
-	// EventFailover: the state machine changed phase (From -> To).
+	// EventFailover: the state machine changed phase (From -> To). Detail
+	// carries the classified reason of the probe failure that triggered
+	// it ("таймаут", "отказ соединения", ...), "" if the transition wasn't
+	// failure-triggered (e.g. a successful recovery).
 	EventFailover
 	// EventXrayCrashLoop: the production xray-core process has crashed and
 	// been restarted too many times in a short window. Detail carries the
@@ -314,7 +329,7 @@ type Event struct {
 	Kind   EventKind
 	From   State  // EventFailover
 	To     State  // EventFailover
-	Detail string // EventXrayCrashLoop: e.g. "5 раз за 5 мин"
+	Detail string // EventXrayCrashLoop: e.g. "5 раз за 5 мин"; EventFailover: probe failure reason, see above
 }
 
 // crashLoopCount / crashLoopWindow: this many production-xray crashes
@@ -415,7 +430,7 @@ func (d *Daemon) recordTransition(from, to State) {
 	if len(d.transitions) > maxTransitions {
 		d.transitions = d.transitions[len(d.transitions)-maxTransitions:]
 	}
-	d.emit(Event{At: now, Kind: EventFailover, From: from, To: to})
+	d.emit(Event{At: now, Kind: EventFailover, From: from, To: to, Detail: d.actions.lastProbeReason()})
 }
 
 // emit does a non-blocking send on the events channel -- a full buffer

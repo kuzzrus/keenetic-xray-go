@@ -77,6 +77,24 @@ func TestStatusLines(t *testing.T) {
 	}
 }
 
+func TestStatusLines_ShowsLatencyForOK(t *testing.T) {
+	now := time.Now()
+	s := State{
+		SweptAt: now,
+		Results: []Result{
+			{Remark: "NL-1", OK: true, LatencyMS: 87},
+			{Remark: "FR-3", OK: false, Detail: "нет ответа (таймаут)"},
+		},
+	}
+	out := StatusLines(s, now)
+	if !strings.Contains(out, "NL-1  87мс") {
+		t.Errorf("expected latency next to the OK profile, got: %q", out)
+	}
+	if strings.Contains(out, "FR-3  87мс") {
+		t.Errorf("latency should not leak onto the failed profile: %q", out)
+	}
+}
+
 // --- SweepOnce ---
 
 func fakeProfile(remark, host string, port int) config.Profile {
@@ -138,6 +156,22 @@ func TestSweepOnce_DedupAndClassify(t *testing.T) {
 	}
 	if st.Results[0].CheckedAt.IsZero() {
 		t.Error("CheckedAt not stamped")
+	}
+}
+
+func TestSweepOnce_RecordsLatencyOnSuccess(t *testing.T) {
+	sw, _ := newTestSweeper(t, func(context.Context, xrayctl.ProbeOptions) error { return nil })
+	var calls int
+	sw.now = func() time.Time {
+		calls++
+		return time.Unix(1_700_000_000, 0).Add(time.Duration(calls) * 40 * time.Millisecond)
+	}
+	st := sw.SweepOnce(context.Background(), []config.Profile{fakeProfile("A", "a.example.com", 443)})
+	if len(st.Results) != 1 || !st.Results[0].OK {
+		t.Fatalf("want one OK result, got %+v", st.Results)
+	}
+	if st.Results[0].LatencyMS <= 0 {
+		t.Errorf("LatencyMS = %d, want > 0", st.Results[0].LatencyMS)
 	}
 }
 

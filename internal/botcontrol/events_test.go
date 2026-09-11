@@ -196,6 +196,43 @@ func TestRenderFailoverEvent_Kinds(t *testing.T) {
 	}
 }
 
+func TestWithReason(t *testing.T) {
+	if got := withReason("⚡ x", ""); got != "⚡ x" {
+		t.Errorf("empty reason should leave text unchanged, got %q", got)
+	}
+	if got := withReason("⚡ x", "таймаут"); got != "⚡ x (таймаут)" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestRenderFailoverEvent_AppendsReason(t *testing.T) {
+	var leftAt time.Time
+	ev, forward := renderFailoverEvent(failover.Event{
+		Kind: failover.EventFailover, From: failover.StateActivePrimary, To: failover.StateCooldown,
+		Detail: "таймаут",
+	}, &leftAt)
+	if !forward || !strings.Contains(ev.Text, "(таймаут)") {
+		t.Errorf("left-primary event = %+v, forward=%v, want the reason appended", ev, forward)
+	}
+
+	leftAt = time.Time{}
+	ev2, forward2 := renderFailoverEvent(failover.Event{
+		Kind: failover.EventFailover, From: failover.StateConfirmingRecovery, To: failover.StateActiveBackup,
+		Detail: "отказ соединения",
+	}, &leftAt)
+	if !forward2 || !strings.Contains(ev2.Text, "(отказ соединения)") {
+		t.Errorf("rollback event = %+v, forward=%v, want the reason appended", ev2, forward2)
+	}
+
+	leftAt = time.Time{}
+	ev3, _ := renderFailoverEvent(failover.Event{
+		Kind: failover.EventFailover, From: failover.StateActivePrimary, To: failover.StateCooldown,
+	}, &leftAt)
+	if strings.Contains(ev3.Text, "(") {
+		t.Errorf("no Detail -> no parens, got %q", ev3.Text)
+	}
+}
+
 func TestRenderFailoverEvent_CoalescesAndTimesRecovery(t *testing.T) {
 	var leftAt time.Time
 	t0 := time.Now()

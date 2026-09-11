@@ -31,6 +31,8 @@ func cmdRoutes(args []string) error {
 		return routesList(cfg)
 	case "show":
 		return routesShow(cfg, args[1:])
+	case "manual":
+		return routesManualCmd()
 	case "new", "add":
 		return routesAddEntries(cfg, args[0] == "new", args[1:])
 	case "del":
@@ -51,7 +53,7 @@ func cmdRoutes(args []string) error {
 }
 
 func routesUsage() error {
-	return fmt.Errorf("usage: keenetic-xray routes {list | show [name] | new <name> [entries…] | " +
+	return fmt.Errorf("usage: keenetic-xray routes {list | show [name] | manual | new <name> [entries…] | " +
 		"add <name> <entries…> | del <name> <entries…> | rm <name> | enable <name> | disable <name> | " +
 		"set <name> [--iface=Proxy0|Wireguard4] [--exclusive] [--no-exclusive] | " +
 		"preset {list | show <name> | add <name> [--ip] [--iface=…] [--exclusive] | sync [<name>|--all] | update} | apply}")
@@ -130,6 +132,38 @@ func routesShow(cfg *config.Config, args []string) error {
 		if listForGroup(cfg, lr.Group) == nil {
 			fmt.Printf("⚠️ на роутере есть наша группа %s, которой нет в конфиге — уберётся при `routes apply`\n", lr.Group)
 		}
+	}
+	return nil
+}
+
+// routesManualCmd lists the operator's own domain route lists on the
+// router -- anything without RouteGroupPrefix, built by hand in the
+// Keenetic web UI rather than through keenetic-xray. Read-only, no config
+// counterpart to compare against.
+func routesManualCmd() error {
+	if !keenetic.Available() {
+		return fmt.Errorf("ndmc не найден — эта команда работает только на роутере Keenetic")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	live, err := keenetic.ShowManualRoutes(ctx)
+	if err != nil {
+		return err
+	}
+	if len(live) == 0 {
+		fmt.Println("на роутере нет других списков доменной маршрутизации, кроме сделанных через keenetic-xray.")
+		return nil
+	}
+	fmt.Println("списки, добавленные не через keenetic-xray (только чтение):")
+	for _, lr := range live {
+		routed := "не маршрутизируется"
+		if lr.Iface != "" {
+			routed = "→ " + lr.Iface
+			if lr.Reject {
+				routed += " reject"
+			}
+		}
+		fmt.Printf("%-24s %3d зап.  %s\n", lr.Group, len(lr.Entries), routed)
 	}
 	return nil
 }

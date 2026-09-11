@@ -108,6 +108,7 @@ func routesListKB(id string, items []routeItem) inlineKeyboard {
 	rows = append(rows,
 		[]inlineButton{{Text: "📦 Готовые списки", CallbackData: "rtp:" + id}},
 		[]inlineButton{{Text: "➕ Новый список", CallbackData: "rtNew:" + id}, {Text: "📊 Статус", CallbackData: "rtSt:" + id}},
+		[]inlineButton{{Text: "📋 Ручные списки", CallbackData: "rtManual:" + id}},
 		[]inlineButton{{Text: "⬅️ Назад", CallbackData: "router:" + id}},
 	)
 	return inlineKeyboard{InlineKeyboard: rows}
@@ -265,6 +266,8 @@ func (b *TelegramBot) handleRouteCallback(ctx context.Context, cb tgCallbackQuer
 		b.startRouteEntriesWizard(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "rtNew:"), false)
 	case strings.HasPrefix(data, "rtSt:"):
 		b.enqueueRoutesStatus(ctx, cb, strings.TrimPrefix(data, "rtSt:"))
+	case strings.HasPrefix(data, "rtManual:"):
+		b.enqueueRoutesManual(ctx, cb, strings.TrimPrefix(data, "rtManual:"))
 	default:
 		return false
 	}
@@ -339,6 +342,31 @@ func (b *TelegramBot) enqueueRouteAction(ctx context.Context, cb tgCallbackQuery
 func (b *TelegramBot) enqueueRoutesStatus(ctx context.Context, cb tgCallbackQuery, id string) {
 	chatID, msgID := cb.Message.Chat.ID, cb.Message.MessageID
 	cmdID, err := b.Store.Enqueue(id, ActionRoutesShow, nil)
+	if err != nil {
+		b.editCB(ctx, cb, "не поставлено в очередь: "+err.Error(), routesBackKB(id))
+		return
+	}
+	b.editMessageText(ctx, chatID, msgID, "📍 Маршруты "+id+"\n\n⏳ …", routesBackKB(id))
+	go func() {
+		res, ok := b.Store.AwaitResult(ctx, id, cmdID, b.resultTimeout())
+		body := res.Output
+		switch {
+		case !ok:
+			body = "⌛ роутер не ответил"
+		case res.Err != "":
+			body = "⚠️ " + res.Err
+		}
+		b.editMessageText(ctx, chatID, msgID, "📍 Маршруты "+id+"\n\n"+body, routesBackKB(id))
+	}()
+}
+
+// enqueueRoutesManual reports the operator's own (non-keenetic-xray)
+// route lists, in place on the 📍 Маршруты screen -- same reasoning as
+// enqueueRoutesStatus, this is a read-only report and shouldn't bounce to
+// the router card.
+func (b *TelegramBot) enqueueRoutesManual(ctx context.Context, cb tgCallbackQuery, id string) {
+	chatID, msgID := cb.Message.Chat.ID, cb.Message.MessageID
+	cmdID, err := b.Store.Enqueue(id, ActionRoutesManual, nil)
 	if err != nil {
 		b.editCB(ctx, cb, "не поставлено в очередь: "+err.Error(), routesBackKB(id))
 		return

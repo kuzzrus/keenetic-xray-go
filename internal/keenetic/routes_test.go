@@ -67,6 +67,32 @@ func TestReadOurRoutes_OnlyPrefixed(t *testing.T) {
 	}
 }
 
+func TestShowManualRoutes_ExcludesOurs(t *testing.T) {
+	fakeNdmc(t, map[string]string{"show running-config": rcFixture})
+	live, err := ShowManualRoutes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(live) != 2 {
+		t.Fatalf("live = %+v, want 2 (youtube, domain-list0), not keenetic-xray-media", live)
+	}
+	byGroup := map[string]LiveRoute{}
+	for _, lr := range live {
+		byGroup[lr.Group] = lr
+	}
+	if _, ok := byGroup["keenetic-xray-media"]; ok {
+		t.Error("ShowManualRoutes leaked our own group")
+	}
+	yt, ok := byGroup["youtube"]
+	if !ok || yt.Iface != "Proxy0" || strings.Join(yt.Entries, ",") != "youtube.com,googlevideo.com" {
+		t.Errorf("youtube = %+v", yt)
+	}
+	dl, ok := byGroup["domain-list0"]
+	if !ok || dl.Iface != "Wireguard1" || strings.Join(dl.Entries, ",") != "example.org" {
+		t.Errorf("domain-list0 = %+v", dl)
+	}
+}
+
 func TestApplyRoutes_ReconcilesAndNeverTouchesForeignLists(t *testing.T) {
 	sent := fakeNdmc(t, map[string]string{
 		"show version":        ver51,

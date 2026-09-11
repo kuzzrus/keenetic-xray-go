@@ -196,6 +196,8 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 		return h.routesListText(), nil
 	case ActionRoutesShow:
 		return h.routesShow(ctx, cmd.Args)
+	case ActionRoutesManual:
+		return h.routesManual(ctx)
 	case ActionRoutesAdd:
 		return h.routesAdd(ctx, cmd.Args)
 	case ActionRoutesDel:

@@ -8,10 +8,11 @@ import (
 )
 
 // RouteGroupPrefix namespaces every object-group this project creates on
-// the router. ApplyRoutes / ClearRoutes and the running-config parser
-// only ever touch names starting with it, so lists an operator built by
-// hand in the Keenetic web UI (youtube, telegram, domain-list0, ...) are
-// never read, changed, or deleted.
+// the router. ApplyRoutes / ClearRoutes only ever touch names starting
+// with it, so a list an operator built by hand in the Keenetic web UI
+// (youtube, telegram, domain-list0, ...) is never changed or deleted.
+// ShowManualRoutes deliberately reads the *other* names, read-only, for
+// operator awareness -- that doesn't violate this invariant.
 const RouteGroupPrefix = "keenetic-xray-"
 
 // minRouteOSMajor / minRouteOSMinor is the KeeneticOS floor for
@@ -169,6 +170,31 @@ func ShowRoutes(ctx context.Context) ([]LiveRoute, error) {
 	if err != nil {
 		return nil, err
 	}
+	return liveRoutesFrom(groups, routes), nil
+}
+
+// ShowManualRoutes returns every domain-based route list on the router
+// that ISN'T ours (no RouteGroupPrefix) -- an operator's own lists, built
+// by hand in the Keenetic web UI. Read-only: nothing here is ever changed
+// or deleted, this just surfaces what already exists so the operator (or
+// the bot) doesn't have to go find it over SSH.
+func ShowManualRoutes(ctx context.Context) ([]LiveRoute, error) {
+	if !Available() {
+		return nil, fmt.Errorf("ndmc not found (not a Keenetic router?)")
+	}
+	groups, routes, err := readRoutesMatching(ctx, func(name string) bool {
+		return !strings.HasPrefix(name, RouteGroupPrefix)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return liveRoutesFrom(groups, routes), nil
+}
+
+// liveRoutesFrom assembles the LiveRoute list from a parsed groups/routes
+// pair, sorted by group name. A route without a surviving object-group
+// shouldn't happen, but is surfaced if it does.
+func liveRoutesFrom(groups map[string][]string, routes map[string]parsedRoute) []LiveRoute {
 	out := make([]LiveRoute, 0, len(groups))
 	for g, entries := range groups {
 		lr := LiveRoute{Group: g, Entries: entries}
@@ -177,15 +203,13 @@ func ShowRoutes(ctx context.Context) ([]LiveRoute, error) {
 		}
 		out = append(out, lr)
 	}
-	// A route without a surviving object-group shouldn't happen, but
-	// surface it if it does.
 	for g, r := range routes {
 		if _, ok := groups[g]; !ok {
 			out = append(out, LiveRoute{Group: g, Iface: r.iface, Reject: r.reject})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Group < out[j].Group })
-	return out, nil
+	return out
 }
 
 // ClearRoutes removes every route list this project owns (prefix match)
@@ -218,11 +242,17 @@ func ClearRoutes(ctx context.Context) error {
 }
 
 // readOurRoutes parses `show running-config` for this project's
-// object-groups and dns-proxy routes only. Block membership is by
-// indentation: a column-0 line opens/closes a block, indented lines are
-// its children (matching how Keenetic emits the config -- 4-space
-// children, "!" separators).
+// object-groups and dns-proxy routes only.
 func readOurRoutes(ctx context.Context) (groups map[string][]string, routes map[string]parsedRoute, err error) {
+	return readRoutesMatching(ctx, func(name string) bool { return strings.HasPrefix(name, RouteGroupPrefix) })
+}
+
+// readRoutesMatching parses `show running-config` for every fqdn
+// object-group (and its dns-proxy route, if any) whose name satisfies
+// match. Block membership is by indentation: a column-0 line opens/closes
+// a block, indented lines are its children (matching how Keenetic emits
+// the config -- 4-space children, "!" separators).
+func readRoutesMatching(ctx context.Context, match func(name string) bool) (groups map[string][]string, routes map[string]parsedRoute, err error) {
 	out, err := ndmcRun(ctx, "show running-config")
 	if err != nil {
 		return nil, nil, fmt.Errorf("show running-config: %w", err)
@@ -241,7 +271,7 @@ func readOurRoutes(ctx context.Context) (groups map[string][]string, routes map[
 		if body == line { // column-0: block boundary
 			inGroup, inDNSProxy = "", false
 			switch {
-			case len(f) == 3 && f[0] == "object-group" && f[1] == "fqdn" && strings.HasPrefix(f[2], RouteGroupPrefix):
+			case len(f) == 3 && f[0] == "object-group" && f[1] == "fqdn" && match(f[2]):
 				inGroup = f[2]
 				if _, ok := groups[inGroup]; !ok {
 					groups[inGroup] = []string{}
@@ -255,7 +285,7 @@ func readOurRoutes(ctx context.Context) (groups map[string][]string, routes map[
 		switch {
 		case inGroup != "" && f[0] == "include" && len(f) >= 2:
 			groups[inGroup] = append(groups[inGroup], f[1])
-		case inDNSProxy && f[0] == "route" && len(f) >= 5 && f[1] == "object-group" && strings.HasPrefix(f[2], RouteGroupPrefix):
+		case inDNSProxy && f[0] == "route" && len(f) >= 5 && f[1] == "object-group" && match(f[2]):
 			routes[f[2]] = parsedRoute{iface: f[3], reject: len(f) >= 6 && f[5] == "reject"}
 		}
 	}

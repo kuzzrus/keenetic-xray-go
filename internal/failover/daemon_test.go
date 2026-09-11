@@ -214,6 +214,36 @@ func TestRecordProbe_BoundsHistory(t *testing.T) {
 	}
 }
 
+func TestRecordTransition_AttachesLastProbeReason(t *testing.T) {
+	a := &realActions{}
+	a.recordProbe(true, time.Now(), errors.New("probe request failed: dial tcp: i/o timeout"))
+	d := &Daemon{actions: a, events: make(chan Event, 1)}
+
+	d.recordTransition(StateActivePrimary, StateCooldown)
+
+	select {
+	case ev := <-d.events:
+		if ev.Detail != "таймаут" {
+			t.Errorf("Detail = %q, want таймаут", ev.Detail)
+		}
+	default:
+		t.Fatal("no event emitted")
+	}
+
+	// A transition not triggered by a probe failure (the last probe was
+	// OK) carries no Detail.
+	a.recordProbe(true, time.Now(), nil)
+	d.recordTransition(StateConfirmingRecovery, StateCooldown)
+	select {
+	case ev := <-d.events:
+		if ev.Detail != "" {
+			t.Errorf("Detail = %q, want empty after a successful probe", ev.Detail)
+		}
+	default:
+		t.Fatal("no event emitted")
+	}
+}
+
 func TestDaemon_ForceSwitchAndState_NotRunning(t *testing.T) {
 	cfg := config.Default()
 	cfg.Profiles = []config.Profile{{UUID: "u", Address: "a", Port: 443, Network: "tcp", Security: "none", Encryption: "none"}}

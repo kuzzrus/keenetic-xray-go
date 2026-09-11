@@ -147,11 +147,13 @@ func (s *Sweeper) probeProfile(ctx context.Context, p config.Profile, key string
 	if opts.RetryDelay <= 0 {
 		opts.RetryDelay = time.Second
 	}
+	start := s.now()
 	if err := s.probe(ctx, opts); err != nil {
 		r.Detail = classifyProbeErr(err)
 		return r
 	}
 	r.OK = true
+	r.LatencyMS = s.now().Sub(start).Milliseconds()
 	return r
 }
 

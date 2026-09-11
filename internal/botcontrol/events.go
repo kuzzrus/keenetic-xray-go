@@ -173,6 +173,16 @@ func backupSince(s failover.Snapshot) (time.Time, bool) {
 	return time.Time{}, false
 }
 
+// withReason appends the classified probe-failure reason in parens, if
+// there is one -- text unchanged for transitions that weren't triggered by
+// a probe failure (e.g. an operator-forced switch has no Detail).
+func withReason(text, reason string) string {
+	if reason == "" {
+		return text
+	}
+	return text + " (" + reason + ")"
+}
+
 // renderFailoverEvent turns one daemon event into a forwardable Event, or
 // reports forward=false for the transient state changes that are just
 // process narration. leftPrimaryAt is read/written across calls to time
@@ -194,7 +204,7 @@ func renderFailoverEvent(fe failover.Event, leftPrimaryAt *time.Time) (Event, bo
 	case tr.From == failover.StateActivePrimary && tr.To == failover.StateCooldown:
 		// Primary failed its live checks; production is now on backup.
 		*leftPrimaryAt = fe.At
-		return Event{Kind: "failover", Text: "⚡ " + describeTransition(tr), Time: fe.At}, true
+		return Event{Kind: "failover", Text: "⚡ " + withReason(describeTransition(tr), fe.Detail), Time: fe.At}, true
 
 	case tr.From == failover.StateConfirmingRecovery && tr.To == failover.StateCooldown:
 		// Primary came back and held the live confirmation.
@@ -207,7 +217,7 @@ func renderFailoverEvent(fe failover.Event, leftPrimaryAt *time.Time) (Event, bo
 
 	case tr.From == failover.StateConfirmingRecovery && tr.To == failover.StateActiveBackup:
 		// Recovery attempt failed the live confirmation; staying on backup.
-		return Event{Kind: "failover", Text: "⚡ " + describeTransition(tr), Time: fe.At}, true
+		return Event{Kind: "failover", Text: "⚡ " + withReason(describeTransition(tr), fe.Detail), Time: fe.At}, true
 
 	default:
 		// TestingRecovery / ConfirmingRecovery entry, the post-recovery

@@ -21,7 +21,8 @@ type Result struct {
 	Key       string    `json:"key"`    // config.Profile.ImportKey()
 	Remark    string    `json:"remark"` // display name at sweep time
 	OK        bool      `json:"ok"`
-	Detail    string    `json:"detail,omitempty"` // short failure class, when !OK
+	LatencyMS int64     `json:"latency_ms,omitempty"` // round-trip of the successful probe; 0/absent when !OK
+	Detail    string    `json:"detail,omitempty"`     // short failure class, when !OK
 	CheckedAt time.Time `json:"checked_at"`
 }
 
@@ -82,11 +83,14 @@ func StatusLines(s State, now time.Time) string {
 	for _, r := range rs {
 		mark := "✅"
 		extra := ""
-		if !r.OK {
+		switch {
+		case !r.OK:
 			mark = "⚠️"
 			if r.Detail != "" {
 				extra = "  " + r.Detail
 			}
+		case r.LatencyMS > 0:
+			extra = fmt.Sprintf("  %dмс", r.LatencyMS)
 		}
 		out += fmt.Sprintf("\n  %s %s%s", mark, r.Remark, extra)
 	}

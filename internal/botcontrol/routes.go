@@ -115,6 +115,36 @@ func (h *RouterHandler) routesShow(ctx context.Context, args []string) (string, 
 	return strings.TrimRight(b.String(), "\n"), nil
 }
 
+// routesManual reports the operator's own domain-route lists on the
+// router -- anything without RouteGroupPrefix, i.e. built by hand in the
+// Keenetic web UI rather than through keenetic-xray. Read-only: there's
+// no config-side counterpart to compare against, unlike routesShow.
+func (h *RouterHandler) routesManual(ctx context.Context) (string, error) {
+	if !keenetic.Available() {
+		return "", fmt.Errorf("ndmc недоступен — эта команда работает только на роутере Keenetic")
+	}
+	lr, err := keenetic.ShowManualRoutes(ctx)
+	if err != nil {
+		return "", err
+	}
+	if len(lr) == 0 {
+		return "на роутере нет других списков доменной маршрутизации, кроме сделанных через keenetic-xray.", nil
+	}
+	var b strings.Builder
+	b.WriteString("Списки, добавленные не через keenetic-xray (только чтение):\n")
+	for _, r := range lr {
+		iface := "не маршрутизируется"
+		if r.Iface != "" {
+			iface = "→ " + r.Iface
+			if r.Reject {
+				iface += " reject"
+			}
+		}
+		fmt.Fprintf(&b, "\n📁 %s · %d записей · %s", r.Group, len(r.Entries), iface)
+	}
+	return strings.TrimRight(b.String(), "\n"), nil
+}
+
 func (h *RouterHandler) listForGroup(group string) *config.RouteList {
 	for i := range h.Config.Routing.Lists {
 		if keenetic.RouteGroupPrefix+config.SanitizeRouteListName(h.Config.Routing.Lists[i].Name) == group {

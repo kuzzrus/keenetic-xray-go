@@ -1,0 +1,142 @@
+name: Naive-core build
+
+# Manually-triggered mirror of klzgrad/naiveproxy's prebuilt `naive`
+# client for the two router architectures, re-hosted under this repo's
+# own releases so naivecore.Ensure has a known-good binary to fetch --
+# naive isn't in any Entware feed and this project doesn't compile it
+# (see docs/HANDOFF-naive.md and packaging/naive-core/README.md).
+# Produces, per arch:
+#   naive-<ver>-linux-<goarch>          UPX-packed, runs directly
+#   naive-<ver>-linux-<goarch>.xz       plain xz of the unpacked binary (fallback if UPX won't exec on a given router)
+#   *.sha256                            checksums for both, as downloaded/packed by this workflow
+#   naive-<ver>-linux-<goarch>.provenance.txt
+# All uploaded to a release tagged  naive-core/<ver>  (separate from the
+# keenetic-xray and xray-core release lines). BSD-3-Clause (Chromium) --
+# redistribution is fine, the provenance file records exactly what was
+# fetched from where.
+
+on:
+  workflow_dispatch:
+    inputs:
+      naive_version:
+        description: "klzgrad/naiveproxy release tag to mirror (e.g. v150.0.7871.63-1). The pin (packaging/naive-core/version) decides what naivecore.PinnedVersion fetches by default."
+        required: true
+        default: v150.0.7871.63-1
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create or reuse the naive-core/<ver> release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: naive-core/${{ inputs.naive_version }}
+          VER: ${{ inputs.naive_version }}
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && exit 0
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --title "naive $VER (mirrored)" \
+            --notes "Mirrored klzgrad/naiveproxy $VER naive client, re-packaged for keenetic-xray's router targets. Upstream: https://github.com/klzgrad/naiveproxy/releases/tag/$VER — BSD-3-Clause (Chromium). See each asset's .provenance.txt."
+
+  mirror:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goarch: arm64
+            upstream_target: openwrt-aarch64_generic-static
+            upx: "--lzma"
+          - goarch: mipsle
+            upstream_target: openwrt-mipsel_24kc-static
+            upx: "" # NRV, not LZMA: UPX's LZMA path doesn't cover mips ELF
+    steps:
+      - name: Download naive ${{ inputs.naive_version }} (${{ matrix.upstream_target }})
+        env:
+          VER: ${{ inputs.naive_version }}
+          TARGET: ${{ matrix.upstream_target }}
+        run: |
+          set -eu
+          cd "$RUNNER_TEMP"
+          asset="naiveproxy-${VER}-${TARGET}.tar.xz"
+          url="https://github.com/klzgrad/naiveproxy/releases/download/${VER}/${asset}"
+          curl -fL --retry 3 -o "$asset" "$url"
+          tar -xJf "$asset"
+          mv "naiveproxy-${VER}-${TARGET}/naive" ./naive
+          chmod +x ./naive
+          {
+            echo "UPSTREAM_URL=$url"
+            echo "UPSTREAM_SHA256=$(sha256sum "$asset" | awk '{print $1}')"
+          } >> "$GITHUB_ENV"
+
+      - name: Package
+        env:
+          VER: ${{ inputs.naive_version }}
+          GOARCH: ${{ matrix.goarch }}
+          UPSTREAM_TARGET: ${{ matrix.upstream_target }}
+          UPX_FLAGS: ${{ matrix.upx }}
+        run: |
+          set -eu
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq upx-ucl xz-utils
+          cd "$RUNNER_TEMP"
+
+          base="naive-${VER}-linux-${GOARCH}"
+          sha_unpacked="$(sha256sum naive | awk '{print $1}')"
+          size_unpacked="$(wc -c < naive)"
+
+          # xz fallback: plain compress of the unpacked binary
+          xz -9 -e -k -c naive > "${base}.xz"
+
+          # UPX: primary, runs in place
+          cp naive "$base"
+          # shellcheck disable=SC2086
+          upx -9 $UPX_FLAGS "$base"
+          upx -t "$base"
+          sha_packed="$(sha256sum "$base" | awk '{print $1}')"
+
+          sha256sum "$base" "${base}.xz" > "${base}.sha256"
+
+          {
+            echo "naive ${VER}"
+            echo "upstream asset:  ${UPSTREAM_URL}"
+            echo "upstream target: ${UPSTREAM_TARGET}"
+            echo "upstream .tar.xz sha256 (as fetched by this workflow -- klzgrad publishes no per-asset checksums): ${UPSTREAM_SHA256}"
+            echo "pack:            $(upx --version | head -n1) -9 ${UPX_FLAGS}"
+            echo "size unpacked:   ${size_unpacked}"
+            echo "size packed:     $(wc -c < "$base")"
+            echo "sha256 unpacked: ${sha_unpacked}"
+            echo "sha256 packed:   ${sha_packed}"
+            echo "license:         BSD-3-Clause (Chromium) — https://github.com/klzgrad/naiveproxy/blob/master/LICENSE"
+          } > "${base}.provenance.txt"
+
+          ls -l "$base" "${base}.xz" "${base}.sha256" "${base}.provenance.txt"
+
+      - name: Smoke test under QEMU
+        env:
+          VER: ${{ inputs.naive_version }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -eu
+          sudo apt-get install -y -qq qemu-user-static
+          case "$GOARCH" in
+            arm64)  Q=qemu-aarch64-static ;;
+            mipsle) Q=qemu-mipsel-static ;;
+          esac
+          cd "$RUNNER_TEMP"
+          echo "== unpacked =="; "$Q" ./naive --version
+          echo "== packed ==";   "$Q" "./naive-${VER}-linux-${GOARCH}" --version
+
+      - name: Upload to naive-core/${{ inputs.naive_version }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: naive-core/${{ inputs.naive_version }}
+          BASE: naive-${{ inputs.naive_version }}-linux-${{ matrix.goarch }}
+        run: |
+          cd "$RUNNER_TEMP"
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            "$BASE" "${BASE}.xz" "${BASE}.sha256" "${BASE}.provenance.txt"

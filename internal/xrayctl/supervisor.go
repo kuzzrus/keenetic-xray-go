@@ -32,6 +32,7 @@ const (
 type Supervisor struct {
 	BinaryPath string
 	ConfigPath string
+	Args       []string  // explicit argv (after BinaryPath); nil -> ["run", "-c", ConfigPath] (xray's own invocation)
 	Name       string    // for logging, e.g. "production" or "pretest"
 	Stderr     io.Writer // where the child's stderr goes; nil discards it
 	Env        []string  // extra env vars for the child; nil inherits the parent's environment
@@ -140,7 +141,11 @@ func (s *Supervisor) superviseLoop(ctx context.Context, stopped chan struct{}) {
 }
 
 func (s *Supervisor) runOnce(ctx context.Context) error {
-	cmd := exec.CommandContext(ctx, s.BinaryPath, "run", "-c", s.ConfigPath)
+	args := s.Args
+	if args == nil {
+		args = []string{"run", "-c", s.ConfigPath}
+	}
+	cmd := exec.CommandContext(ctx, s.BinaryPath, args...)
 	cmd.Stderr = s.stderrOrDiscard()
 	if s.Env != nil {
 		cmd.Env = append(append([]string{}, os.Environ()...), s.Env...)

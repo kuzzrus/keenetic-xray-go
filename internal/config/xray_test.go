@@ -418,19 +418,46 @@ func TestGenerateXrayConfig_Errors(t *testing.T) {
 			t.Error("expected error for grpc network with no serviceName/path -- an empty grpcSettings.serviceName silently generates a non-functional tunnel")
 		}
 	})
-	t.Run("naive profile -- egress not wired yet", func(t *testing.T) {
+	t.Run("naive profile without a running sidecar", func(t *testing.T) {
 		// Profile.Validate() accepts a naive profile (it has no
-		// UUID/Network/Security to check), so this must be rejected here
-		// with a clear reason -- not fall through to a vless outbound
-		// built from empty fields, which would instead fail deeper with
-		// a confusing "unsupported security \"\"".
+		// UUID/Network/Security to check), so a missing SidecarSOCKS must
+		// be rejected here with a clear reason -- not fall through to a
+		// vless outbound built from empty fields, which would instead
+		// fail deeper with a confusing "unsupported security \"\"".
 		p := Profile{Protocol: "naive", Address: "n.example.com", Port: 443, User: "u", Password: "p"}
 		_, err := GenerateXrayConfig(XrayConfigOptions{SOCKSPort: 1080, Outbound: p})
 		if err == nil {
-			t.Fatal("expected an error -- naive has no xray outbound")
+			t.Fatal("expected an error -- no SidecarSOCKS was set")
 		}
 		if !strings.Contains(err.Error(), "naive") {
 			t.Errorf("error = %q, want it to name naive as the reason", err.Error())
 		}
 	})
+}
+
+func TestGenerateXrayConfig_NaiveSidecarOutbound(t *testing.T) {
+	p := Profile{Protocol: "naive", Remark: "Naive", Address: "n.example.com", Port: 8443, User: "alice", Password: "s3cret"}
+	data, err := GenerateXrayConfig(XrayConfigOptions{SOCKSPort: 1080, Outbound: p, SidecarSOCKS: 21090})
+	if err != nil {
+		t.Fatalf("GenerateXrayConfig: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	outbound := decoded["outbounds"].([]any)[0].(map[string]any)
+	if outbound["tag"] != "proxy" || outbound["protocol"] != "socks" {
+		t.Fatalf("outbound = %#v, want tag=proxy protocol=socks", outbound)
+	}
+	// Must not leak the naive server's own address/credentials into the
+	// xray config -- those live only in the sidecar's own argv.
+	settings := outbound["settings"].(map[string]any)
+	server := settings["servers"].([]any)[0].(map[string]any)
+	if server["address"] != "127.0.0.1" || server["port"] != float64(21090) {
+		t.Errorf("socks server = %#v, want 127.0.0.1:21090", server)
+	}
+	if strings.Contains(string(data), "n.example.com") || strings.Contains(string(data), "s3cret") {
+		t.Errorf("naive server address/credentials leaked into the xray config: %s", data)
+	}
 }

@@ -17,6 +17,12 @@ type XrayConfigOptions struct {
 	Outbound   Profile // the profile to route all traffic through
 	XHTTPMode  string  // "" -> keep the profile's own mode; otherwise force this xhttp mode (Config.XHTTPMode)
 
+	// SidecarSOCKS is the local port a `naive` sidecar process is
+	// listening on (internal/failover starts and owns that process; this
+	// package never launches anything). Required when Outbound.Protocol
+	// == "naive" -- ignored otherwise.
+	SidecarSOCKS int
+
 	// WG, when set, adds a `wireguard` inbound so Keenetic can carry
 	// selected LAN traffic into xray over an in-router WireGuard hop
 	// instead of (or alongside) Proxy0/SOCKS. Never set for the isolated
@@ -87,7 +93,7 @@ func GenerateXrayConfig(opts XrayConfigOptions) ([]byte, error) {
 		inbounds = append(inbounds, wgIn)
 	}
 
-	outbound, err := buildOutbound(opts.Outbound, opts.XHTTPMode)
+	outbound, err := buildOutbound(opts.Outbound, opts.XHTTPMode, opts.SidecarSOCKS)
 	if err != nil {
 		return nil, err
 	}
@@ -153,17 +159,26 @@ func wgInbound(o WGInboundOptions) (xrayInbound, error) {
 	}, nil
 }
 
-func buildOutbound(p Profile, xhttpMode string) (xrayOutbound, error) {
-	// Protocol == "naive" is stored and validated (Profile.Validate), but
-	// its egress is the naive sidecar (internal/naivecore + a process
-	// manager in internal/failover), not an xray outbound this function
-	// builds -- that wiring doesn't exist yet. Reject it clearly here
-	// rather than falling through to a vless outbound built from a
-	// profile with no UUID/Network/Security, which would instead fail
-	// deeper inside buildStreamSettings with a confusing "unsupported
-	// security \"\"".
+func buildOutbound(p Profile, xhttpMode string, sidecarSOCKS int) (xrayOutbound, error) {
+	// Protocol == "naive" doesn't speak vless at all -- its egress is a
+	// separate `naive` process (internal/naivecore + the process manager
+	// in internal/failover) that does the actual censorship-resistant
+	// HTTP/2 CONNECT hop. xray's own outbound is just a plain socks
+	// client pointed at that local sidecar; everything below this branch
+	// (vnext/UUID/streamSettings) is vless-only and does not apply.
 	if p.Protocol == "naive" {
-		return xrayOutbound{}, fmt.Errorf("profile %q: naive egress is not wired up in this build yet", p.Remark)
+		if sidecarSOCKS == 0 {
+			return xrayOutbound{}, fmt.Errorf("profile %q: naive egress requires a running sidecar (SidecarSOCKS not set)", p.Remark)
+		}
+		return xrayOutbound{
+			Tag:      "proxy",
+			Protocol: "socks",
+			Settings: map[string]any{
+				"servers": []map[string]any{
+					{"address": "127.0.0.1", "port": sidecarSOCKS},
+				},
+			},
+		}, nil
 	}
 
 	user := map[string]any{

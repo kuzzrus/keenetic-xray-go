@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +19,7 @@ import (
 // Paths are the filesystem locations the daemon reads/writes.
 type Paths struct {
 	XrayBinary       string
+	NaiveBinary      string // vendored `naive` binary; only needed when a naive profile is in play (see ensureNaiveSidecar)
 	ProductionConfig string
 	PretestConfig    string
 	Env              []string  // extra env vars for the supervised xray-core processes; nil inherits the parent's environment (test hook, see xrayctl.Supervisor.Env)
@@ -33,6 +37,13 @@ type realActions struct {
 
 	prod    *xrayctl.Supervisor
 	pretest *xrayctl.Supervisor
+
+	// prodNaive / pretestNaive are the `naive` sidecar processes backing
+	// prod/pretest when the live profile at that role is Protocol=="naive"
+	// -- nil whenever that role is on a plain vless profile. See
+	// ensureNaiveSidecar.
+	prodNaive    *xrayctl.Supervisor
+	pretestNaive *xrayctl.Supervisor
 
 	liveRole Role // the role production was last successfully switched to
 
@@ -172,6 +183,72 @@ func (a *realActions) probeTimeout() time.Duration {
 	return interval
 }
 
+// naiveProdPort / naivePretestPort are the fixed local ports the
+// production and pretest `naive` sidecars listen on -- offset from
+// PretestPort so they never collide with SOCKSPort/HTTPPort/PretestPort
+// (there's no validation guarding against a manually-configured overlap,
+// consistent with how those existing ports aren't cross-checked either).
+func (a *realActions) naiveProdPort() int    { return a.cfg.Failover.PretestPort + 2 }
+func (a *realActions) naivePretestPort() int { return a.cfg.Failover.PretestPort + 3 }
+
+// ensureNaiveSidecar reconciles a naive sidecar Supervisor against the
+// profile that's about to go live at a role: nil when p isn't a naive
+// profile (any existing sidecar is stopped), otherwise a freshly
+// (re)started Supervisor bound to port. existing, if non-nil, is always
+// stopped first -- like a.prod.Restart() for the xray process itself, a
+// role/profile change here is a deliberate interruption, not a seamless
+// handover: port is fixed per role, so an old and a new sidecar can never
+// both be bound to it at once, and every other apply in this file (prod,
+// pretest) already works the same stop-then-start way.
+func (a *realActions) ensureNaiveSidecar(existing *xrayctl.Supervisor, p *config.Profile, port int, name string) (*xrayctl.Supervisor, error) {
+	if existing != nil {
+		existing.Stop()
+	}
+	if p == nil || p.Protocol != "naive" {
+		return nil, nil
+	}
+	if a.paths.NaiveBinary == "" {
+		return nil, fmt.Errorf("naive sidecar binary not configured")
+	}
+	if _, err := os.Stat(a.paths.NaiveBinary); err != nil {
+		return nil, fmt.Errorf("naive binary not found at %s -- run `keenetic-xray internal ensure-naive-core`: %w", a.paths.NaiveBinary, err)
+	}
+
+	proxyURL := (&url.URL{
+		Scheme: "https",
+		User:   url.UserPassword(p.User, p.Password),
+		Host:   net.JoinHostPort(p.Address, strconv.Itoa(p.Port)),
+	}).String()
+	sup := &xrayctl.Supervisor{
+		BinaryPath: a.paths.NaiveBinary,
+		Args: []string{
+			"--listen=socks://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(port)),
+			"--proxy=" + proxyURL,
+			"--log",
+		},
+		Name:   name,
+		Env:    a.paths.Env,
+		Stderr: a.paths.XrayStderr,
+	}
+	if err := sup.Start(); err != nil {
+		return nil, fmt.Errorf("starting naive sidecar: %w", err)
+	}
+	return sup, nil
+}
+
+// stopProdNaive tears down the production naive sidecar, if any. A
+// separate method (rather than a bare field deref) so Daemon.Run's
+// shutdown defer, evaluated at defer-statement time but executed at
+// Run-return time, reads whatever a.prodNaive was most recently
+// (re)assigned to by SwitchLiveTo -- not whatever it was when the defer
+// was registered.
+func (a *realActions) stopProdNaive() {
+	if a.prodNaive != nil {
+		a.prodNaive.Stop()
+		a.prodNaive = nil
+	}
+}
+
 func (a *realActions) SwitchLiveTo(ctx context.Context, role Role) error {
 	profile := a.cfg.Primary()
 	if role == RoleBackup {
@@ -179,6 +256,16 @@ func (a *realActions) SwitchLiveTo(ctx context.Context, role Role) error {
 	}
 	if profile == nil {
 		return fmt.Errorf("no %s profile configured", role)
+	}
+
+	naive, err := a.ensureNaiveSidecar(a.prodNaive, profile, a.naiveProdPort(), "naive-production")
+	if err != nil {
+		return fmt.Errorf("naive sidecar: %w", err)
+	}
+	a.prodNaive = naive
+	sidecarPort := 0
+	if naive != nil {
+		sidecarPort = a.naiveProdPort()
 	}
 
 	// When Proxy0 or the WG transport is enabled the production inbound
@@ -190,12 +277,13 @@ func (a *realActions) SwitchLiveTo(ctx context.Context, role Role) error {
 		listen = "0.0.0.0"
 	}
 	data, err := config.GenerateXrayConfig(config.XrayConfigOptions{
-		SOCKSPort:  a.cfg.Failover.SOCKSPort,
-		HTTPPort:   a.cfg.Failover.HTTPPort,
-		ListenHost: listen,
-		Outbound:   *profile,
-		XHTTPMode:  a.cfg.XHTTPMode,
-		WG:         wgInboundOpts(a.cfg),
+		SOCKSPort:    a.cfg.Failover.SOCKSPort,
+		HTTPPort:     a.cfg.Failover.HTTPPort,
+		ListenHost:   listen,
+		Outbound:     *profile,
+		XHTTPMode:    a.cfg.XHTTPMode,
+		WG:           wgInboundOpts(a.cfg),
+		SidecarSOCKS: sidecarPort,
 	})
 	if err != nil {
 		return fmt.Errorf("generating production config: %w", err)
@@ -217,10 +305,21 @@ func (a *realActions) StartIsolatedPretest(ctx context.Context) error {
 		return fmt.Errorf("no primary profile configured")
 	}
 
+	naive, err := a.ensureNaiveSidecar(a.pretestNaive, primary, a.naivePretestPort(), "naive-pretest")
+	if err != nil {
+		return fmt.Errorf("naive sidecar: %w", err)
+	}
+	a.pretestNaive = naive
+	sidecarPort := 0
+	if naive != nil {
+		sidecarPort = a.naivePretestPort()
+	}
+
 	data, err := config.GenerateXrayConfig(config.XrayConfigOptions{
-		SOCKSPort: a.cfg.Failover.PretestPort,
-		Outbound:  *primary,
-		XHTTPMode: a.cfg.XHTTPMode,
+		SOCKSPort:    a.cfg.Failover.PretestPort,
+		Outbound:     *primary,
+		XHTTPMode:    a.cfg.XHTTPMode,
+		SidecarSOCKS: sidecarPort,
 	})
 	if err != nil {
 		return fmt.Errorf("generating pretest config: %w", err)
@@ -246,6 +345,10 @@ func (a *realActions) StopIsolatedPretest(ctx context.Context) error {
 	if a.pretest != nil {
 		a.pretest.Stop()
 		a.pretest = nil
+	}
+	if a.pretestNaive != nil {
+		a.pretestNaive.Stop()
+		a.pretestNaive = nil
 	}
 	return nil
 }
@@ -598,6 +701,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return fmt.Errorf("starting production instance: %w", err)
 	}
 	defer d.actions.prod.Stop()
+	defer d.actions.stopProdNaive()
 	d.emit(Event{At: time.Now(), Kind: EventDaemonStart})
 
 	// Single-profile mode: no backup (or backup == primary) -> just keep

@@ -212,8 +212,11 @@ Mirror `internal/xraycore` (read it first — `xraycore.go` is 283 lines), but
 ### Risks / verify on hardware
 
 1. **mipsel `naive` actually starts on Keenetic MIPS** (MediaTek/Realtek
-   mips32 LE). The `-static` openwrt build removes the libc question but it
-   needs a live-router test — mark unverified until the user confirms.
+   mips32 LE). The `-static` openwrt build removes the libc question, and
+   both arches now smoke-test clean under **QEMU** user-mode emulation
+   (`naive-core.yml`, run for `v150.0.7871.63-1` -- see section 7). QEMU is
+   not the real thing, though -- still needs a live-router test before this
+   risk is closed.
 2. RSS budget on small routers (above).
 3. v1 = `https://` proxy (h2, TCP) only. `quic://` needs open UDP egress — defer.
 4. `xrayctl.Supervisor` is `-c <config>`-bound — needs an args mode or a sibling.
@@ -255,28 +258,54 @@ Mirror `internal/xraycore` (read it first — `xraycore.go` is 283 lines), but
 - **Not in xray-core** (`XTLS/Xray-core/main/distro/all/all.go` registers
   vless/vmess/trojan/shadowsocks/wireguard/socks/http — no naive, no hysteria2).
 
-## 7. Current position
+## 7. Current position (updated 2026-09-12)
 
-- `main` @ `7e3d4b3` (v0.27.2). Clean working tree, no open PRs.
-- Branch `feat/naive-profile-fields` exists locally with **zero commits / zero
-  changes** — safe to `git branch -D` it and start fresh from `main`, or reuse.
-- Nothing Naive-related written yet. **Start with PR 1a.**
+- **PR 1a done — #129, released as v0.28.6.** `config.Profile.Protocol`/`User`/
+  `Password`, `Validate()` split into `validateVLESS`/`validateNaive`,
+  `ImportKey()` folds in Protocol, `Redacted()` masks User/Password,
+  `internal/config/naiveuri.go` `ParseNaiveURI`. Inert -- nothing calls it yet.
+- **PR 1b done — #130, released as v0.28.7.** `internal/naivecore` (mirrors
+  `xraycore`'s Ensure shape, no opkg fallback, no version-drift auto-upgrade),
+  `.github/workflows/naive-core.yml`, `keenetic-xray internal ensure-naive-core
+  [--force]`, `packaging/naive-core/{version,README.md}`.
+  **The mirror workflow has been run for real** for `v150.0.7871.63-1` and
+  succeeded on the first try -- both arches mirrored, UPX-packed (arm64
+  12.2MB→3.3MB; mipsle 13.9MB→4.9MB), and **QEMU-smoke-tested `naive --version`
+  successfully**. Release `naive-core/v150.0.7871.63-1` exists with both
+  binaries + `.xz` fallbacks + `.sha256` + `.provenance.txt`. This is
+  QEMU-verified, not yet confirmed on real Keenetic hardware -- risk #1 in
+  section 4 above still stands.
+- `main` is past `7e3d4b3` -- don't rely on that commit hash below; check
+  `git log --oneline -5` and `gh pr list --state open`.
+- **Next: PR 2** -- the sidecar lifecycle in `internal/failover` (see section
+  4's "PR 2" breakdown above, unchanged). Nothing else Naive-related is
+  pending; start there.
 
-## 8. First concrete steps
+## 8. First concrete steps (for PR 2)
 
 ```bash
 git checkout main && git pull
-git checkout -b feat/naive-profile   # or reuse feat/naive-profile-fields
+git checkout -b feat/naive-sidecar
 ```
-1. Add `Protocol` / `User` / `Password` to `config.Profile` (struct + json tags).
-2. Make `Profile.Validate()` branch on `Protocol` (naive: address/port/user/password).
-3. `Profile.ImportKey()` — prepend the protocol.
-4. `Config.Redacted()` — mask `User` + `Password` in the profile loop.
-5. `internal/config/naiveuri.go` — `ParseNaiveURI`, modelled on `vlessuri.go`.
-6. Tests: `naiveuri_test.go`; extend `profile_test.go` (`TestProfileImportKey`,
-   `TestProfileValidate`, `TestRedacted`) with `Protocol:"naive"` cases.
-7. `go build ./... && go vet ./... && go test ./internal/config/`
-8. PR. Green CI → merge. Then PR 1b (`internal/naivecore`), then PR 2.
+1. Read `internal/failover/daemon.go` fresh (`StartIsolatedPretest`,
+   `SwitchLiveTo`, `realActions`, `Paths`) -- it's the file PR 2 touches most,
+   and it may have changed since this brief was written.
+2. Add `config.XrayConfigOptions.SidecarSOCKS int`; in
+   `internal/config/xray.go` `buildOutbound`, branch on `p.Protocol=="naive"`
+   -> a `socks` outbound to `127.0.0.1:<SidecarSOCKS>`. Reject
+   `SidecarSOCKS==0` for a naive profile with a clear error.
+3. Give `xrayctl.Supervisor` an args-only mode (naive takes flags, no `-c
+   <config>`), or write a thin sibling supervisor for it.
+4. Wire naive start/stop into `SwitchLiveTo` (production, `PretestPort+2`),
+   `StartIsolatedPretest` (pretest, `PretestPort+3`), and `internal/health`'s
+   sweep (`PretestPort+4`).
+5. `subscription.Parse` (`internal/subscription/parse.go`) -- stop skipping
+   `naive+https://` lines, route to `config.ParseNaiveURI`.
+6. `status`/`doctor` -- an "egress: naive → host (сайдкар ✅/⚠️)" line.
+7. Tests: config-gen naive branch, sidecar lifecycle with a fake supervisor,
+   a failover cycle with a naive backup.
+8. `go build ./... && go vet ./... && go test ./...`
+9. PR. Green CI → merge.
 
-Ask the user (they respond in Russian) before running the `naive-core`
-workflow — it creates a public `naive-core/<ver>` release.
+The `naive-core` mirror workflow has already been run for `v150.0.7871.63-1`
+(see section 7) -- no need to run it again unless bumping the pinned version.

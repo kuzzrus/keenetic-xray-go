@@ -32,8 +32,10 @@ var (
 // is present and lets it be installed/removed like any other component.
 type naiveCoreAddon struct{}
 
-func (naiveCoreAddon) ID() string    { return "naive-core" }
-func (naiveCoreAddon) Title() string { return "naive-core — бинарь для egress-сайдкара NaiveProxy" }
+func (naiveCoreAddon) ID() string { return "naive-core" }
+func (naiveCoreAddon) Title() string {
+	return "naive-core — бинарь для egress-сайдкара NaiveProxy"
+}
 
 func (naiveCoreAddon) About() string {
 	return "Клиент NaiveProxy (klzgrad/naiveproxy) -- отдельный процесс, через который идёт " +

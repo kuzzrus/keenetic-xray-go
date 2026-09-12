@@ -308,16 +308,37 @@ DNS warm-up). `cmd/keenetic-xray/routes.go` is the same logic as a CLI.
 
 `🧩 Ядро xray` (`corem:`) opens a screen with `⬆️ Переустановить текущий
 пин` (`coreup:`), `✅ Стабильное <DefaultTag>` (`corestable:`), and --
-only when `xraycore.PrereleaseTag` is non-empty -- `🧪 Пререлиз <tag>`
-(`corepre:`). Each enqueues `update_core` with `""` / `"stable"` / the
-tag. `update_core` force-replaces the core binary (from our
-`xray-core/<tag>` releases, `Prefer: vendored` so a missing asset errors
-rather than substituting an Entware build), persists the chosen tag to
-`config.xray_core_tag` *after* a successful fetch, then `rebindXray`s so
-the supervised xray restarts onto the new binary. `ensure_core` stays
-the separate "there's no working core, repair it" path. The button
-labels carry the tag strings because `xraycore` is already a botcontrol
-dependency (status/doctor use `xraycore.Version`).
+when a prerelease tag is on offer -- `🧪 Пререлиз <tag>` (`corepre:<id>:<tag>`,
+the tag riding in the callback data itself, not re-read from a constant
+at click time). That tag comes from `TelegramBot.livePrereleaseTag`
+(`telegram_menu.go`): a live GitHub-releases lookup via `UpdateChecker`
+(`internal/updatecheck`, cached ~1h -- GitHub's unauthenticated API is
+60 req/hour) for the newest mirrored `xray-core/<tag>` release actually
+newer than `DefaultTag`, falling back to the compiled
+`xraycore.PrereleaseTag` if there's no checker configured, the lookup
+fails/times out (5s bound), or nothing mirrored beats the stable pin.
+This exists because the compiled constant only moves when the control
+server itself is redeployed, while a new tag can be mirrored (via
+`xray-core.yml`) at any time -- see [[naive-sidecar-plan]]'s sibling
+note in memory for the incident that prompted it. Each button enqueues
+`update_core` with `""` / `"stable"` / the tag. `update_core`
+force-replaces the core binary (from our `xray-core/<tag>` releases,
+`Prefer: vendored` so a missing asset errors rather than substituting an
+Entware build), persists the chosen tag to `config.xray_core_tag` *after*
+a successful fetch, then `rebindXray`s so the supervised xray restarts
+onto the new binary. `ensure_core` stays the separate "there's no
+working core, repair it" path.
+
+`AppUpdateWatcher` (`updatewatch.go`) is a second, independent consumer
+of the same `UpdateChecker`: hourly, it compares `LatestAppVersion()`
+against the control server's own `version.Version` and against every
+registered router's last-reported agent version (parsed from the first
+line of its heartbeat's rendered status text, `"agent: vX.Y.Z (commit)"`
+-- see `agentVersionFromStatus`), and DMs every allowed chat
+(`NotifyAppUpdate`) the first time either is found behind -- never
+repeatedly for the same target version, but again if an even newer
+release supersedes one already announced. Mirrors `OfflineWatcher`'s
+shape (`Store` + ticker + edge-triggered `Notify`) one file up.
 
 `➕ Добавить роутер` starts a two-step text dialog (`telegram_wizard.go`):
 id, then display name. `✏️ Переименовать` (or `/rename <id> <name>`) is

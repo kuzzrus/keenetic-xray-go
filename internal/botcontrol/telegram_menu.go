@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kuzzrus/keenetic-xray-go/internal/updatecheck"
 	"github.com/kuzzrus/keenetic-xray-go/internal/xraycore"
 )
 
@@ -166,23 +167,46 @@ func wgTransportScreenKB(id string) inlineKeyboard {
 	}}
 }
 
-func coreScreenText(id string) string {
+// livePrereleaseTag returns the newest xray-core tag this project has
+// actually mirrored and could serve right now -- live from GitHub via
+// b.UpdateChecker -- so the offer doesn't lag behind whatever
+// xraycore.PrereleaseTag happened to be compiled into this particular
+// control-server build (that pin only updates when the control server
+// itself is redeployed, while a new tag can be mirrored at any time).
+// Falls back to the compiled xraycore.PrereleaseTag when there's no
+// checker configured, the live check fails (GitHub unreachable or
+// rate-limited) or times out, or nothing mirrored is actually newer
+// than the stable pin -- so the screen never breaks or goes blank over
+// this, worst case it's exactly as stale as before this existed.
+func (b *TelegramBot) livePrereleaseTag(ctx context.Context) string {
+	if b.UpdateChecker != nil {
+		cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		tag, err := b.UpdateChecker.LatestXrayCoreTag(cctx)
+		cancel()
+		if err == nil && tag != "" && updatecheck.CompareVersions(tag, xraycore.DefaultTag) > 0 {
+			return tag
+		}
+	}
+	return xraycore.PrereleaseTag
+}
+
+func coreScreenText(id, pre string) string {
 	s := "🧩 Ядро xray " + id + "\n\n" +
 		"Обновляет бинарь xray-core на роутере из наших сборок и перезапускает xray. " +
 		"Скачивается во временный файл и проверяется до подмены — рабочее ядро битой закачкой не затрётся.\n\n" +
 		"Стабильное ядро (" + xraycore.DefaultTag + ") — по умолчанию. Текущий пин виден в 📊 Статус."
-	if xraycore.PrereleaseTag != "" {
-		s += "\n" + xraycore.PrereleaseTag + " — пререлиз upstream: новее, но менее обкатан."
+	if pre != "" {
+		s += "\n" + pre + " — пререлиз upstream: новее, но менее обкатан."
 	}
 	return s
 }
 
-func coreScreenKB(id string) inlineKeyboard {
+func coreScreenKB(id, pre string) inlineKeyboard {
 	rows := [][]inlineButton{
 		{{Text: "⬆️ Переустановить текущий пин", CallbackData: "coreup:" + id}},
 	}
-	if xraycore.PrereleaseTag != "" {
-		rows = append(rows, []inlineButton{{Text: "🧪 Пререлиз " + xraycore.PrereleaseTag, CallbackData: "corepre:" + id}})
+	if pre != "" {
+		rows = append(rows, []inlineButton{{Text: "🧪 Пререлиз " + pre, CallbackData: "corepre:" + id + ":" + pre}})
 	}
 	rows = append(rows,
 		[]inlineButton{{Text: "✅ Стабильное " + xraycore.DefaultTag, CallbackData: "corestable:" + id}},
@@ -361,11 +385,18 @@ func (b *TelegramBot) handleCallback(ctx context.Context, cb tgCallbackQuery) {
 			b.editCB(ctx, cb, "нет такого роутера: "+id, b.routersListKB())
 			return
 		}
-		b.editCB(ctx, cb, coreScreenText(id), coreScreenKB(id))
+		pre := b.livePrereleaseTag(ctx)
+		b.editCB(ctx, cb, coreScreenText(id, pre), coreScreenKB(id, pre))
 	case strings.HasPrefix(data, "coreup:"):
 		b.enqueueCardArgs(ctx, cb, strings.TrimPrefix(data, "coreup:"), ActionUpdateCore, nil)
 	case strings.HasPrefix(data, "corepre:"):
-		b.enqueueCardArgs(ctx, cb, strings.TrimPrefix(data, "corepre:"), ActionUpdateCore, []string{xraycore.PrereleaseTag})
+		rest := strings.TrimPrefix(data, "corepre:")
+		id, tag, ok := strings.Cut(rest, ":")
+		if !ok || tag == "" {
+			b.editCB(ctx, cb, "плохая кнопка", mainMenuKB())
+			return
+		}
+		b.enqueueCardArgs(ctx, cb, id, ActionUpdateCore, []string{tag})
 	case strings.HasPrefix(data, "corestable:"):
 		b.enqueueCardArgs(ctx, cb, strings.TrimPrefix(data, "corestable:"), ActionUpdateCore, []string{"stable"})
 	case strings.HasPrefix(data, "dn") && b.handleDNSCallback(ctx, cb, data):

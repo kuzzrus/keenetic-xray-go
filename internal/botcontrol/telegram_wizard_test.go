@@ -1,11 +1,14 @@
 package botcontrol
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/kuzzrus/keenetic-xray-go/internal/updatecheck"
 	"github.com/kuzzrus/keenetic-xray-go/internal/xraycore"
 )
 
@@ -377,6 +380,80 @@ func TestTelegramBot_CoreScreen(t *testing.T) {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// fakeXrayCoreReleaseServer serves a GitHub-releases-shaped response
+// naming a single mirrored xray-core/<tag> release, for
+// TelegramBot.livePrereleaseTag's live-check path.
+func fakeXrayCoreReleaseServer(t *testing.T, tag string) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"tag_name":"xray-core/` + tag + `","draft":false}]`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+func TestTelegramBot_CoreScreen_LiveTagOverridesCompiledPin(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	mustRegister(t, store, "r1")
+
+	liveTag := "v99.9.9" // deliberately far newer than both DefaultTag and the compiled PrereleaseTag
+	bot := &TelegramBot{
+		Token: "t", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL, ResultTimeout: 2 * time.Second,
+		UpdateChecker: &updatecheck.Checker{BaseURL: fakeXrayCoreReleaseServer(t, liveTag)},
+	}
+	runBotInBackground(t, bot)
+
+	fake.push(1, "/menu")
+	fake.waitForReply(t, 3*time.Second)
+	msgID := fake.lastSent(t).MessageID
+
+	fake.pushCallback(1, msgID, "corem:r1")
+	fake.waitForEditContaining(t, 3*time.Second, liveTag)
+
+	// The button itself must carry the live tag through to update_core,
+	// not silently fall back to the compiled constant at click time.
+	fake.pushCallback(1, msgID, "corepre:r1:"+liveTag)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if cmd, _ := store.Dequeue("r1"); cmd != nil {
+			if cmd.Action != ActionUpdateCore || len(cmd.Args) != 1 || cmd.Args[0] != liveTag {
+				t.Errorf("dequeued = %q %v, want update_core [%s]", cmd.Action, cmd.Args, liveTag)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("update_core was never queued")
+}
+
+func TestTelegramBot_CoreScreen_FallsBackWhenLiveTagNotNewer(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	mustRegister(t, store, "r1")
+
+	// The live check "succeeds" but only turns up the stable pin itself
+	// -- nothing actually newer to offer, so the screen must fall back
+	// to the compiled PrereleaseTag rather than silently offering
+	// DefaultTag as if it were a prerelease.
+	bot := &TelegramBot{
+		Token: "t", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL, ResultTimeout: 2 * time.Second,
+		UpdateChecker: &updatecheck.Checker{BaseURL: fakeXrayCoreReleaseServer(t, xraycore.DefaultTag)},
+	}
+	runBotInBackground(t, bot)
+
+	fake.push(1, "/menu")
+	fake.waitForReply(t, 3*time.Second)
+	msgID := fake.lastSent(t).MessageID
+
+	fake.pushCallback(1, msgID, "corem:r1")
+	edit := fake.waitForEditContaining(t, 3*time.Second, "Ядро xray")
+	if xraycore.PrereleaseTag != "" && !strings.Contains(edit, xraycore.PrereleaseTag) {
+		t.Errorf("expected the compiled PrereleaseTag %s as a fallback, got:\n%s", xraycore.PrereleaseTag, edit)
 	}
 }
 

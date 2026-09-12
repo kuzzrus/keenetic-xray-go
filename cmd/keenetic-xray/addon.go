@@ -10,8 +10,9 @@ import (
 )
 
 // cmdAddon drives the optional router-side components (unbound, nfqws2,
-// conntrack, cron) through internal/addons. The bot's 🧩 Дополнения
-// screen calls the same package, so CLI and bot behave identically.
+// conntrack, cron, naive-core) through internal/addons. The bot's 🧩
+// Дополнения screen calls the same package, so CLI and bot behave
+// identically.
 func cmdAddon(args []string) error {
 	if len(args) == 0 {
 		args = []string{"list"}

@@ -18,10 +18,10 @@ func TestRouterHandler_AddonList(t *testing.T) {
 		t.Fatalf("addon_list: %v", err)
 	}
 	lines := strings.Split(strings.Trim(out, "\n"), "\n")
-	if len(lines) != 5 {
-		t.Fatalf("addon_list returned %d lines, want 5:\n%s", len(lines), out)
+	if len(lines) != 6 {
+		t.Fatalf("addon_list returned %d lines, want 6:\n%s", len(lines), out)
 	}
-	wantIDs := []string{"unbound", "dnscrypt", "nfqws2", "conntrack", "cron"}
+	wantIDs := []string{"unbound", "dnscrypt", "nfqws2", "conntrack", "cron", "naive-core"}
 	for i, ln := range lines {
 		f := strings.Split(ln, "\t")
 		if len(f) != 6 {

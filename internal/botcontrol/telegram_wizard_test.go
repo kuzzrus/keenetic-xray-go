@@ -174,6 +174,48 @@ func TestTelegramBot_SlotSourceWizard_PrimaryFromLink(t *testing.T) {
 	}
 }
 
+// TestTelegramBot_SlotSourceWizard_BackupFromNaiveLink is the regression
+// test for a real bug: this wizard's own prefix check (independent of --
+// and, until now, out of sync with -- config.ParseProfileURI on the
+// router side) only allowed vless:// and http(s)://, so a pasted
+// naive+https:// link was rejected right here in the control server,
+// before ever reaching the router where naive is actually understood.
+func TestTelegramBot_SlotSourceWizard_BackupFromNaiveLink(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	mustRegister(t, store, "r1")
+	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL, ResultTimeout: 2 * time.Second}
+	runBotInBackground(t, bot)
+
+	rec := &recorder{}
+	fakeAgent(t, store, "r1", func(action string) string {
+		rec.add(action)
+		if action == ActionSetBackupSource {
+			return "backup ← Naive-1"
+		}
+		return "ok"
+	})
+
+	fake.push(1, "/menu")
+	fake.waitForReply(t, 3*time.Second)
+	msgID := fake.lastSent(t).MessageID
+
+	// 🔗 Источники -> ⬇️ Резервная -> paste a naive+https:// link.
+	fake.pushCallback(1, msgID, "srcm:r1")
+	fake.waitForEditContaining(t, 3*time.Second, "Источники r1")
+	fake.pushCallback(1, msgID, "srcb:r1")
+	waitSent(t, fake, 3*time.Second, "Источник для резервной")
+
+	fake.push(1, "naive+https://alice:s3cret@n.example.com:8443#Naive-1")
+	got := waitSent(t, fake, 4*time.Second, "backup ← Naive-1")
+	if got == "" {
+		t.Fatal("no confirmation -- naive+https:// link was rejected instead of forwarded")
+	}
+	if !rec.has(ActionSetBackupSource) {
+		t.Errorf("router did not receive set_backup_source, saw %v", rec.list())
+	}
+}
+
 func TestTelegramBot_PortsWizard(t *testing.T) {
 	srv, fake := newFakeTelegram(t)
 	store := newBotStore(t)

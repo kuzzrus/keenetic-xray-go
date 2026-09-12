@@ -10,17 +10,18 @@ import (
 )
 
 // The 🧩 Дополнения screen manages optional router-side components
-// (unbound, nfqws2, conntrack, cron) through the addon_* actions, which
-// on the router run internal/addons -- the same package `keenetic-xray
-// addon …` uses. Opening the screen asks the router for addon_list (a
-// TSV of id/title/installed/running/version/detail) and renders one
-// button per component; the per-component screen offers install /
+// (unbound, nfqws2, conntrack, cron, naive-core) through the addon_*
+// actions, which on the router run internal/addons -- the same package
+// `keenetic-xray addon …` uses. Opening the screen asks the router for
+// addon_list (a TSV of id/title/installed/running/version/detail) and
+// renders one button per component -- including any future addon, with
+// no changes needed here -- the per-component screen offers install /
 // remove / configure / status.
 
 const addonsBlurb = "🧩 Дополнения %s\n\n" +
 	"Необязательные компоненты рядом с keenetic-xray: локальный DNS (unbound), " +
-	"обход DPI на прямом трафике (nfqws2), пакеты conntrack и cron. Ставятся и " +
-	"настраиваются здесь же.\n\n%s"
+	"обход DPI на прямом трафике (nfqws2), бинарь для naive-сайдкара (naive-core), " +
+	"пакеты conntrack и cron. Ставятся и настраиваются здесь же.\n\n%s"
 
 // addonRow is one parsed line of ActionAddonList output.
 type addonRow struct {

@@ -30,6 +30,26 @@ func naiveProfile(remark string) config.Profile {
 	}
 }
 
+// waitUntil polls cond until it's true or timeout elapses. Supervisor.Start
+// (internal/xrayctl) returns as soon as its supervising goroutine is
+// launched, before that goroutine has necessarily reached the point of
+// recording the child process -- so Running() can still read false for a
+// moment right after Start() returns. Same pattern as xrayctl's own test
+// helper of the same name (a plain immediate check flaked under CI's
+// -race, which slows and reorders goroutine scheduling enough to make
+// that window land).
+func waitUntil(t *testing.T, timeout time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("condition not met within %v", timeout)
+}
+
 // TestMain lets `go test` re-exec the test binary itself as a stand-in
 // for the xray binary Daemon supervises via xrayctl.Supervisor -- avoids
 // needing a real xray-core binary in CI. Mirrors the pattern in
@@ -162,9 +182,10 @@ func TestDaemon_Run_SingleNaiveProfile(t *testing.T) {
 	if snap.State != StateActivePrimary || snap.LiveRole != RolePrimary {
 		t.Errorf("single-profile: State=%v LiveRole=%v, want ACTIVE_PRIMARY/primary", snap.State, snap.LiveRole)
 	}
-	if d.actions.prodNaive == nil || !d.actions.prodNaive.Running() {
-		t.Fatal("expected a running naive sidecar for the naive primary profile")
+	if d.actions.prodNaive == nil {
+		t.Fatal("expected a naive sidecar for the naive primary profile")
 	}
+	waitUntil(t, time.Second, d.actions.prodNaive.Running)
 
 	cancel()
 	select {
@@ -207,9 +228,10 @@ func TestRealActions_SwitchLiveTo_NaiveProfile_StartsSidecarAndPointsXrayAtIt(t 
 	if err := a.SwitchLiveTo(context.Background(), RolePrimary); err != nil {
 		t.Fatalf("SwitchLiveTo: %v", err)
 	}
-	if a.prodNaive == nil || !a.prodNaive.Running() {
-		t.Fatal("expected a running naive sidecar for a naive primary profile")
+	if a.prodNaive == nil {
+		t.Fatal("expected a naive sidecar for a naive primary profile")
 	}
+	waitUntil(t, time.Second, a.prodNaive.Running)
 
 	data, err := os.ReadFile(paths.ProductionConfig)
 	if err != nil {
@@ -338,9 +360,10 @@ func TestRealActions_StartIsolatedPretest_NaiveProfile(t *testing.T) {
 	if err := a.StartIsolatedPretest(context.Background()); err != nil {
 		t.Fatalf("StartIsolatedPretest: %v", err)
 	}
-	if a.pretestNaive == nil || !a.pretestNaive.Running() {
-		t.Fatal("expected a running naive sidecar for the pretest instance")
+	if a.pretestNaive == nil {
+		t.Fatal("expected a naive sidecar for the pretest instance")
 	}
+	waitUntil(t, time.Second, a.pretestNaive.Running)
 	if a.naivePretestPort() == a.naiveProdPort() {
 		t.Fatal("test invariant broken: pretest and production naive ports must differ")
 	}

@@ -314,6 +314,34 @@ Mirror `internal/xraycore` (read it first — `xraycore.go` is 283 lines), but
   → `profile add`/`setup`/subscription → failover primary or backup → real
   sidecar process → xray egress through it). What's left is the polish items
   just above, plus real-hardware verification (risk #1).
+- **v0.29.1 (unreleased-number-TBD as of writing) — two fixes/additions found
+  by the user actually testing on a live router, right after #133 shipped:**
+  1. `internal/health`'s quality sweep (separate from live failover, informational
+     `/status` block) called `config.GenerateXrayConfig` with no `SidecarSOCKS`
+     for every profile it swept -- always erroring for a naive profile and
+     showing it as a false "⚠️ недоступен", even though the real failover path
+     (with its sidecar) worked fine. Fixed by skipping naive profiles in the
+     sweep (`SweepOnce`) rather than misreporting them; a real sweep probe via
+     a transient scratch sidecar is still the deferred item above, now with a
+     concrete reason it matters.
+  2. `internal/addons` gained a `naive-core` addon (`internal/addons/naivecore.go`,
+     wrapping `naivecore.Ensure`/`Version`/a plain file remove) -- so the bot's
+     🧩 Дополнения screen and `keenetic-xray addon install naive-core` are now
+     an alternative to SSH + `internal ensure-naive-core` for getting the
+     binary onto the router. Both call sites already drove entirely off
+     `addons.All()`/`addons.Find()`, so registering the addon was the whole
+     feature -- no bot/CLI code needed touching beyond a couple of doc-comment
+     and blurb-text mentions.
+     **While wiring this up, found a real, separate bug**: the bot's own 🔗
+     Источники wizard (`internal/botcontrol/telegram_wizard.go`,
+     `wizardSetSlotSource`) had its *own* hardcoded `vless://`/`http(s)://`
+     prefix check, independent of (and never updated alongside) PR "2a"'s
+     `config.ParseProfileURI` sweep -- a pasted `naive+https://` link was
+     rejected by the control server before ever reaching the router. This is
+     why "5 places" in the PR 2a note above turned out to be 6; the bot
+     wizard lives in a different package tree (`internal/botcontrol`, control
+     server) from the other 5 (router/shared), which is exactly why it got
+     missed. Fixed the prefix check and the prompt text.
 
 ## 8. First concrete steps (for the deferred polish, if picked up)
 

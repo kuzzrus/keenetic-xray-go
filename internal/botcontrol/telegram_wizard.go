@@ -55,11 +55,12 @@ func (b *TelegramBot) startRenameWizard(ctx context.Context, chatID int64, route
 	b.sendMessage(ctx, chatID, "Новое имя для "+routerID+" (пустая строка — совпадёт с id).\nОтмена: /cancel")
 }
 
-// startSlotSourceWizard prompts for one slot's source -- a vless:// link
-// or an http(s):// subscription URL, optionally followed by a selector
-// (index or a name substring) for a multi-profile subscription. Applied
-// via set_primary_source / set_backup_source, which merge the resolved
-// profile, repoint the slot and rebind xray.
+// startSlotSourceWizard prompts for one slot's source -- a vless:// or
+// naive+https:// link, or an http(s):// subscription URL, optionally
+// followed by a selector (index or a name substring) for a
+// multi-profile subscription. Applied via set_primary_source /
+// set_backup_source, which merge the resolved profile, repoint the slot
+// and rebind xray.
 func (b *TelegramBot) startSlotSourceWizard(ctx context.Context, chatID int64, routerID string, primary bool) {
 	if !b.Store.HasRouter(routerID) {
 		b.sendMessage(ctx, chatID, fmt.Sprintf("нет такого роутера %q. Список: /routers", routerID))
@@ -73,7 +74,7 @@ func (b *TelegramBot) startSlotSourceWizard(ctx context.Context, chatID int64, r
 	b.wizards[chatID] = &wizState{step: wizSlotSource, routerID: routerID, primary: primary}
 	b.wizardMu.Unlock()
 	b.sendMessage(ctx, chatID,
-		"Источник для "+slot+" ("+routerID+"):\nвставь vless:// ссылку или http(s):// URL подписки.\n"+
+		"Источник для "+slot+" ("+routerID+"):\nвставь vless://, naive+https:// ссылку или http(s):// URL подписки.\n"+
 			"Для подписки можно добавить селектор через пробел — номер профиля или часть названия.\nОтмена: /cancel")
 }
 
@@ -236,12 +237,14 @@ func (b *TelegramBot) handleWizardText(ctx context.Context, chatID int64, text s
 func (b *TelegramBot) wizardSetSlotSource(ctx context.Context, chatID int64, st *wizState, line string) {
 	fields := strings.Fields(line)
 	if len(fields) == 0 {
-		b.sendMessage(ctx, chatID, "нужна vless:// ссылка или http(s):// URL. Ещё раз или /cancel")
+		b.sendMessage(ctx, chatID, "нужна vless://, naive+https:// ссылка или http(s):// URL. Ещё раз или /cancel")
 		return
 	}
 	src := fields[0]
-	if !strings.HasPrefix(src, "vless://") && !strings.HasPrefix(src, "http://") && !strings.HasPrefix(src, "https://") {
-		b.sendMessage(ctx, chatID, "нужна vless:// ссылка или http(s):// URL. Ещё раз или /cancel") // stays armed
+	isSource := strings.HasPrefix(src, "vless://") || strings.HasPrefix(src, "naive+") ||
+		strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://")
+	if !isSource {
+		b.sendMessage(ctx, chatID, "нужна vless://, naive+https:// ссылка или http(s):// URL. Ещё раз или /cancel") // stays armed
 		return
 	}
 	args := []string{src}

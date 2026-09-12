@@ -2,10 +2,13 @@ package addons
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/kuzzrus/keenetic-xray-go/internal/naivecore"
 )
 
 // fakeSys is an in-memory stand-in for every system call sys.go makes,
@@ -94,10 +97,13 @@ func withFakeSys(t *testing.T, f *fakeSys) {
 
 func TestAll_OrderAndFind(t *testing.T) {
 	got := All()
-	if len(got) != 5 {
-		t.Fatalf("All() len = %d, want 5", len(got))
+	if len(got) != 6 {
+		t.Fatalf("All() len = %d, want 6", len(got))
 	}
-	want := []string{"unbound", "dnscrypt", "nfqws2", "conntrack", "cron"}
+	// naive-core isn't in the fixed `order` list, so it sorts after the
+	// ones that are -- there being only one such addon right now, that
+	// just means last.
+	want := []string{"unbound", "dnscrypt", "nfqws2", "conntrack", "cron", "naive-core"}
 	for i, id := range want {
 		if got[i].ID() != id {
 			t.Errorf("All()[%d] = %q, want %q", i, got[i].ID(), id)
@@ -147,6 +153,83 @@ func TestConntrack_Lifecycle(t *testing.T) {
 	}
 	if a.Detect(ctx).Installed {
 		t.Error("conntrack should be gone after Remove")
+	}
+}
+
+// withFakeNaivecore swaps naiveEnsure/naiveVersion for fakes driven by a
+// simple installed bool -- naive-core doesn't touch opkg/init.d, just
+// internal/naivecore's Ensure/Version, so it needs its own tiny seam
+// alongside withFakeSys rather than reusing fakeSys's fields.
+func withFakeNaivecore(t *testing.T) *bool {
+	t.Helper()
+	saveEnsure, saveVersion := naiveEnsure, naiveVersion
+	t.Cleanup(func() { naiveEnsure, naiveVersion = saveEnsure, saveVersion })
+
+	installed := new(bool)
+	naiveEnsure = func(ctx context.Context, opts naivecore.Options) (string, error) {
+		if opts.Dest != naiveCoreBinary {
+			t.Errorf("Install: Dest = %q, want %q", opts.Dest, naiveCoreBinary)
+		}
+		*installed = true
+		return "vendored", nil
+	}
+	naiveVersion = func(bin string) (string, error) {
+		if bin != naiveCoreBinary {
+			t.Errorf("Detect/Status: binary = %q, want %q", bin, naiveCoreBinary)
+		}
+		if !*installed {
+			return "", errors.New("exec: not found")
+		}
+		return "naive 150.0.7871.63", nil
+	}
+	return installed
+}
+
+func TestNaiveCore_Lifecycle(t *testing.T) {
+	f := newFakeSys()
+	withFakeSys(t, f)
+	installed := withFakeNaivecore(t)
+	ctx := context.Background()
+
+	a, ok := Find("naive-core")
+	if !ok {
+		t.Fatal(`Find("naive-core") not found`)
+	}
+
+	if a.Detect(ctx).Installed {
+		t.Fatal("naive-core should start not installed")
+	}
+	if err := a.Install(ctx); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if st := a.Detect(ctx); !st.Installed || st.Version != "naive 150.0.7871.63" {
+		t.Errorf("Detect after Install = %+v", st)
+	}
+	if err := a.Configure(ctx, map[string]string{"x": "1"}); err == nil {
+		t.Error("naive-core Configure should reject any key")
+	}
+	if s, err := a.Status(ctx); err != nil || !strings.Contains(s, "150.0.7871.63") {
+		t.Errorf("Status = %q, %v", s, err)
+	}
+
+	*installed = false // Remove() doesn't reach into naiveVersion's fake state itself
+	if err := a.Remove(ctx); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if a.Detect(ctx).Installed {
+		t.Error("naive-core should be gone after Remove")
+	}
+}
+
+func TestNaiveCore_RemoveIsIdempotent(t *testing.T) {
+	f := newFakeSys()
+	withFakeSys(t, f)
+	withFakeNaivecore(t)
+	removeFile = func(string) error { return os.ErrNotExist }
+
+	a, _ := Find("naive-core")
+	if err := a.Remove(context.Background()); err != nil {
+		t.Errorf("Remove on an already-absent binary should not error, got %v", err)
 	}
 }
 

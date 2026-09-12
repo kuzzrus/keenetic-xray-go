@@ -9,11 +9,11 @@ import (
 )
 
 // The addon_* actions drive the optional router-side components
-// (unbound, nfqws2, conntrack, cron) through internal/addons -- the same
-// package `keenetic-xray addon …` uses, so the bot's 🧩 Дополнения
-// screen and the CLI behave identically. addon_list is machine-readable
-// (TSV) so the bot can render one button per component; the rest return
-// human text.
+// (unbound, nfqws2, conntrack, cron, naive-core) through internal/addons
+// -- the same package `keenetic-xray addon …` uses, so the bot's 🧩
+// Дополнения screen and the CLI behave identically. addon_list is
+// machine-readable (TSV) so the bot can render one button per component;
+// the rest return human text.
 
 func (h *RouterHandler) addonList(ctx context.Context) (string, error) {
 	var b strings.Builder

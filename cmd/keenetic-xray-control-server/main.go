@@ -17,6 +17,7 @@ import (
 	"syscall"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/botcontrol"
+	"github.com/kuzzrus/keenetic-xray-go/internal/updatecheck"
 	"github.com/kuzzrus/keenetic-xray-go/internal/version"
 	"golang.org/x/crypto/acme/autocert"
 )
@@ -98,6 +99,7 @@ func run(args []string) error {
 		// The systemd .path unit installed by server-install.sh watches
 		// this file; touching it kicks off the root self-update.
 		SelfUpdatePath: filepath.Join(filepath.Dir(cfg.QueuePath), "update.request"),
+		UpdateChecker:  &updatecheck.Checker{},
 	}
 
 	// Best-effort: announce a just-completed self-update (see
@@ -131,6 +133,12 @@ func run(args []string) error {
 	go func() { errCh <- botcontrol.ListenAndServeTLSDynamic(ctx, cfg.ListenAddr, tlsConfig, server) }()
 	go func() { errCh <- bot.Run(ctx) }()
 	go (&botcontrol.OfflineWatcher{Store: store, Notify: bot.NotifyOffline}).Run(ctx)
+	go (&botcontrol.AppUpdateWatcher{
+		Store:          store,
+		Checker:        bot.UpdateChecker,
+		CurrentVersion: version.Version,
+		Notify:         bot.NotifyAppUpdate,
+	}).Run(ctx)
 
 	if acmeMgr != nil {
 		// Let's Encrypt's HTTP-01 challenge always dials :80, regardless

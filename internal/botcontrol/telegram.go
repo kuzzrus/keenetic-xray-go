@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/kuzzrus/keenetic-xray-go/internal/updatecheck"
 )
 
 // telegramAPIBase is the default Bot API base URL; overridable per-bot
@@ -45,8 +47,16 @@ type TelegramBot struct {
 
 	// SelfUpdatePath, if set, is the trigger file the "Обновить сервер"
 	// button touches -- a systemd .path unit watches it and runs the
-	// root self-update. Empty -> the button reports it isn't configured.
+	// root self-update. Empty -> the button isn't configured.
 	SelfUpdatePath string
+
+	// UpdateChecker looks up this project's own latest GitHub releases
+	// (the app itself, and mirrored xray-core tags) live, instead of
+	// trusting whatever was compiled into this control-server build.
+	// Nil -> every live-lookup site falls back to its compiled default
+	// (xraycore.PrereleaseTag for the core screen; AppUpdateWatcher
+	// simply isn't started).
+	UpdateChecker *updatecheck.Checker
 
 	client     *http.Client
 	clientOnce sync.Once
@@ -322,6 +332,19 @@ func (b *TelegramBot) NotifyOffline(routerID string, online bool) {
 		return
 	}
 	b.notify(routerID, "🔴 не выходит на связь")
+}
+
+// NotifyAppUpdate DMs every allowed chat when a newer keenetic-xray
+// release is found than what's currently running -- either this control
+// server itself (subject == "") or a specific router's last-reported
+// agent version (subject == routerID). Called by AppUpdateWatcher, at
+// most once per newly-seen target version per subject.
+func (b *TelegramBot) NotifyAppUpdate(subject, from, to string) {
+	if subject == "" {
+		b.NotifyServer(fmt.Sprintf("⬆️ доступно обновление control-server: %s → %s\nОбновить: «⬆️ Обновить сервер» в главном меню.", from, to))
+		return
+	}
+	b.notify(subject, fmt.Sprintf("⬆️ доступно обновление агента: %s → %s\nОбновить: «🔁 Обновить агент» в карточке роутера.", from, to))
 }
 
 // scrubToken renders err for logging with the bot token redacted.

@@ -10,10 +10,10 @@ import (
 
 // DefaultUpdateCheckInterval is how often AppUpdateWatcher re-checks
 // GitHub for a newer keenetic-xray release. Far coarser than
-// DefaultOfflineCheckInterval on purpose: a new release lands at most a
-// few times a day, and updatecheck.Checker's own cache already bounds
-// this to one real GitHub request per hour regardless.
-const DefaultUpdateCheckInterval = time.Hour
+// DefaultOfflineCheckInterval on purpose: an outdated version is a
+// standing fact, not an event to catch within the hour, and this is a
+// one-time-per-version DM, not a live status -- once a day is plenty.
+const DefaultUpdateCheckInterval = 24 * time.Hour
 
 // AppUpdateWatcher periodically compares the latest keenetic-xray
 // release (via Checker) against this control server's own running

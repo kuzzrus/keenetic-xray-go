@@ -330,7 +330,7 @@ onto the new binary. `ensure_core` stays the separate "there's no
 working core, repair it" path.
 
 `AppUpdateWatcher` (`updatewatch.go`) is a second, independent consumer
-of the same `UpdateChecker`: hourly, it compares `LatestAppVersion()`
+of the same `UpdateChecker`: once a day, it compares `LatestAppVersion()`
 against the control server's own `version.Version` and against every
 registered router's last-reported agent version (parsed from the first
 line of its heartbeat's rendered status text, `"agent: vX.Y.Z (commit)"`

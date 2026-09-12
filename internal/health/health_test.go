@@ -184,6 +184,46 @@ func TestSweepOnce_ConfigGenFailureIsRecorded(t *testing.T) {
 	}
 }
 
+// TestSweepOnce_SkipsNaiveProfiles is the regression test for a real
+// incident: the sweep's scratch xray has no naive sidecar, so
+// config.GenerateXrayConfig always errors for a naive profile --
+// previously recorded (via the same path as
+// TestSweepOnce_ConfigGenFailureIsRecorded) as a false "недоступен" for a
+// naive profile that's actually working fine through the real failover
+// path with its sidecar. A naive profile must be left out of the results
+// entirely, not reported as a failure, and must not stop the surrounding
+// vless profiles from being swept normally.
+func TestSweepOnce_SkipsNaiveProfiles(t *testing.T) {
+	sw, started := newTestSweeper(t, func(context.Context, xrayctl.ProbeOptions) error { return nil })
+	sw.genConfig = func(opts config.XrayConfigOptions) ([]byte, error) {
+		if opts.Outbound.Protocol == "naive" {
+			return nil, errors.New("profile: naive egress requires a running sidecar (SidecarSOCKS not set)")
+		}
+		return []byte("{}"), nil
+	}
+	profiles := []config.Profile{
+		fakeProfile("A", "a.example.com", 443),
+		{Protocol: "naive", Remark: "Naive-1", Address: "n.example.com", Port: 8443, User: "u", Password: "p"},
+		fakeProfile("B", "b.example.com", 443),
+	}
+	st := sw.SweepOnce(context.Background(), profiles)
+
+	if len(st.Results) != 2 {
+		t.Fatalf("want 2 results (naive skipped), got %d: %+v", len(st.Results), st.Results)
+	}
+	for _, r := range st.Results {
+		if r.Remark == "Naive-1" {
+			t.Errorf("naive profile should be skipped entirely, not recorded: %+v", r)
+		}
+		if !r.OK {
+			t.Errorf("surrounding vless profile should still sweep normally: %+v", r)
+		}
+	}
+	if len(*started) != 2 {
+		t.Errorf("want 2 scratch xray starts (naive never gets one), got %d", len(*started))
+	}
+}
+
 func TestSweepOnce_StopsOnContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	sw, _ := newTestSweeper(t, func(context.Context, xrayctl.ProbeOptions) error { return nil })

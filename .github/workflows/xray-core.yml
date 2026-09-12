@@ -16,9 +16,9 @@ on:
   workflow_dispatch:
     inputs:
       xray_version:
-        description: "XTLS/Xray-core tag to build (e.g. v26.9.8). May be an upstream pre-release; the pin (packaging/xray-core/version) decides what's the default."
+        description: "XTLS/Xray-core tag to build (e.g. v26.9.9). May be an upstream pre-release; the pin (packaging/xray-core/version) decides what's the default."
         required: true
-        default: v26.9.8
+        default: v26.9.9
 
 permissions:
   contents: write

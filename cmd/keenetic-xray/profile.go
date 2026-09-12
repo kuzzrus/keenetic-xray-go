@@ -25,11 +25,11 @@ func cmdProfile(args []string) error {
 
 func profileAdd(args []string) error {
 	if len(args) != 1 {
-		return fmt.Errorf("usage: keenetic-xray profile add <vless-uri>")
+		return fmt.Errorf("usage: keenetic-xray profile add <vless-or-naive-uri>")
 	}
-	p, err := config.ParseVLESSURI(args[0])
+	p, err := config.ParseProfileURI(args[0])
 	if err != nil {
-		return fmt.Errorf("parsing vless URI: %w", err)
+		return fmt.Errorf("parsing share link: %w", err)
 	}
 
 	cfg, err := config.Load(configPath())

@@ -104,6 +104,18 @@ func (s *Sweeper) SweepOnce(ctx context.Context, profiles []config.Profile) Stat
 		if ctx.Err() != nil {
 			break
 		}
+		if p.Protocol == "naive" {
+			// The scratch xray this sweep spins up has no naive sidecar
+			// to pair with (see internal/failover's realActions --
+			// SidecarSOCKS is never set here), so config.GenerateXrayConfig
+			// always errors for a naive profile. Skip rather than let that
+			// surface as a false "профиль недоступен" -- a naive profile
+			// with a working sidecar (real failover) would otherwise show
+			// up here as broken. A real probe (a transient scratch
+			// sidecar, mirroring ensureNaiveSidecar) is deferred; see
+			// docs/HANDOFF-naive.md.
+			continue
+		}
 		key := p.ImportKey()
 		if seen[key] {
 			continue

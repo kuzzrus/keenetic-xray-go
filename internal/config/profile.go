@@ -17,21 +17,39 @@ import (
 	"time"
 )
 
-// Profile is a single VLESS server entry, parsed from either a raw vless://
-// link or one entry of a subscription. Fields map directly onto the query
-// parameters of the VLESS URI scheme.
+// Profile is a single server entry, parsed from a raw share link (vless://
+// or naive+https://) or one entry of a subscription.
+//
+// Protocol selects which egress this profile means: "" (or "vless", the
+// historical default -- every profile predating this field is one) routes
+// straight out through an Xray vless outbound, using most of the fields
+// below. "naive" instead runs through the naive sidecar (see
+// internal/naivecore and the failover package's process manager) -- it
+// only uses Remark/Address/Port/User/Password/SNI; the VLESS-specific
+// fields (UUID, Flow, Network, REALITY material, transport tuning, ...)
+// stay zero and are ignored by Validate/ImportKey/GenerateXrayConfig for
+// it. One Profile type (not a type per protocol) so a single []Profile
+// pool, subscription list, and failover slot can hold a mix of both.
 type Profile struct {
-	Remark     string `json:"remark"`
+	Remark   string `json:"remark"`
+	Protocol string `json:"protocol,omitempty"` // "" | "vless" -> vless outbound; "naive" -> the naive sidecar
+	Address  string `json:"address"`
+	Port     int    `json:"port"`
+	SNI      string `json:"sni,omitempty"` // vless TLS/REALITY serverName; also naive's Chrome-TLS SNI to Address
+
+	// User/Password: naive's Basic-auth credentials to the upstream Caddy
+	// forward_proxy. Unused by vless.
+	User     string `json:"user,omitempty"`
+	Password string `json:"password,omitempty"`
+
+	// UUID and everything below is vless-only.
 	UUID       string `json:"uuid"`
-	Address    string `json:"address"`
-	Port       int    `json:"port"`
 	Encryption string `json:"encryption"` // almost always "none"
 	Flow       string `json:"flow,omitempty"`
 
 	Network  string `json:"network"`  // tcp | ws | grpc | http ("h2" accepted as an alias) | xhttp
 	Security string `json:"security"` // none | tls | reality
 
-	SNI         string   `json:"sni,omitempty"`
 	Fingerprint string   `json:"fingerprint,omitempty"` // fp=
 	ALPN        []string `json:"alpn,omitempty"`
 	PublicKey   string   `json:"public_key,omitempty"` // pbk= (REALITY)
@@ -55,16 +73,28 @@ type Profile struct {
 }
 
 // Validate checks that a Profile has the fields required to generate a
-// working Xray outbound.
+// working egress -- an Xray vless outbound, or (Protocol == "naive") the
+// naive sidecar.
 func (p *Profile) Validate() error {
-	if p.UUID == "" {
-		return fmt.Errorf("missing uuid")
-	}
 	if p.Address == "" {
 		return fmt.Errorf("missing address")
 	}
 	if p.Port <= 0 || p.Port > 65535 {
 		return fmt.Errorf("invalid port %d", p.Port)
+	}
+	switch p.Protocol {
+	case "", "vless":
+		return p.validateVLESS()
+	case "naive":
+		return p.validateNaive()
+	default:
+		return fmt.Errorf("unsupported protocol %q", p.Protocol)
+	}
+}
+
+func (p *Profile) validateVLESS() error {
+	if p.UUID == "" {
+		return fmt.Errorf("missing uuid")
 	}
 	switch p.Network {
 	case "tcp", "ws", "grpc", "h2", "http", "xhttp":
@@ -93,13 +123,27 @@ func (p *Profile) Validate() error {
 	return nil
 }
 
+// validateNaive checks the fields the naive sidecar needs: Basic-auth
+// credentials to the upstream Caddy forward_proxy server. naive does its
+// own TLS (a real Chrome stack, not Xray's) and carries no UUID or REALITY
+// material, so Network/Security/etc are meaningless for it and unchecked.
+func (p *Profile) validateNaive() error {
+	if p.User == "" {
+		return fmt.Errorf("naive: missing user")
+	}
+	if p.Password == "" {
+		return fmt.Errorf("naive: missing password")
+	}
+	return nil
+}
+
 // ImportKey is a stable identity for the *server endpoint* a Profile
 // points at: the connection coordinates that decide which server this
 // is, with the display name and every credential deliberately left out.
-// Renaming a profile or rotating its UUID / REALITY keys keeps the same
-// ImportKey; changing host, port, transport, security mode, SNI, Host
-// header, path, gRPC service, tcp header type, or xhttp mode makes it a
-// different server.
+// Renaming a profile or rotating its UUID/REALITY keys/naive password
+// keeps the same ImportKey; changing protocol, host, port, transport,
+// security mode, SNI, Host header, path, gRPC service, tcp header type, or
+// xhttp mode makes it a different server.
 //
 // It exists so a failover slot fed from a subscription can be re-found in
 // a later fetch whose provider reordered or renamed its nodes -- a
@@ -108,14 +152,21 @@ func (p *Profile) Validate() error {
 // handful of subscription entries apart.
 func (p *Profile) ImportKey() string {
 	lc := func(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
+	protocol := lc(p.Protocol)
+	if protocol == "" {
+		protocol = "vless"
+	}
 	network := lc(p.Network)
 	if network == "h2" {
 		network = "http"
 	}
 	// Path and ServiceName stay case-sensitive (URL paths and gRPC
 	// service names are); everything else is lowercased so trivial
-	// provider formatting differences don't fork the identity.
+	// provider formatting differences don't fork the identity. User and
+	// Password (naive) are credentials, not identity -- left out, same as
+	// UUID/PublicKey/ShortID.
 	fields := []string{
+		protocol,
 		lc(p.Address),
 		strconv.Itoa(p.Port),
 		network,
@@ -1097,8 +1148,9 @@ func (s IndependentSlots) Restore(c *Config) {
 // secret-carrying URL masked -- safe to drop into a diagnostic bundle
 // or paste into a chat. Kept: server addresses, ports, SNI, transport
 // tuning, failover knobs (all needed to debug). Masked: VLESS UUIDs,
-// REALITY public-key/short-id, subscription & slot-source URLs, WG key
-// material, and the path of any DoH URL (can carry a client token).
+// REALITY public-key/short-id, naive user/password, subscription &
+// slot-source URLs, WG key material, and the path of any DoH URL (can
+// carry a client token).
 func (c *Config) Redacted() *Config {
 	b, err := json.Marshal(c)
 	if err != nil {
@@ -1120,6 +1172,8 @@ func (c *Config) Redacted() *Config {
 		p.UUID = mask(p.UUID)
 		p.PublicKey = mask(p.PublicKey)
 		p.ShortID = mask(p.ShortID)
+		p.User = mask(p.User)
+		p.Password = mask(p.Password)
 	}
 	if d.Subscription != nil {
 		d.Subscription.URL = mask(d.Subscription.URL)

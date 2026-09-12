@@ -42,6 +42,24 @@ func TestCmdProfile_AddListRemove(t *testing.T) {
 	}
 }
 
+func TestCmdProfile_AddNaiveLink(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	t.Setenv("KEENETIC_XRAY_CONFIG", path)
+
+	if err := run([]string{"profile", "add", "naive+https://alice:s3cret@n.example.com:443#naive-server"}); err != nil {
+		t.Fatalf("profile add: %v", err)
+	}
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Profiles) != 1 || cfg.Profiles[0].Protocol != "naive" || cfg.Profiles[0].Remark != "naive-server" {
+		t.Fatalf("Profiles = %#v", cfg.Profiles)
+	}
+}
+
 func TestCmdProfile_AddRejectsInvalidURI(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("KEENETIC_XRAY_CONFIG", filepath.Join(dir, "config.json"))

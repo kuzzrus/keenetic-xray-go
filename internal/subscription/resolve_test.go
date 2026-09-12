@@ -85,6 +85,16 @@ func TestResolveSource_BadScheme(t *testing.T) {
 	}
 }
 
+func TestResolveSource_NaiveLink(t *testing.T) {
+	p, err := ResolveSource(context.TODO(), "naive+https://alice:s3cret@n.example.com:8443#Naive", "")
+	if err != nil {
+		t.Fatalf("ResolveSource: %v", err)
+	}
+	if p.Protocol != "naive" || p.User != "alice" || p.Password != "s3cret" || p.Address != "n.example.com" {
+		t.Errorf("ResolveSource(naive link) = %+v", p)
+	}
+}
+
 func TestResolveSourcePinned_AnchorSurvivesReorderAndRename(t *testing.T) {
 	url, set := mutableSubServer(t, nodeA+"\n"+nodeB)
 

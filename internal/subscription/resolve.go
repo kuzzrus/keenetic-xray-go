@@ -9,10 +9,11 @@ import (
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 )
 
-// ResolveSource turns one failover slot's source -- a raw vless:// link
-// or an http(s):// subscription URL (with an optional selector) -- into a
-// single Profile. Shared by the bot's 🔗 Источники flow and by a refresh
-// that re-fetches independently-sourced slots.
+// ResolveSource turns one failover slot's source -- a raw vless:// or
+// naive+https:// link, or an http(s):// subscription URL (with an
+// optional selector) -- into a single Profile. Shared by the bot's 🔗
+// Источники flow and by a refresh that re-fetches independently-sourced
+// slots.
 func ResolveSource(ctx context.Context, src, selector string) (config.Profile, error) {
 	p, _, err := ResolveSourcePinned(ctx, src, selector, "")
 	return p, err
@@ -29,8 +30,8 @@ func ResolveSource(ctx context.Context, src, selector string) (config.Profile, e
 func ResolveSourcePinned(ctx context.Context, src, selector, importKey string) (config.Profile, string, error) {
 	src = strings.TrimSpace(src)
 	switch {
-	case strings.HasPrefix(src, "vless://"):
-		p, err := config.ParseVLESSURI(src)
+	case strings.HasPrefix(src, "vless://"), strings.HasPrefix(src, "naive+"):
+		p, err := config.ParseProfileURI(src)
 		if err != nil {
 			return config.Profile{}, "", err
 		}
@@ -53,7 +54,7 @@ func ResolveSourcePinned(ctx context.Context, src, selector, importKey string) (
 		}
 		return p, p.ImportKey(), nil
 	default:
-		return config.Profile{}, "", fmt.Errorf("нужна vless:// ссылка или http(s):// URL")
+		return config.Profile{}, "", fmt.Errorf("нужна vless:// или naive+https:// ссылка, либо http(s):// URL подписки")
 	}
 }
 

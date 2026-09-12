@@ -65,6 +65,36 @@ func TestRunSetupInteractive_TwoIndependentVlessLinks(t *testing.T) {
 	}
 }
 
+func TestRunSetupInteractive_VlessPrimaryNaiveBackup(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	t.Setenv("KEENETIC_XRAY_CONFIG", path)
+
+	const naiveBackupURI = "naive+https://alice:s3cret@n.example.com:443#naive-backup"
+	// primary vless link, backup naive link, then Enter/Enter for default ports.
+	input := strings.NewReader(testVLESSURI + "\n" + naiveBackupURI + "\n\n\n")
+	if err := runSetup(input, setupOpts{}); err != nil {
+		t.Fatalf("runSetup: %v", err)
+	}
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Profiles) != 2 {
+		t.Fatalf("len(Profiles) = %d, want 2", len(cfg.Profiles))
+	}
+	if got := cfg.Profiles[cfg.PrimaryIndex]; got.Protocol != "" || got.Remark != "test" {
+		t.Errorf("primary = %+v, want the vless profile", got)
+	}
+	if got := cfg.Profiles[cfg.BackupIndex]; got.Protocol != "naive" || got.Remark != "naive-backup" || got.User != "alice" {
+		t.Errorf("backup = %+v, want the naive profile", got)
+	}
+	if cfg.BackupSource == nil || cfg.BackupSource.URL != naiveBackupURI {
+		t.Errorf("BackupSource = %+v, want URL %s", cfg.BackupSource, naiveBackupURI)
+	}
+}
+
 func TestRunSetupInteractive_BothFromSubscriptionDifferentIndices(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, twoProfileSubBody)

@@ -137,15 +137,15 @@ func isCharDevice(f *os.File) bool {
 func runSetupNonInteractive(cfg *config.Config, o setupOpts) error {
 	input := strings.TrimSpace(o.From)
 	if input == "" {
-		return fmt.Errorf("no vless:// link or subscription URL given")
+		return fmt.Errorf("no vless:// / naive+https:// link or subscription URL given")
 	}
 
 	var profiles []config.Profile
 	switch {
-	case strings.HasPrefix(input, "vless://"):
-		p, err := config.ParseVLESSURI(input)
+	case strings.HasPrefix(input, "vless://"), strings.HasPrefix(input, "naive+"):
+		p, err := config.ParseProfileURI(input)
 		if err != nil {
-			return fmt.Errorf("parsing vless link: %w", err)
+			return fmt.Errorf("parsing share link: %w", err)
 		}
 		profiles = []config.Profile{p}
 	case strings.HasPrefix(input, "http://") || strings.HasPrefix(input, "https://"):
@@ -160,11 +160,11 @@ func runSetupNonInteractive(cfg *config.Config, o setupOpts) error {
 		profiles = result.Profiles
 		cfg.Subscription = &config.Subscription{URL: input, LastFetchedAt: time.Now()}
 	default:
-		return fmt.Errorf("input doesn't look like a vless:// link or an http(s):// subscription URL")
+		return fmt.Errorf("input doesn't look like a vless:// / naive+https:// link or an http(s):// subscription URL")
 	}
 
 	if len(profiles) == 0 {
-		return fmt.Errorf("no usable vless:// profiles found")
+		return fmt.Errorf("no usable profiles found")
 	}
 	if cfg.PrimarySource != nil || cfg.BackupSource != nil {
 		fmt.Println("warning: this replaces ALL profiles, including the independent primary/backup sources set via the bot's 🔗 Источники -- re-add them afterward if you still want them")
@@ -348,16 +348,16 @@ type slotSourceResult struct {
 	selector string
 }
 
-// promptSlotSource asks for one slot's source (a vless:// link, or a
-// subscription URL followed by an interactive pick if it has more than
-// one profile) and resolves it to a single profile. label is "PRIMARY"
-// or "BACKUP", used only in the prompts.
+// promptSlotSource asks for one slot's source (a vless:// or naive+https://
+// link, or a subscription URL followed by an interactive pick if it has
+// more than one profile) and resolves it to a single profile. label is
+// "PRIMARY" or "BACKUP", used only in the prompts.
 func promptSlotSource(reader *bufio.Reader, cfg *config.Config, label string, optional bool) (slotSourceResult, error) {
 	hint := ""
 	if optional {
 		hint = " (Enter — пропустить)"
 	}
-	fmt.Printf("%s профиль%s — вставь vless:// или ссылку на подписку http(s)://:\n> ", label, hint)
+	fmt.Printf("%s профиль%s — вставь vless://, naive+https:// или ссылку на подписку http(s)://:\n> ", label, hint)
 	line, err := reader.ReadString('\n')
 	if err != nil && line == "" && !optional {
 		return slotSourceResult{}, fmt.Errorf("чтение ввода: %w", err)
@@ -367,14 +367,14 @@ func promptSlotSource(reader *bufio.Reader, cfg *config.Config, label string, op
 		if optional {
 			return slotSourceResult{}, errSlotSkipped
 		}
-		return slotSourceResult{}, fmt.Errorf("%s: не задана ни vless://-ссылка, ни URL подписки", label)
+		return slotSourceResult{}, fmt.Errorf("%s: не задана ни ссылка на сервер, ни URL подписки", label)
 	}
 
 	switch {
-	case strings.HasPrefix(src, "vless://"):
-		p, err := config.ParseVLESSURI(src)
+	case strings.HasPrefix(src, "vless://"), strings.HasPrefix(src, "naive+"):
+		p, err := config.ParseProfileURI(src)
 		if err != nil {
-			return slotSourceResult{}, fmt.Errorf("%s: разбор vless-ссылки: %w", label, err)
+			return slotSourceResult{}, fmt.Errorf("%s: разбор ссылки: %w", label, err)
 		}
 		return slotSourceResult{profile: p, src: src}, nil
 	case strings.HasPrefix(src, "http://"), strings.HasPrefix(src, "https://"):
@@ -387,7 +387,7 @@ func promptSlotSource(reader *bufio.Reader, cfg *config.Config, label string, op
 			fmt.Println("  пропущено:", w)
 		}
 		if len(result.Profiles) == 0 {
-			return slotSourceResult{}, fmt.Errorf("%s: в подписке нет рабочих vless://-профилей", label)
+			return slotSourceResult{}, fmt.Errorf("%s: в подписке нет рабочих профилей", label)
 		}
 		if len(result.Profiles) == 1 {
 			return slotSourceResult{profile: result.Profiles[0], src: src}, nil
@@ -402,7 +402,7 @@ func promptSlotSource(reader *bufio.Reader, cfg *config.Config, label string, op
 		}
 		return slotSourceResult{profile: result.Profiles[idx], src: src, selector: strconv.Itoa(idx)}, nil
 	default:
-		return slotSourceResult{}, fmt.Errorf("%s: не похоже ни на vless://-ссылку, ни на http(s)://-подписку", label)
+		return slotSourceResult{}, fmt.Errorf("%s: не похоже ни на ссылку сервера (vless://, naive+https://), ни на http(s)://-подписку", label)
 	}
 }
 

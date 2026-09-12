@@ -10,11 +10,11 @@ import (
 )
 
 // Parse splits decoded subscription content into lines and parses each
-// vless:// line into a config.Profile. Lines using another scheme
-// (vmess://, trojan://, ss://, ...) or that fail to parse are skipped and
-// reported as warnings rather than aborting the whole refresh -- one
-// malformed or unsupported entry in an otherwise-valid list shouldn't
-// lose the rest.
+// vless:// or naive+https:// line into a config.Profile via
+// config.ParseProfileURI. Lines using another scheme (vmess://, trojan://,
+// ss://, ...) or that fail to parse are skipped and reported as warnings
+// rather than aborting the whole refresh -- one malformed or unsupported
+// entry in an otherwise-valid list shouldn't lose the rest.
 func Parse(decoded []byte) (profiles []config.Profile, warnings []string) {
 	scanner := bufio.NewScanner(bytes.NewReader(decoded))
 	for scanner.Scan() {
@@ -22,14 +22,9 @@ func Parse(decoded []byte) (profiles []config.Profile, warnings []string) {
 		if line == "" {
 			continue
 		}
-		if !strings.HasPrefix(line, "vless://") {
-			scheme, _, _ := strings.Cut(line, "://")
-			warnings = append(warnings, fmt.Sprintf("skipped non-vless entry (%s://)", scheme))
-			continue
-		}
-		p, err := config.ParseVLESSURI(line)
+		p, err := config.ParseProfileURI(line)
 		if err != nil {
-			warnings = append(warnings, fmt.Sprintf("skipped malformed vless entry: %v", err))
+			warnings = append(warnings, fmt.Sprintf("skipped entry: %v", err))
 			continue
 		}
 		profiles = append(profiles, p)

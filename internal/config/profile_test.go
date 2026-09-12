@@ -66,6 +66,42 @@ func TestProfileValidate(t *testing.T) {
 	}
 }
 
+func TestProfileValidate_Naive(t *testing.T) {
+	valid := Profile{Protocol: "naive", Address: "n.example.com", Port: 443, User: "u", Password: "p"}
+	if err := valid.Validate(); err != nil {
+		t.Errorf("valid naive profile: unexpected error: %v", err)
+	}
+	// None of the vless-only fields (UUID, Network, Security, ...) are set
+	// above, and that's fine -- naive doesn't need them.
+
+	cases := []struct {
+		name   string
+		mutate func(p *Profile)
+	}{
+		{"missing address", func(p *Profile) { p.Address = "" }},
+		{"port zero", func(p *Profile) { p.Port = 0 }},
+		{"port too large", func(p *Profile) { p.Port = 70000 }},
+		{"missing user", func(p *Profile) { p.User = "" }},
+		{"missing password", func(p *Profile) { p.Password = "" }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := valid
+			c.mutate(&p)
+			if err := p.Validate(); err == nil {
+				t.Error("expected an error, got nil")
+			}
+		})
+	}
+}
+
+func TestProfileValidate_UnknownProtocol(t *testing.T) {
+	p := Profile{Protocol: "wireguard", Address: "a.example.com", Port: 443}
+	if err := p.Validate(); err == nil {
+		t.Error("expected an error for an unrecognized protocol")
+	}
+}
+
 func TestConfigDefault(t *testing.T) {
 	c := Default()
 	if c.Variant != VariantFull {
@@ -599,6 +635,9 @@ func TestProfileImportKey(t *testing.T) {
 		// only by headerType collided to one ImportKey, so UpsertProfile
 		// silently overwrote one with the other instead of keeping both.
 		"headerType": func(p *Profile) { p.HeaderType = "http" },
+		// A naive profile parked at the exact same host:port as this vless
+		// one must not collide with it in the pool.
+		"protocol": func(p *Profile) { p.Protocol = "naive" },
 	} {
 		p := base
 		mut(&p)
@@ -612,6 +651,44 @@ func TestProfileImportKey(t *testing.T) {
 	h2.Network, htReq.Network = "h2", "http"
 	if h2.ImportKey() != htReq.ImportKey() {
 		t.Error("h2 and http should hash to the same ImportKey")
+	}
+
+	// "" and "vless" are the same protocol -- every config written before
+	// Protocol existed is implicitly vless.
+	implicit, explicit := base, base
+	explicit.Protocol = "vless"
+	if implicit.ImportKey() != explicit.ImportKey() {
+		t.Error(`Protocol "" and "vless" should hash identically`)
+	}
+}
+
+func TestProfileImportKey_Naive(t *testing.T) {
+	base := Profile{
+		Remark: "N1", Protocol: "naive", Address: "n.example.com", Port: 443,
+		SNI: "n.example.com", User: "alice", Password: "secret1",
+	}
+	key := base.ImportKey()
+
+	// Basic-auth credentials are, well, credentials -- rotating them must
+	// not fork identity, exactly like UUID rotation for vless.
+	rotated := base
+	rotated.User, rotated.Password = "bob", "secret2"
+	if rotated.ImportKey() != key {
+		t.Error("naive User/Password rotation should not change ImportKey")
+	}
+
+	// Renaming doesn't fork it either.
+	renamed := base
+	renamed.Remark = "N1 renamed"
+	if renamed.ImportKey() != key {
+		t.Error("naive Remark change should not change ImportKey")
+	}
+
+	// Moving to a different server forks it.
+	moved := base
+	moved.Address = "other.example.com"
+	if moved.ImportKey() == key {
+		t.Error("changing naive Address should change ImportKey")
 	}
 }
 
@@ -667,11 +744,18 @@ func TestConfig_UpsertProfile_MatchesByImportKeyNotUUID(t *testing.T) {
 
 func TestRedacted(t *testing.T) {
 	c := &Config{
-		Profiles: []Profile{{
-			Remark: "srv1", UUID: "11111111-2222-3333-4444-555555555555",
-			Address: "server.example.com", Port: 443, Security: "reality",
-			PublicKey: "abcdefPUBKEY", ShortID: "0a1b2c3d", SNI: "www.microsoft.com",
-		}},
+		Profiles: []Profile{
+			{
+				Remark: "srv1", UUID: "11111111-2222-3333-4444-555555555555",
+				Address: "server.example.com", Port: 443, Security: "reality",
+				PublicKey: "abcdefPUBKEY", ShortID: "0a1b2c3d", SNI: "www.microsoft.com",
+			},
+			{
+				Remark: "naive1", Protocol: "naive",
+				Address: "naive.example.com", Port: 443,
+				User: "alice", Password: "hunter2",
+			},
+		},
 		Subscription:  &Subscription{URL: "https://sub.example.com/secret-token/abc"},
 		PrimarySource: &SlotSource{URL: "https://s.example/tok"},
 	}
@@ -689,6 +773,12 @@ func TestRedacted(t *testing.T) {
 	}
 	if r.Profiles[0].Address != "server.example.com" || r.Profiles[0].Port != 443 || r.Profiles[0].SNI != "www.microsoft.com" {
 		t.Errorf("non-secret profile fields lost: %+v", r.Profiles[0])
+	}
+	if r.Profiles[1].User != "<redacted>" || r.Profiles[1].Password != "<redacted>" {
+		t.Errorf("naive credentials not masked: %+v", r.Profiles[1])
+	}
+	if r.Profiles[1].Address != "naive.example.com" || r.Profiles[1].Port != 443 {
+		t.Errorf("non-secret naive profile fields lost: %+v", r.Profiles[1])
 	}
 	if r.Subscription.URL != "<redacted>" || r.PrimarySource.URL != "<redacted>" {
 		t.Errorf("URLs not masked: %q %q", r.Subscription.URL, r.PrimarySource.URL)

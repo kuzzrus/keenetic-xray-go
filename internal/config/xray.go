@@ -154,6 +154,18 @@ func wgInbound(o WGInboundOptions) (xrayInbound, error) {
 }
 
 func buildOutbound(p Profile, xhttpMode string) (xrayOutbound, error) {
+	// Protocol == "naive" is stored and validated (Profile.Validate), but
+	// its egress is the naive sidecar (internal/naivecore + a process
+	// manager in internal/failover), not an xray outbound this function
+	// builds -- that wiring doesn't exist yet. Reject it clearly here
+	// rather than falling through to a vless outbound built from a
+	// profile with no UUID/Network/Security, which would instead fail
+	// deeper inside buildStreamSettings with a confusing "unsupported
+	// security \"\"".
+	if p.Protocol == "naive" {
+		return xrayOutbound{}, fmt.Errorf("profile %q: naive egress is not wired up in this build yet", p.Remark)
+	}
+
 	user := map[string]any{
 		"id":         p.UUID,
 		"encryption": firstNonEmpty(p.Encryption, "none"),

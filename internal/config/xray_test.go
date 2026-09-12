@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -415,6 +416,21 @@ func TestGenerateXrayConfig_Errors(t *testing.T) {
 		_, err := GenerateXrayConfig(XrayConfigOptions{SOCKSPort: 1080, Outbound: p})
 		if err == nil {
 			t.Error("expected error for grpc network with no serviceName/path -- an empty grpcSettings.serviceName silently generates a non-functional tunnel")
+		}
+	})
+	t.Run("naive profile -- egress not wired yet", func(t *testing.T) {
+		// Profile.Validate() accepts a naive profile (it has no
+		// UUID/Network/Security to check), so this must be rejected here
+		// with a clear reason -- not fall through to a vless outbound
+		// built from empty fields, which would instead fail deeper with
+		// a confusing "unsupported security \"\"".
+		p := Profile{Protocol: "naive", Address: "n.example.com", Port: 443, User: "u", Password: "p"}
+		_, err := GenerateXrayConfig(XrayConfigOptions{SOCKSPort: 1080, Outbound: p})
+		if err == nil {
+			t.Fatal("expected an error -- naive has no xray outbound")
+		}
+		if !strings.Contains(err.Error(), "naive") {
+			t.Errorf("error = %q, want it to name naive as the reason", err.Error())
 		}
 	})
 }

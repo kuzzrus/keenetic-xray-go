@@ -227,7 +227,7 @@ Mirror `internal/xraycore` (read it first — `xraycore.go` is 283 lines), but
 - `packaging/xray-core/version` = `v26.3.27` (the stable pin) — a test enforces
   `== xraycore.DefaultTag`.
 - `xraycore.DefaultTag` (stable, auto-installed) / `xraycore.PrereleaseTag`
-  (`v26.9.8`, opt-in only via `--tag=` / bot).
+  (`v26.9.9`, opt-in only via `--tag=` / bot).
 - `.github/workflows/xray-core.yml` — `workflow_dispatch`, checks out
   `XTLS/Xray-core@<tag>`, `go build ./main` with `-trimpath -ldflags "-s -w
   -buildid="`, UPX-packs per arch, QEMU smoke-tests `xray version`, uploads to

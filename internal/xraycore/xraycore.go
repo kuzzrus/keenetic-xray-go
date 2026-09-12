@@ -35,7 +35,7 @@ const DefaultTag = "v26.3.27"
 // router only runs it if someone asked for it, and the choice is
 // persisted in config.XrayCoreTag so a later self-update keeps it.
 // Empty -> no prerelease is currently offered.
-const PrereleaseTag = "v26.9.8"
+const PrereleaseTag = "v26.9.9"
 
 const defaultBaseURL = "https://github.com/kuzzrus/keenetic-xray-go/releases/download/xray-core"
 

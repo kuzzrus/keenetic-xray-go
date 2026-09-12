@@ -141,6 +141,7 @@ func cmdDaemon(args []string) error {
 
 	d := failover.NewDaemon(failover.Paths{
 		XrayBinary:       xrayBinaryPath(),
+		NaiveBinary:      naiveBinaryPath(),
 		ProductionConfig: productionConfigPath(),
 		PretestConfig:    pretestConfigPath(),
 		XrayStderr:       applog.Tee(dlog),

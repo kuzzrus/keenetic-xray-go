@@ -275,37 +275,73 @@ Mirror `internal/xraycore` (read it first — `xraycore.go` is 283 lines), but
   binaries + `.xz` fallbacks + `.sha256` + `.provenance.txt`. This is
   QEMU-verified, not yet confirmed on real Keenetic hardware -- risk #1 in
   section 4 above still stands.
+- **PR "2a" done — #132, released as v0.28.8.** Split out of PR 2's original
+  scope because it turned out cleanly separable: `config.ParseProfileURI(raw)`
+  is now the one dispatch point (`vless://` → `ParseVLESSURI`, `naive+` →
+  `ParseNaiveURI`), swapped in at all 5 places that used to hardcode
+  `ParseVLESSURI` -- `profile add`, `setup --from=`/the interactive wizard,
+  `subscription.Parse`, `subscription.ResolveSource(Pinned)`. So
+  **`subscription.Parse` no longer skips `naive+https://` lines** -- step 5
+  below is already done, don't redo it. Also added a safety guard in
+  `buildOutbound` (superseded by PR 2, see next bullet): reject
+  `Protocol=="naive"` up front rather than silently falling through to a
+  vless outbound built from empty fields.
+- **PR 2 done — #133 (the sidecar lifecycle itself).** `xrayctl.Supervisor`
+  gained an `Args []string` field (`nil` -> today's `xray run -c <config>`
+  unchanged; non-nil replaces it -- naive is flags-only, no config file).
+  `config.XrayConfigOptions.SidecarSOCKS`; `buildOutbound`'s naive branch (the
+  PR 2a reject-guard) now emits a real `socks` outbound to
+  `127.0.0.1:<SidecarSOCKS>`, still erroring clearly if that's `0`.
+  `internal/failover/realActions` gained `prodNaive`/`pretestNaive` +
+  `ensureNaiveSidecar(existing, profile, port, name)`, wired into
+  `SwitchLiveTo` (`PretestPort+2`), `StartIsolatedPretest` (`PretestPort+3`),
+  `StopIsolatedPretest`, and `Daemon.Run`'s shutdown defer. `Paths.NaiveBinary`
+  wired to the existing `naiveBinaryPath()` in `cmd/keenetic-xray/main.go`.
+  **Deviation from the plan below worth knowing**: `ensureNaiveSidecar` always
+  stops the *existing* sidecar before starting the replacement (not the other
+  way around) -- each role has one fixed local port, so an old and new
+  sidecar can never both be bound to it at once; matches how `a.prod.Restart()`
+  already works for the xray process itself (stop, then start). Confirmed via
+  `state.go` that `SwitchLiveTo`/`StartIsolatedPretest` only fire on actual
+  state transitions, not every tick, so this doesn't flap the sidecar in
+  steady state. **Deferred as follow-up polish, not done in #133**:
+  `status`/`doctor` naive-health lines (step 6 below), `internal/health`
+  sweep's own scratch-naive probe on `PretestPort+4` (part of step 4 below),
+  port-overlap validation in `config.Validate()`.
 - `main` is past `7e3d4b3` -- don't rely on that commit hash below; check
   `git log --oneline -5` and `gh pr list --state open`.
-- **Next: PR 2** -- the sidecar lifecycle in `internal/failover` (see section
-  4's "PR 2" breakdown above, unchanged). Nothing else Naive-related is
-  pending; start there.
+- **Naive is now fully functional end-to-end** (parse a `naive+https://` link
+  → `profile add`/`setup`/subscription → failover primary or backup → real
+  sidecar process → xray egress through it). What's left is the polish items
+  just above, plus real-hardware verification (risk #1).
 
-## 8. First concrete steps (for PR 2)
+## 8. First concrete steps (for the deferred polish, if picked up)
 
 ```bash
 git checkout main && git pull
-git checkout -b feat/naive-sidecar
+git checkout -b feat/naive-polish   # or whatever the actual next piece is called
 ```
-1. Read `internal/failover/daemon.go` fresh (`StartIsolatedPretest`,
-   `SwitchLiveTo`, `realActions`, `Paths`) -- it's the file PR 2 touches most,
-   and it may have changed since this brief was written.
-2. Add `config.XrayConfigOptions.SidecarSOCKS int`; in
-   `internal/config/xray.go` `buildOutbound`, branch on `p.Protocol=="naive"`
-   -> a `socks` outbound to `127.0.0.1:<SidecarSOCKS>`. Reject
-   `SidecarSOCKS==0` for a naive profile with a clear error.
-3. Give `xrayctl.Supervisor` an args-only mode (naive takes flags, no `-c
-   <config>`), or write a thin sibling supervisor for it.
-4. Wire naive start/stop into `SwitchLiveTo` (production, `PretestPort+2`),
-   `StartIsolatedPretest` (pretest, `PretestPort+3`), and `internal/health`'s
-   sweep (`PretestPort+4`).
-5. `subscription.Parse` (`internal/subscription/parse.go`) -- stop skipping
-   `naive+https://` lines, route to `config.ParseNaiveURI`.
-6. `status`/`doctor` -- an "egress: naive → host (сайдкар ✅/⚠️)" line.
-7. Tests: config-gen naive branch, sidecar lifecycle with a fake supervisor,
-   a failover cycle with a naive backup.
-8. `go build ./... && go vet ./... && go test ./...`
-9. PR. Green CI → merge.
+Everything in section 4/7's "PR 2" scope is done (see §7 above) except:
+1. `internal/health`'s sweep (`internal/health/sweep.go`) -- when a saved
+   profile being swept is `Protocol=="naive"`, start a scratch naive sidecar
+   on `PretestPort+4` alongside the scratch xray, same
+   start/probe/kill-in-defer shape the sweep already uses for xray. Study
+   `realActions.ensureNaiveSidecar` in `internal/failover/daemon.go` first --
+   same stop-then-start reasoning applies if the sweep ever reuses a sidecar
+   across ticks (it currently doesn't; every sweep tick is a fresh scratch
+   process for xray too, so a naive sidecar would naturally follow the same
+   fully-transient pattern with no reuse to reason about).
+2. `status`/`doctor` -- an "egress: naive → host (сайдкар ✅/⚠️)" line
+   (`cmd/keenetic-xray/status.go` + `internal/botcontrol/commands.go`'s
+   `RouterHandler.status`). Read `d.actions.prodNaive` (or expose a small
+   accessor) for `.Running()`.
+3. Decide whether `config.Validate()` should cross-check
+   `Failover.PretestPort+{2,3}` against `SOCKSPort`/`HTTPPort`/`PretestPort`
+   for accidental overlap -- currently unchecked, consistent with how those
+   existing ports aren't cross-checked against each other either.
+4. `go build ./... && go vet ./... && go test ./...`
+5. PR. Green CI → merge. Tag + release if it touches compiled code (all of
+   the above does).
 
 The `naive-core` mirror workflow has already been run for `v150.0.7871.63-1`
 (see section 7) -- no need to run it again unless bumping the pinned version.

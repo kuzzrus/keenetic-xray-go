@@ -2,6 +2,7 @@ package failover
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"os"
@@ -13,6 +14,21 @@ import (
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 )
+
+// naiveProfile is a minimal valid naive profile for the sidecar-lifecycle
+// tests below. The FAILOVER_TEST_HELPER fake process (see TestMain) never
+// inspects argv, so it stands in for the `naive` binary exactly as it
+// already does for xray-core -- no real naive binary needed in CI.
+func naiveProfile(remark string) config.Profile {
+	return config.Profile{
+		Protocol: "naive",
+		Remark:   remark,
+		Address:  "naive.invalid",
+		Port:     8443,
+		User:     "alice",
+		Password: "s3cret",
+	}
+}
 
 // TestMain lets `go test` re-exec the test binary itself as a stand-in
 // for the xray binary Daemon supervises via xrayctl.Supervisor -- avoids
@@ -109,6 +125,239 @@ func TestDaemon_Run_SingleProfile(t *testing.T) {
 		}
 	case <-time.After(20 * time.Second): // prod.Stop() on the fake xray can be slow to reap
 		t.Fatal("Run did not return after cancel")
+	}
+}
+
+// TestDaemon_Run_SingleNaiveProfile is TestDaemon_Run_SingleProfile's
+// sibling for a naive primary: proves Run's real end-to-end wiring --
+// SwitchLiveTo at startup, the shutdown defer added alongside
+// d.actions.prod.Stop() -- actually starts and stops a production naive
+// sidecar, not just that the lower-level realActions methods do in
+// isolation.
+func TestDaemon_Run_SingleNaiveProfile(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.Profiles = []config.Profile{naiveProfile("solo")}
+	cfg.PrimaryIndex = 0
+	cfg.BackupIndex = 0 // no separate backup
+
+	paths := Paths{
+		XrayBinary:       os.Args[0],
+		NaiveBinary:      os.Args[0],
+		ProductionConfig: filepath.Join(dir, "production.json"),
+		PretestConfig:    filepath.Join(dir, "pretest.json"),
+		Env:              []string{"FAILOVER_TEST_HELPER=1"},
+	}
+	d := NewDaemon(paths, cfg)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runErr := make(chan error, 1)
+	go func() { runErr <- d.Run(ctx) }()
+
+	snap, ran := d.Snapshot(ctx)
+	if !ran {
+		t.Fatal("Snapshot: daemon reported not running in single-profile mode")
+	}
+	if snap.State != StateActivePrimary || snap.LiveRole != RolePrimary {
+		t.Errorf("single-profile: State=%v LiveRole=%v, want ACTIVE_PRIMARY/primary", snap.State, snap.LiveRole)
+	}
+	if d.actions.prodNaive == nil || !d.actions.prodNaive.Running() {
+		t.Fatal("expected a running naive sidecar for the naive primary profile")
+	}
+
+	cancel()
+	select {
+	case err := <-runErr:
+		if err != context.Canceled {
+			t.Errorf("Run returned %v, want context.Canceled", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("Run did not return after cancel")
+	}
+
+	if d.actions.prodNaive != nil && d.actions.prodNaive.Running() {
+		t.Error("expected the naive sidecar to be stopped once Run returned (Run's shutdown defer)")
+	}
+}
+
+// TestRealActions_SwitchLiveTo_NaiveProfile_StartsSidecarAndPointsXrayAtIt
+// covers the actual sidecar wiring: a naive primary starts a `naive`
+// sidecar, and the generated production xray config carries a plain socks
+// outbound pointed at that sidecar's local port -- not the naive server's
+// own address/credentials, which must never reach xray's config at all.
+func TestRealActions_SwitchLiveTo_NaiveProfile_StartsSidecarAndPointsXrayAtIt(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.Profiles = []config.Profile{naiveProfile("primary")}
+	cfg.PrimaryIndex = 0
+	cfg.BackupIndex = 0
+
+	paths := Paths{
+		XrayBinary:       os.Args[0],
+		NaiveBinary:      os.Args[0],
+		ProductionConfig: filepath.Join(dir, "production.json"),
+		PretestConfig:    filepath.Join(dir, "pretest.json"),
+		Env:              []string{"FAILOVER_TEST_HELPER=1"},
+	}
+	a := newRealActions(paths, cfg)
+	defer a.prod.Stop()
+	defer a.stopProdNaive()
+
+	if err := a.SwitchLiveTo(context.Background(), RolePrimary); err != nil {
+		t.Fatalf("SwitchLiveTo: %v", err)
+	}
+	if a.prodNaive == nil || !a.prodNaive.Running() {
+		t.Fatal("expected a running naive sidecar for a naive primary profile")
+	}
+
+	data, err := os.ReadFile(paths.ProductionConfig)
+	if err != nil {
+		t.Fatalf("reading production config: %v", err)
+	}
+	var decoded struct {
+		Outbounds []struct {
+			Protocol string `json:"protocol"`
+			Settings struct {
+				Servers []struct {
+					Address string `json:"address"`
+					Port    int    `json:"port"`
+				} `json:"servers"`
+			} `json:"settings"`
+		} `json:"outbounds"`
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if len(decoded.Outbounds) == 0 || decoded.Outbounds[0].Protocol != "socks" {
+		t.Fatalf("first outbound = %#v, want a socks outbound to the sidecar", decoded.Outbounds)
+	}
+	server := decoded.Outbounds[0].Settings.Servers[0]
+	if server.Address != "127.0.0.1" || server.Port != a.naiveProdPort() {
+		t.Errorf("outbound socks server = %s:%d, want 127.0.0.1:%d", server.Address, server.Port, a.naiveProdPort())
+	}
+	if strings.Contains(string(data), "naive.invalid") || strings.Contains(string(data), "s3cret") {
+		t.Errorf("naive server address/credentials leaked into the xray config: %s", data)
+	}
+}
+
+// TestRealActions_SwitchLiveTo_LeavingNaiveStopsSidecar covers the reverse
+// direction: switching production from a naive profile to a vless one
+// must stop the now-unneeded sidecar, not leak it.
+func TestRealActions_SwitchLiveTo_LeavingNaiveStopsSidecar(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.Profiles = []config.Profile{
+		naiveProfile("primary"),
+		{UUID: "b", Address: "backup.invalid", Port: 443, Network: "tcp", Security: "none", Encryption: "none", Remark: "backup"},
+	}
+	cfg.PrimaryIndex = 0
+	cfg.BackupIndex = 1
+
+	paths := Paths{
+		XrayBinary:       os.Args[0],
+		NaiveBinary:      os.Args[0],
+		ProductionConfig: filepath.Join(dir, "production.json"),
+		PretestConfig:    filepath.Join(dir, "pretest.json"),
+		Env:              []string{"FAILOVER_TEST_HELPER=1"},
+	}
+	a := newRealActions(paths, cfg)
+	defer a.prod.Stop()
+	defer a.stopProdNaive()
+
+	if err := a.SwitchLiveTo(context.Background(), RolePrimary); err != nil {
+		t.Fatalf("SwitchLiveTo(primary): %v", err)
+	}
+	sidecar := a.prodNaive
+	if sidecar == nil {
+		t.Fatal("expected a naive sidecar after switching to the naive primary")
+	}
+
+	if err := a.SwitchLiveTo(context.Background(), RoleBackup); err != nil {
+		t.Fatalf("SwitchLiveTo(backup): %v", err)
+	}
+	if a.prodNaive != nil {
+		t.Error("expected prodNaive to be cleared after switching to a vless profile")
+	}
+	if sidecar.Running() {
+		t.Error("expected the old naive sidecar to be stopped after switching to a vless profile")
+	}
+}
+
+// TestRealActions_SwitchLiveTo_NaiveProfile_MissingBinaryErrors: an unset
+// NaiveBinary must fail clearly before touching the production xray
+// process at all -- not fall through to writing a config with no working
+// egress and restarting xray onto it.
+func TestRealActions_SwitchLiveTo_NaiveProfile_MissingBinaryErrors(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.Profiles = []config.Profile{naiveProfile("primary")}
+	cfg.PrimaryIndex = 0
+	cfg.BackupIndex = 0
+
+	paths := Paths{
+		XrayBinary:       os.Args[0],
+		NaiveBinary:      "", // deliberately unset
+		ProductionConfig: filepath.Join(dir, "production.json"),
+		PretestConfig:    filepath.Join(dir, "pretest.json"),
+		Env:              []string{"FAILOVER_TEST_HELPER=1"},
+	}
+	a := newRealActions(paths, cfg)
+
+	err := a.SwitchLiveTo(context.Background(), RolePrimary)
+	if err == nil {
+		t.Fatal("expected an error when NaiveBinary isn't configured")
+	}
+	if !strings.Contains(err.Error(), "naive") {
+		t.Errorf("error = %q, want it to mention naive", err.Error())
+	}
+	if a.prod.Running() {
+		t.Error("production xray should not have been started after a failed naive sidecar start")
+	}
+}
+
+// TestRealActions_StartIsolatedPretest_NaiveProfile covers the pretest
+// (recovery-testing) side: a naive primary gets its own sidecar on the
+// distinct pretest port, and StopIsolatedPretest tears it down alongside
+// the pretest xray instance.
+func TestRealActions_StartIsolatedPretest_NaiveProfile(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.Profiles = []config.Profile{naiveProfile("primary")}
+	cfg.PrimaryIndex = 0
+
+	paths := Paths{
+		XrayBinary:    os.Args[0],
+		NaiveBinary:   os.Args[0],
+		PretestConfig: filepath.Join(dir, "pretest.json"),
+		Env:           []string{"FAILOVER_TEST_HELPER=1"},
+	}
+	a := newRealActions(paths, cfg)
+	defer func() { _ = a.StopIsolatedPretest(context.Background()) }()
+
+	if err := a.StartIsolatedPretest(context.Background()); err != nil {
+		t.Fatalf("StartIsolatedPretest: %v", err)
+	}
+	if a.pretestNaive == nil || !a.pretestNaive.Running() {
+		t.Fatal("expected a running naive sidecar for the pretest instance")
+	}
+	if a.naivePretestPort() == a.naiveProdPort() {
+		t.Fatal("test invariant broken: pretest and production naive ports must differ")
+	}
+
+	data, err := os.ReadFile(paths.PretestConfig)
+	if err != nil {
+		t.Fatalf("reading pretest config: %v", err)
+	}
+	if !strings.Contains(string(data), strconv.Itoa(a.naivePretestPort())) {
+		t.Errorf("pretest config does not reference the naive pretest sidecar port %d:\n%s", a.naivePretestPort(), data)
+	}
+
+	if err := a.StopIsolatedPretest(context.Background()); err != nil {
+		t.Fatalf("StopIsolatedPretest: %v", err)
+	}
+	if a.pretestNaive != nil {
+		t.Error("expected pretestNaive to be cleared after StopIsolatedPretest")
 	}
 }
 

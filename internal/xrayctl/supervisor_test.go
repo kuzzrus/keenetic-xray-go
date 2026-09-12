@@ -66,6 +66,26 @@ func TestSupervisor_StartStop(t *testing.T) {
 	}
 }
 
+func TestSupervisor_ArgsMode(t *testing.T) {
+	sup := &Supervisor{
+		BinaryPath: os.Args[0],
+		Args:       []string{"--listen=socks://127.0.0.1:0", "--proxy=https://u:p@h:443"},
+		Env:        helperEnv("sleep"),
+		BackoffMin: 10 * time.Millisecond,
+		BackoffMax: 50 * time.Millisecond,
+	}
+
+	if err := sup.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitUntil(t, time.Second, sup.Running)
+
+	sup.Stop()
+	if sup.Running() {
+		t.Error("expected Running() to be false after Stop")
+	}
+}
+
 func TestSupervisor_DoubleStartErrors(t *testing.T) {
 	sup := &Supervisor{
 		BinaryPath: os.Args[0],

@@ -19,7 +19,7 @@ import (
 // scripts call -- not meant for interactive use.
 func cmdInternal(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: keenetic-xray internal {postinst-setup|prerm-cleanup|ensure-xray-core|self-rollback} [args]")
+		return fmt.Errorf("usage: keenetic-xray internal {postinst-setup|prerm-cleanup|ensure-xray-core|ensure-naive-core|self-rollback} [args]")
 	}
 	switch args[0] {
 	case "postinst-setup":
@@ -28,6 +28,8 @@ func cmdInternal(args []string) error {
 		return cmdPrermCleanup(args[1:])
 	case "ensure-xray-core":
 		return cmdEnsureXrayCore(args[1:])
+	case "ensure-naive-core":
+		return cmdEnsureNaiveCore(args[1:])
 	case "self-rollback":
 		return cmdSelfRollback(args[1:])
 	default:

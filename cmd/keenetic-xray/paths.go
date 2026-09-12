@@ -17,6 +17,15 @@ func xrayBinaryPath() string {
 	return envOr("KEENETIC_XRAY_BINARY", defaultXrayBinary)
 }
 
+const defaultNaiveBinary = "/opt/sbin/naive"
+
+// naiveBinaryPath is where the naive sidecar (internal/naivecore) lives --
+// fetched lazily, only once a Protocol=="naive" profile exists (or via
+// `internal ensure-naive-core`), not by every install.
+func naiveBinaryPath() string {
+	return envOr("KEENETIC_XRAY_NAIVE_BINARY", defaultNaiveBinary)
+}
+
 const defaultProductionConfigPath = "/opt/var/lib/keenetic-xray/xray-production.json"
 
 func productionConfigPath() string {

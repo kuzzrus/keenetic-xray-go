@@ -152,7 +152,20 @@ and therefore both hard preconditions -- *before* the "⬇️ Установит
 button is ever reachable, not just documented somewhere separate.
 
 Tests throughout (`internal/susanincore`, `internal/addons`) pass; full
-repo `go build`/`go vet`/`go test` green as of this PR.
+repo `go build`/`go vet`/`go test` green.
+
+**Mirror workflow dispatched for real and confirmed green (v0.30.1),
+after two real bugs found by actually running it rather than trusting the
+YAML on paper** (PRs #139, #140): the re-tar step originally packed
+archive members as `./susanin-agent` (from `tar -czf out.tar.gz .` inside
+the extracted dir), but the smoke-test step's named-member extraction
+needed an exact `susanin-agent` match -- fixed by globbing (`tar -czf
+out.tar.gz *`) instead. Then UPX `--lzma` on the aarch64 build produced a
+SIGILL under `qemu-aarch64-static` (mipsel's plain UPX packed and ran
+fine) -- not worth chasing for an 827 KB binary, so UPX packing was
+dropped entirely; the workflow now re-hosts upstream's tarball verbatim.
+`susanin/v0.3.6` has all 6 assets (both arches) as of this note. **Phase 1
+is now actually done, not just merged.**
 
 Not done, not attempted: anything from Phase 2 (still just the plan in
 memory); real-hardware verification of the whole Phase 1 flow (mipsel is

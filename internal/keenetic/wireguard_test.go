@@ -71,6 +71,42 @@ func TestFreeWireguardIface_ReusesOurs(t *testing.T) {
 	}
 }
 
+func TestActiveWGIface_NoneSet(t *testing.T) {
+	fakeNdmc(t, map[string]string{"show running-config": wgRC})
+	got, err := ActiveWGIface(context.Background())
+	if err != nil || got != "" {
+		t.Fatalf("ActiveWGIface = (%q, %v), want (\"\", nil) -- no marked interface exists yet", got, err)
+	}
+}
+
+func TestActiveWGIface_FindsOurs(t *testing.T) {
+	rc := wgRC + "interface Wireguard9\n    description " + WGIfaceMarker + "\n    up\n!\n"
+	fakeNdmc(t, map[string]string{"show running-config": rc})
+	got, err := ActiveWGIface(context.Background())
+	if err != nil || got != "Wireguard9" {
+		t.Fatalf("ActiveWGIface = (%q, %v), want the marked Wireguard9", got, err)
+	}
+}
+
+func TestInterfaceOSName(t *testing.T) {
+	show := "               id: Wireguard4\n" +
+		"             type: Wireguard\n" +
+		"   interface-name: nwg0\n" +
+		"            state: up\n"
+	fakeNdmc(t, map[string]string{"show interface Wireguard4": show})
+	got, err := InterfaceOSName(context.Background(), "Wireguard4")
+	if err != nil || got != "nwg0" {
+		t.Fatalf("InterfaceOSName = (%q, %v), want nwg0", got, err)
+	}
+}
+
+func TestInterfaceOSName_MissingField(t *testing.T) {
+	fakeNdmc(t, map[string]string{"show interface Wireguard4": wgIfaceShow}) // no interface-name line
+	if _, err := InterfaceOSName(context.Background(), "Wireguard4"); err == nil {
+		t.Error("expected an error when the interface-name field is absent")
+	}
+}
+
 func TestWGInterfacePublicKey(t *testing.T) {
 	fakeNdmc(t, map[string]string{"show interface Wireguard4": wgIfaceShow})
 	got, err := WGInterfacePublicKey(context.Background(), "Wireguard4")

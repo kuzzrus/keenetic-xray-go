@@ -126,14 +126,45 @@ deliberately does *not* manage a fixed install location or know about
 install.sh -- that split mirrors internal/naivecore's own scope, just one
 level earlier since this asset is a tarball with its own installer inside).
 `internal/addons/susanin.go` (`Addon` impl: `Install` runs upstream's
-`install.sh --yes --no-start --prefix=/opt/susanin` from the extracted
-scratch dir then discards it; `Configure` requires `egress=` and writes
-`susanin.conf` via the existing `shellConfSet` helper nfqws2 already uses,
-then restarts via `susanin.sh restart`; `Remove` gates on `susaninVersion`
+`install.sh --yes --no-start --prefix /opt/susanin` (two args -- upstream's
+arg parser is a plain `case "$1" in --prefix) PREFIX="$2"; shift ;; ...`,
+no GNU `--flag=value` support, see the 2026-09-13 bug note below) from the
+extracted scratch dir then discards it; `Configure` requires `egress=` and
+writes `susanin.conf` via the existing `shellConfSet` helper nfqws2 already
+uses, then runs `susanin.sh install` (data plane: iptables chain, ip
+rules/routes, ipsets -- idempotent, distinct from the daemon process) and
+only then `susanin.sh restart`; `Remove` gates on `susaninVersion`
 succeeding -- consistent with `naiveCoreAddon`'s idempotent-remove
-precedent -- and runs `uninstall.sh`; `Status`/`Detect` read
-`egress_interface` out of the config to report "not configured yet" before
-ever shelling out to `susanin.sh status`).
+precedent -- and runs `uninstall.sh` (which itself tears the data plane
+down via `datapath.sh down`); `Status`/`Detect` read `egress_interface`
+out of the config to report "not configured yet" before ever shelling out
+to `susanin.sh status`).
+
+**Two live bugs found and fixed post-ship (2026-09-13, on real hardware),
+both from the same root mistake -- trusting the wrapper's own shape
+instead of checking upstream's actual scripts/parsers byte-for-byte:**
+1. `--prefix=/opt/susanin` (one combined arg) hit upstream's `unknown arg`
+   fallback -- its case-statement parser only accepts `--prefix DIR` as two
+   separate args. The shipped test had asserted the same wrong combined
+   form as "expected", so it never caught this.
+2. `Configure` only ever ran `susanin.sh restart` (daemon process only).
+   `susanin.sh install` (-> `datapath.sh up` + `$BIN setup`) is a *separate*
+   upstream command that actually creates the data plane, and nothing in
+   Phase 1 ever called it -- so the daemon ran (or tried to) against a data
+   plane that never existed. Fixed by calling `install` before `restart` in
+   `Configure`.
+
+**Known, not yet fixed**: upstream's own boot-time init script
+(`init/entware/S94susanin`, installed by `install.sh`) only runs
+`susanin.sh start` on boot -- never `install`. Since the data plane
+(iptables/ip rule/ipset) is in-kernel state that doesn't survive a reboot,
+a router restart reproduces bug #2 above every time, even after the
+`Configure` fix. Not upstream's fault to blame exactly -- more that nothing
+in *our* integration re-asserts the data plane after a reboot either.
+Candidate fixes: hook susanin's data-plane presence into this project's
+existing `routerReconcileLoop`/ndm-event self-heal (same mechanism that
+already re-asserts MSS clamp/routes/WG-transport), rather than patching
+upstream's shipped init.d file. Not built yet.
 
 **No separate CLI command was added** (no `ensure-susanin-core` mirroring
 `ensure-naive-core`) -- deliberately: naive-core needed one because

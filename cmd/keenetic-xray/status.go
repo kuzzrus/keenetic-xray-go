@@ -10,6 +10,7 @@ import (
 	"github.com/kuzzrus/keenetic-xray-go/internal/diskspace"
 	"github.com/kuzzrus/keenetic-xray-go/internal/health"
 	"github.com/kuzzrus/keenetic-xray-go/internal/keenetic"
+	"github.com/kuzzrus/keenetic-xray-go/internal/version"
 	"github.com/kuzzrus/keenetic-xray-go/internal/xraycore"
 )
 
@@ -51,6 +52,14 @@ func cmdStatus(args []string) error {
 	if err != nil {
 		return err
 	}
+	// This CLI status and RouterHandler.status (internal/botcontrol,
+	// what the bot's 📊 Статус and the heartbeat actually see) are two
+	// independent implementations with their own field sets -- this line
+	// exists so `keenetic-xray status` over SSH answers "what version am
+	// I on" too, the same first line the bot-facing one already has,
+	// instead of operators needing daemon.log's post-update lines to find
+	// out (that gap is exactly what surfaced this).
+	fmt.Printf("agent: %s\n", version.String())
 	fmt.Printf("variant: %s\n", cfg.Variant)
 	fmt.Printf("profiles: %d\n", len(cfg.Profiles))
 	if p := cfg.Primary(); p != nil {

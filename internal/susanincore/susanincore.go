@@ -13,7 +13,7 @@
 // release in a scratch directory" -- the addon layer runs install.sh from
 // there. Never compiles anything: R17a/Susanin.Keenetic is MIT and already
 // publishes a ready per-arch tarball; .github/workflows/susanin-core.yml
-// re-hosts a UPX-repacked copy of it under this repo's own releases with
+// re-hosts a verified copy of it under this repo's own releases with
 // a provenance file, the same trust shape as naive-core.
 package susanincore
 

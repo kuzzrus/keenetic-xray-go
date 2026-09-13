@@ -18,8 +18,10 @@ import (
 // alongside withFakeSys, same reasoning as withFakeNaivecore.
 func withFakeSusanincore(t *testing.T) (installed *bool, calls *[]string) {
 	t.Helper()
-	saveEnsure, saveVersion, saveRun := susaninEnsure, susaninVersion, runScript
-	t.Cleanup(func() { susaninEnsure, susaninVersion, runScript = saveEnsure, saveVersion, saveRun })
+	saveEnsure, saveVersion, saveRun, saveRunEnv := susaninEnsure, susaninVersion, runScript, runScriptEnv
+	t.Cleanup(func() {
+		susaninEnsure, susaninVersion, runScript, runScriptEnv = saveEnsure, saveVersion, saveRun, saveRunEnv
+	})
 
 	installed = new(bool)
 	var log []string
@@ -57,6 +59,9 @@ func withFakeSusanincore(t *testing.T) (installed *bool, calls *[]string) {
 			*installed = false
 		}
 		return "", nil
+	}
+	runScriptEnv = func(ctx context.Context, path string, extraEnv []string, args ...string) (string, error) {
+		return runScript(ctx, path, args...)
 	}
 	return installed, calls
 }
@@ -170,6 +175,52 @@ func TestSusanin_Configure_AcceptsNDMStyleEgress(t *testing.T) {
 	}
 	if got := susaninConfValue("egress_interface"); got != "Wireguard3" {
 		t.Errorf("egress_interface = %q, want Wireguard3", got)
+	}
+}
+
+func TestSusanin_Configure_SetsEgressEnvForDatapath(t *testing.T) {
+	f := newFakeSys()
+	withFakeSys(t, f)
+	withFakeSusanincore(t)
+	f.files[susaninConf] = []byte("egress_interface=\n")
+
+	// The actual live bug: upstream's tools/susanin.sh `install` case runs
+	// `sh "$TOOLS/datapath.sh" up; "$BIN" setup` -- two commands, and only
+	// the *second* (backend.c's set_env, via the agent binary) exports
+	// SUSANIN_EGRESS/SUSANIN_LAN from the loaded config. The first, bare
+	// `datapath.sh up` call sees neither and silently falls back to
+	// datapath.sh's own hardcoded default (egress "nwg0"). Under
+	// susanin.sh's own `set -eu`, if that first call fails -- which it did
+	// live, because the configured egress wasn't nwg0 and nwg0 itself
+	// wasn't up -- susanin.sh aborts before ever reaching the second
+	// command that would have gotten it right. A shell child inherits its
+	// parent's environment, so setting these in *our* runScriptEnv call
+	// fixes it without patching upstream's script.
+	var gotEnv []string
+	orig := runScriptEnv
+	runScriptEnv = func(ctx context.Context, path string, extraEnv []string, args ...string) (string, error) {
+		if filepath.Base(path) == "susanin.sh" && len(args) > 0 && args[0] == "install" {
+			gotEnv = extraEnv
+		}
+		return orig(ctx, path, extraEnv, args...)
+	}
+	t.Cleanup(func() { runScriptEnv = orig })
+
+	a, _ := Find("susanin")
+	if err := a.Configure(context.Background(), map[string]string{"egress": "nwg3", "lan": "br0,br1"}); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
+	wantEgress, wantLan := false, false
+	for _, e := range gotEnv {
+		if e == "SUSANIN_EGRESS=nwg3" {
+			wantEgress = true
+		}
+		if e == "SUSANIN_LAN=br0,br1" {
+			wantLan = true
+		}
+	}
+	if !wantEgress || !wantLan {
+		t.Errorf("susanin.sh install env = %v, want SUSANIN_EGRESS=nwg3 and SUSANIN_LAN=br0,br1", gotEnv)
 	}
 }
 

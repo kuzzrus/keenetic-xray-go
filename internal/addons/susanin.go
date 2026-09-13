@@ -1,9 +1,11 @@
 package addons
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -43,13 +45,57 @@ const (
 // call in this package that reaches the network instead of opkg/init.d.
 // runScript runs `sh <path> <args...>`, for upstream's own install.sh /
 // susanin.sh -- also swappable, so tests never actually shell out.
+// runScriptEnv is the same, plus extra environment variables on top of our
+// own process's -- only susaninApply's `susanin.sh install` call needs
+// this, see susaninEnv's comment for why.
 var (
 	susaninEnsure  = susanincore.Ensure
 	susaninVersion = susanincore.Version
 	runScript      = func(ctx context.Context, path string, args ...string) (string, error) {
 		return runCombined(ctx, "sh", append([]string{path}, args...)...)
 	}
+	runScriptEnv = func(ctx context.Context, path string, extraEnv []string, args ...string) (string, error) {
+		cmd := exec.CommandContext(ctx, "sh", append([]string{path}, args...)...)
+		cmd.Env = append(os.Environ(), extraEnv...)
+		var buf bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &buf, &buf
+		err := cmd.Run()
+		return buf.String(), err
+	}
 )
+
+// susaninEnv builds the SUSANIN_* environment variables datapath.sh reads
+// (EGRESS=${SUSANIN_EGRESS:-nwg0}, LAN=${SUSANIN_LAN:-"br0 br1"}, ...) from
+// susanin.conf's own values.
+//
+// This exists because of a real bug in upstream's own tools/susanin.sh:
+// its `install` case runs `sh "$TOOLS/datapath.sh" up; "$BIN" setup` --
+// two commands, and only the *second* (`$BIN setup`, backend.c's
+// set_env()) ever exports these from the loaded config. The first, bare
+// `datapath.sh up` call sees none of them and silently falls back to
+// datapath.sh's own hardcoded defaults (egress nwg0, not whatever
+// egress_interface actually says) -- and since susanin.sh runs under its
+// own `set -eu`, if that first call fails (found live: nwg0 existed but
+// was administratively down on this router, while the *configured*
+// interface was up and fine), susanin.sh aborts right there and never
+// reaches the second command that would have gotten it right. This
+// reproduces identically whether `install` is run by this addon or typed
+// by hand -- it's not about who calls it.
+//
+// Setting these in our own child's environment fixes it without patching
+// upstream's script: a shell script's children inherit its environment,
+// so the bare `sh datapath.sh up` *inside* susanin.sh sees them too, same
+// as if they'd been exported before the call.
+func susaninEnv() []string {
+	var env []string
+	if v := susaninConfValue("egress_interface"); v != "" {
+		env = append(env, "SUSANIN_EGRESS="+v)
+	}
+	if v := susaninConfValue("lan_interfaces"); v != "" {
+		env = append(env, "SUSANIN_LAN="+v)
+	}
+	return env
+}
 
 type susaninAddon struct{}
 
@@ -248,10 +294,11 @@ func susaninApply(ctx context.Context, set map[string]string) error {
 	if err := shellConfSet(susaninConf, set); err != nil {
 		return err
 	}
-	if out, err := runScript(ctx, susaninTools+"/susanin.sh", "install"); err != nil {
+	env := susaninEnv()
+	if out, err := runScriptEnv(ctx, susaninTools+"/susanin.sh", env, "install"); err != nil {
 		return fmt.Errorf("susanin: настройка дата-плейна не удалась: %w\n%s", err, strings.TrimSpace(out))
 	}
-	if out, err := runScript(ctx, susaninTools+"/susanin.sh", "restart"); err != nil {
+	if out, err := runScriptEnv(ctx, susaninTools+"/susanin.sh", env, "restart"); err != nil {
 		return fmt.Errorf("susanin не перезапустился после изменения настроек: %w\n%s", err, strings.TrimSpace(out))
 	}
 	return nil

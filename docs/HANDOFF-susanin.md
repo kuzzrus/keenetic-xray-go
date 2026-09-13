@@ -41,24 +41,29 @@ remove wrap upstream's own `susanin.sh` control script.
 
 **Two hard preconditions, both must be surfaced clearly to the operator,
 not silently assumed:**
-1. **WG-transport must be enabled** (`config.WGTransportConfig.Enabled` +
-   `.Iface`) -- Susanin needs a real L3 interface to route into via
-   `ip route ... dev <egress>`; Proxy0 has no such interface (NDM's own
-   domain-triggered redirect, not a routable one). WG-transport gives us
-   exactly that (xray is the WG server, `WGTransportConfig.Iface` e.g.
-   `"Wireguard4"` is the Keenetic-side peer interface) -- pointing
-   Susanin's `egress_interface` at it should, per how WG-transport already
-   works, land Susanin-routed traffic in the currently-live vless/naive
-   profile with zero new xray code. **The addon's first cut asks the
-   operator for the OS-level interface name directly** (`egress=` config
-   key) rather than resolving `WGTransportConfig.Iface` (the NDM name,
-   e.g. "Wireguard4") automatically -- that resolution is possible (RCI's
-   `show interface <iface>` has an `interface-name:` field, confirmed in
-   `internal/keenetic/rci_reformat.go`; the value the operator needs is
-   right there) but was deliberately deferred to keep the first PR small.
-   The operator can find it themselves: `ndmc -c show interface
-   Wireguard4` (or whatever `WGTransportConfig.Iface` is) → the
-   `interface-name:` line.
+1. **WG-transport must be enabled.** Susanin needs a real L3 interface to
+   route into via `ip route ... dev <egress>`; Proxy0 has no such
+   interface (NDM's own domain-triggered redirect, not a routable one).
+   WG-transport gives us exactly that (xray is the WG server, the
+   Keenetic-side peer interface is what carries the traffic) -- pointing
+   Susanin's `egress_interface` at it lands Susanin-routed traffic in the
+   currently-live vless/naive profile with zero new xray code.
+   **Auto-resolved as of the same-day follow-up (no longer a manual
+   step when this holds)**: `Install()` calls `internal/keenetic.
+   ActiveWGIface` (new -- finds the interface carrying `WGIfaceMarker`
+   without allocating a new slot the way `FreeWireguardIface` would) then
+   `InterfaceOSName` (new -- the `interface-name:` field off `show
+   interface`, confirmed in `internal/keenetic/rci_reformat.go`) and, if
+   both resolve, writes `egress_interface` and brings the data plane up
+   itself -- best-effort, any failure anywhere in that chain just falls
+   back to today's manual path silently (Install must never fail over a
+   convenience step). `internal/addons` deliberately has no access to
+   `*config.Config` (established pattern -- addons are decoupled from
+   keenetic-xray's own config, same as nfqws2's `isp_interface=`), so this
+   discovers the marked interface directly off the router's own running
+   config rather than reading `WGTransportConfig.Iface`. Manual
+   `addon configure susanin egress=<iface>` remains the fallback/override
+   for WG-transport-not-yet-enabled, or a different intended egress.
 2. **Keenetic's own DNS-based routing must be off** while this addon is
    active, per upstream's own README -- that's the exact mechanism our
    `routes`/Proxy0/preset-catalogue system depends on. Not automated

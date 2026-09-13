@@ -265,6 +265,40 @@ func WGInterfaceUp(ctx context.Context, iface string) bool {
 	return false
 }
 
+// ActiveWGIface returns the Keenetic WireGuard interface this project has
+// already created (carrying WGIfaceMarker), or "" if none exists yet.
+// Unlike FreeWireguardIface -- which allocates the lowest free WireguardN
+// slot when none is marked yet, since its callers are about to create
+// one -- this never allocates: a caller that only wants to know whether
+// WG-transport is already active (not stand up a new one) would
+// otherwise get back a plausible-looking but nonexistent interface name.
+func ActiveWGIface(ctx context.Context) (string, error) {
+	if !Available() {
+		return "", fmt.Errorf("ndmc not found (not a Keenetic router?)")
+	}
+	_, ours, err := scanWireguardIfaces(ctx)
+	return ours, err
+}
+
+// InterfaceOSName returns the OS-level (kernel) network device name
+// backing a Keenetic interface -- e.g. "Wireguard4" (the NDM name) might
+// be "nwg0" at the `ip`/iptables level. Keenetic reports this as the
+// `interface-name` field of `show interface`; needed by anything that
+// has to drive the device directly rather than through ndmc.
+func InterfaceOSName(ctx context.Context, iface string) (string, error) {
+	out, err := ndmcRun(ctx, "show interface "+iface)
+	if err != nil {
+		return "", fmt.Errorf("show interface %s: %w", iface, err)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(line)
+		if len(f) >= 2 && f[0] == "interface-name:" {
+			return f[1], nil
+		}
+	}
+	return "", fmt.Errorf("show interface %s: no interface-name field (interface down or not fully up yet?)", iface)
+}
+
 // ShowWGTransport returns a short human summary of our WG interface's
 // live state, or a note if it isn't set up.
 func ShowWGTransport(ctx context.Context, iface string) (string, error) {

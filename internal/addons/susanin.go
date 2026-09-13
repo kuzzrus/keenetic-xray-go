@@ -68,7 +68,10 @@ func (susaninAddon) About() string {
 		"  1) должен быть включён WG-транспорт (Susanin поедет через этот интерфейс egress'ом) --\n" +
 		"  2) DNS-based маршрутизация Keenetic (наш `routes`) на время работы Susanin должна быть " +
 		"выключена -- это тот же самый механизм, оба разом работать не должны.\n\n" +
-		"Настройки (addon configure susanin …), обязателен egress перед первым запуском:\n" +
+		"Если WG-транспорт уже включён на момент установки — egress определяется и применяется " +
+		"сам (через ndmc/RCI, находит наш помеченный интерфейс), настраивать вручную не нужно. " +
+		"Если нет (или автоопределение не сработало) — задай сам:\n" +
+		"Настройки (addon configure susanin …):\n" +
 		"  egress=Wireguard4     OS-имя интерфейса WG-транспорта (не NDM-имя!) -- узнать:\n" +
 		"                        `ndmc -c show interface <NDM-имя-из-WGTransport.Iface>`,\n" +
 		"                        строка `interface-name:`\n" +
@@ -101,15 +104,49 @@ func (susaninAddon) Install(ctx context.Context) error {
 	}
 	defer os.RemoveAll(dir)
 
-	// --no-start: without a real egress configured yet (Configure sets
-	// it), starting the daemon now would just run it against whatever
-	// install.sh's own auto-detection guessed -- Configure's restart is
-	// what actually brings it up meaningfully.
+	// --no-start: without a real egress configured yet, starting the
+	// daemon now would just run it against whatever install.sh's own
+	// auto-detection guessed (it doesn't recognize Keenetic's WG-transport
+	// interface naming -- see resolveEgress). The auto-configure attempt
+	// right below, or a manual Configure call, is what actually brings it
+	// up meaningfully.
 	installSh := filepath.Join(dir, "install.sh")
 	if out, err := runScript(ctx, installSh, "--yes", "--no-start", "--prefix", susaninPrefix); err != nil {
 		return fmt.Errorf("susanin install.sh: %w\n%s", err, strings.TrimSpace(out))
 	}
+
+	// Best-effort auto-configure: if this project's own WG-transport is
+	// already active, point susanin at it immediately rather than making
+	// every install go through a manual `egress=` step. Any failure along
+	// this path (WG-transport not enabled yet, ndmc/RCI unreachable, the
+	// bring-up itself failing) just leaves susanin installed-but-
+	// unconfigured, exactly as if this didn't exist -- Status/Detect
+	// already explain the manual fallback, and Install must not fail over
+	// a convenience step when the files it's actually responsible for are
+	// down correctly.
+	if iface := resolveEgress(ctx); iface != "" {
+		_ = susaninApply(ctx, map[string]string{"egress_interface": iface})
+	}
 	return nil
+}
+
+// resolveEgress finds the OS-level interface name for this project's own
+// WG-transport, if it's already been created -- "" if WG-transport was
+// never enabled, or if ndmc/RCI can't be reached at all (not a Keenetic
+// router, or something's misconfigured). Every caller falls back to the
+// documented manual `egress=` step regardless of why this came back
+// empty, so it deliberately never returns an error to distinguish those
+// cases -- there's nothing a caller would do differently either way.
+func resolveEgress(ctx context.Context) string {
+	ndmName, err := activeWGIface(ctx)
+	if err != nil || ndmName == "" {
+		return ""
+	}
+	osName, err := interfaceOSName(ctx, ndmName)
+	if err != nil {
+		return ""
+	}
+	return osName
 }
 
 func (susaninAddon) Remove(ctx context.Context) error {
@@ -159,16 +196,22 @@ func (susaninAddon) Configure(ctx context.Context, kv map[string]string) error {
 			return fmt.Errorf("неизвестный ключ %q (см. `addon show susanin`)", k)
 		}
 	}
+	return susaninApply(ctx, set)
+}
+
+// susaninApply writes set into susanin.conf and brings the data plane +
+// daemon up from it -- shared by Configure and Install's best-effort
+// auto-configure (see resolveEgress). `susanin.sh install` brings up the
+// data plane (iptables chain, ip rules/routes, ipsets) from the config
+// just written -- idempotent (upstream's own datapath.sh: "delete-then-
+// add"). It's a distinct step from the daemon process itself and from
+// Install(), which only lays out files (see its --no-start comment);
+// restart alone never brought up anything beyond a bare daemon process
+// watching a data plane that never existed.
+func susaninApply(ctx context.Context, set map[string]string) error {
 	if err := shellConfSet(susaninConf, set); err != nil {
 		return err
 	}
-	// susanin.sh install brings up the data plane (iptables chain, ip
-	// rules/routes, ipsets) from the config just written -- idempotent
-	// (upstream's own datapath.sh: "delete-then-add"). It's a distinct
-	// step from the daemon process itself and from this addon's Install(),
-	// which only lays out files (see the --no-start comment there);
-	// restart alone never brought up anything beyond a bare daemon
-	// process watching a data plane that never existed.
 	if out, err := runScript(ctx, susaninTools+"/susanin.sh", "install"); err != nil {
 		return fmt.Errorf("susanin: настройка дата-плейна не удалась: %w\n%s", err, strings.TrimSpace(out))
 	}

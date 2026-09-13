@@ -44,12 +44,103 @@ func withFakeSusanincore(t *testing.T) (installed *bool, calls *[]string) {
 		switch filepath.Base(path) {
 		case "install.sh":
 			*installed = true
+			// The real install.sh writes susanin.conf from its own
+			// config.example.conf template (see docs/HANDOFF-susanin.md);
+			// mirror that here so shellConfSet (called by susaninApply,
+			// including Install's own best-effort auto-configure) has a
+			// file to edit, same as production has by the time this runs
+			// for real. Only if a test hasn't already seeded one itself.
+			if _, err := readFile(susaninConf); err != nil {
+				_ = writeFile(susaninConf, []byte("egress_interface=\nlan_interfaces=\n"), 0o644)
+			}
 		case "uninstall.sh":
 			*installed = false
 		}
 		return "", nil
 	}
 	return installed, calls
+}
+
+// withFakeWGTransport swaps activeWGIface/interfaceOSName so resolveEgress
+// can be exercised without a real Keenetic. ndmName == "" simulates
+// WG-transport never having been enabled (the common case on a fresh
+// router); non-empty simulates it already being active.
+func withFakeWGTransport(t *testing.T, ndmName, osName string) {
+	t.Helper()
+	saveActive, saveOSName := activeWGIface, interfaceOSName
+	t.Cleanup(func() { activeWGIface, interfaceOSName = saveActive, saveOSName })
+
+	activeWGIface = func(ctx context.Context) (string, error) {
+		if ndmName == "" {
+			return "", nil
+		}
+		return ndmName, nil
+	}
+	interfaceOSName = func(ctx context.Context, iface string) (string, error) {
+		if iface != ndmName {
+			t.Errorf("interfaceOSName called with %q, want %q", iface, ndmName)
+		}
+		return osName, nil
+	}
+}
+
+func TestSusanin_Install_AutoConfiguresWhenWGTransportActive(t *testing.T) {
+	f := newFakeSys()
+	withFakeSys(t, f)
+	_, calls := withFakeSusanincore(t)
+	withFakeWGTransport(t, "Wireguard4", "nwg0")
+
+	a, _ := Find("susanin")
+	if err := a.Install(context.Background()); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+
+	conf := string(f.files[susaninConf])
+	if !strings.Contains(conf, `egress_interface="nwg0"`) {
+		t.Errorf("conf missing auto-resolved egress_interface: %s", conf)
+	}
+	var sawInstall, sawRestart bool
+	for _, c := range *calls {
+		if strings.Contains(c, "susanin.sh install") {
+			sawInstall = true
+		}
+		if strings.Contains(c, "susanin.sh restart") {
+			sawRestart = true
+		}
+	}
+	if !sawInstall || !sawRestart {
+		t.Errorf("expected susanin.sh install and restart after auto-configure, calls = %v", *calls)
+	}
+	if st := a.Detect(context.Background()); !strings.Contains(st.Detail, "nwg0") {
+		t.Errorf("Detect.Detail = %q, want it to show the auto-resolved egress", st.Detail)
+	}
+}
+
+func TestSusanin_Install_LeavesUnconfiguredWhenWGTransportInactive(t *testing.T) {
+	f := newFakeSys()
+	withFakeSys(t, f)
+	_, calls := withFakeSusanincore(t)
+	withFakeWGTransport(t, "", "") // no marked interface -- WG-transport never enabled
+
+	a, _ := Find("susanin")
+	if err := a.Install(context.Background()); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	// install.sh's own config.example.conf template exists either way
+	// (see withFakeSusanincore) -- what must NOT have happened is
+	// anything trying to *use* it (susaninApply, and by extension
+	// susanin.sh) when there's no egress to point it at yet.
+	if got := susaninConfValue("egress_interface"); got != "" {
+		t.Errorf("egress_interface = %q, want empty -- auto-configure must not have run", got)
+	}
+	for _, c := range *calls {
+		if strings.Contains(c, "susanin.sh") {
+			t.Errorf("no susanin.sh call expected when WG-transport isn't active, got %v", *calls)
+		}
+	}
+	if st := a.Detect(context.Background()); !strings.Contains(st.Detail, "не настроен") {
+		t.Errorf("Detect.Detail = %q, want the manual-configure fallback message", st.Detail)
+	}
 }
 
 func TestSusanin_Lifecycle(t *testing.T) {

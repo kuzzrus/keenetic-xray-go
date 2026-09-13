@@ -116,6 +116,84 @@ func TestSusanin_Install_AutoConfiguresWhenWGTransportActive(t *testing.T) {
 	}
 }
 
+func TestSusanin_Configure_EgressAuto(t *testing.T) {
+	f := newFakeSys()
+	withFakeSys(t, f)
+	_, calls := withFakeSusanincore(t)
+	withFakeWGTransport(t, "Wireguard3", "nwg0")
+	f.files[susaninConf] = []byte("egress_interface=\nlan_interfaces=\n")
+
+	a, _ := Find("susanin")
+	if err := a.Configure(context.Background(), map[string]string{"egress": "auto"}); err != nil {
+		t.Fatalf("Configure(egress=auto): %v", err)
+	}
+	if got := susaninConfValue("egress_interface"); got != "nwg0" {
+		t.Errorf("egress_interface = %q, want the auto-resolved nwg0", got)
+	}
+	found := false
+	for _, c := range *calls {
+		if strings.Contains(c, "susanin.sh install") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("egress=auto should still bring the data plane up, calls = %v", *calls)
+	}
+}
+
+func TestSusanin_Configure_EgressAuto_FailsWhenUnresolvable(t *testing.T) {
+	withFakeSys(t, newFakeSys())
+	withFakeSusanincore(t)
+	withFakeWGTransport(t, "", "") // WG-transport not active
+
+	a, _ := Find("susanin")
+	if err := a.Configure(context.Background(), map[string]string{"egress": "auto"}); err == nil {
+		t.Error("egress=auto should fail clearly when nothing resolves, not silently do nothing")
+	}
+}
+
+func TestSusanin_Configure_RejectsNDMStyleEgress(t *testing.T) {
+	f := newFakeSys()
+	withFakeSys(t, f)
+	withFakeSusanincore(t)
+	f.files[susaninConf] = []byte("egress_interface=\n")
+
+	// This is the actual mistake that happened live: an operator (misled
+	// by an earlier, confusing About() example) configured egress to the
+	// NDM interface name shown by ndmc/the router card instead of the
+	// kernel device name -- datapath.sh's `ip route add default dev
+	// Wireguard3` has no such device to route into, so the whole `up`
+	// sequence aborted under set -eu and the data plane was never created
+	// at all (susanin.sh status: everything MISSING, daemon stopped).
+	a, _ := Find("susanin")
+	err := a.Configure(context.Background(), map[string]string{"egress": "Wireguard3"})
+	if err == nil {
+		t.Fatal("egress=Wireguard3 (an NDM-style name) should be rejected, not silently break the data plane")
+	}
+	if !strings.Contains(err.Error(), "auto") {
+		t.Errorf("error = %q, want it to point at egress=auto as the fix", err.Error())
+	}
+	if got := susaninConfValue("egress_interface"); got != "" {
+		t.Errorf("rejected egress must not be written: got %q", got)
+	}
+}
+
+func TestLooksLikeNDMName(t *testing.T) {
+	cases := map[string]bool{
+		"Wireguard3":       true,
+		"GigabitEthernet0": true,
+		"nwg0":             false,
+		"eth0":             false,
+		"br0":              false,
+		"":                 false,
+	}
+	for in, want := range cases {
+		if got := looksLikeNDMName(in); got != want {
+			t.Errorf("looksLikeNDMName(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
 func TestSusanin_Install_LeavesUnconfiguredWhenWGTransportInactive(t *testing.T) {
 	f := newFakeSys()
 	withFakeSys(t, f)

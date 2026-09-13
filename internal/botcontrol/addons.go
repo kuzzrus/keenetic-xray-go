@@ -86,13 +86,19 @@ func (h *RouterHandler) addonInstall(ctx context.Context, args []string) (string
 	if err != nil {
 		return "", err
 	}
-	if a.Detect(ctx).Installed {
-		return a.ID() + ": уже установлен", nil
-	}
+	// Always call Install, even if Detect already reports it present --
+	// see the identical comment in cmd/keenetic-xray/addon.go's
+	// addonInstall for why (every addon's own Install is safe to re-run,
+	// and susanin specifically needs a re-run reachable to pick up its
+	// egress auto-resolve on an already-installed router).
+	wasInstalled := a.Detect(ctx).Installed
 	if err := a.Install(ctx); err != nil {
 		return "", err
 	}
 	out, _ := a.Status(ctx)
+	if wasInstalled {
+		return a.ID() + ": уже был установлен, применил ещё раз\n" + out, nil
+	}
 	return a.ID() + ": установлен\n" + out, nil
 }
 

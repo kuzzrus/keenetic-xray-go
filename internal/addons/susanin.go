@@ -100,6 +100,21 @@ func (susaninAddon) Detect(ctx context.Context) State {
 }
 
 func (susaninAddon) Install(ctx context.Context) error {
+	// Upstream's own hard requirements (its README: "пакеты Entware:
+	// ipset, conntrack, busybox, iptables (legacy)"). iptables is already
+	// guaranteed present (keenetic-xray's own MSS clamp/routes depend on
+	// it), but ipset and the conntrack CLI -- datapath.sh shells out to
+	// both (backend_ct_delete's own `conntrack -D`, confirmed from
+	// upstream's src/backend.c) -- are not anything else in this project
+	// installs. Found live: install.sh/susanin.sh both ran without a
+	// fatal error, but datapath.sh's own `up` died with "ipset not found"
+	// the moment anything actually tried to bring the data plane up.
+	// Same prerequisite-install shape as nfqws2's own ca-certificates/
+	// wget-ssl step.
+	if err := opkgInstall(ctx, "ipset", "conntrack"); err != nil {
+		return fmt.Errorf("susanin: %w", err)
+	}
+
 	dir, err := susaninEnsure(ctx, susanincore.Options{})
 	if err != nil {
 		return err

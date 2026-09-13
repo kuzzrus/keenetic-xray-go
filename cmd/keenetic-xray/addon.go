@@ -141,11 +141,21 @@ func addonInstall(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	// Always call Install, even if Detect already reports it present:
+	// every addon's own Install is safe to re-run (opkg-based ones are a
+	// standard no-op on an unchanged package; naive-core/cron have their
+	// own internal short-circuits) and, for susanin specifically, a
+	// re-run is how its egress auto-resolve (or an operator's fixed
+	// config) actually gets picked up on an existing install -- a
+	// "welcome back, if it's already there there's nothing more to do"
+	// skip here used to make that dead code reachable only via a fresh
+	// install, found live when a re-tap of "Установить" on a
+	// misconfigured susanin did nothing at all.
 	if a.Detect(ctx).Installed {
-		fmt.Printf("%s уже установлен\n", id)
-		return nil
+		fmt.Printf("%s уже установлен -- проверяю/обновляю настройку…\n", id)
+	} else {
+		fmt.Printf("ставлю %s…\n", id)
 	}
-	fmt.Printf("ставлю %s…\n", id)
 	if err := a.Install(ctx); err != nil {
 		return err
 	}

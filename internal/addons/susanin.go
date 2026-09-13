@@ -26,6 +26,16 @@ const (
 	susaninBin    = susaninPrefix + "/bin/susanin-agent"
 	susaninTools  = susaninPrefix + "/tools"
 	susaninConf   = susaninPrefix + "/etc/susanin.conf"
+	// susaninInitd is upstream's own boot-script path. install.sh only
+	// copies its bundled S94susanin there -- the release tarball this
+	// project mirrors doesn't include one (confirmed against the real
+	// upstream deploy tarball: it ships install.sh/susanin.sh/datapath.sh/
+	// update.sh/uninstall.sh/susanin-agent/config.example.conf/
+	// vpn_always.txt/vpn_never.txt only -- S94susanin lives solely in the
+	// git checkout's init/entware or init/openwrt, for the full manual
+	// DEPLOY.md flow), so this path never actually exists on a router
+	// this addon installed. See Remove's comment for why that matters.
+	susaninInitd = "/opt/etc/init.d/S94susanin"
 )
 
 // susaninEnsure / susaninVersion are susanincore.Ensure/Version, swappable
@@ -105,6 +115,21 @@ func (susaninAddon) Install(ctx context.Context) error {
 func (susaninAddon) Remove(ctx context.Context) error {
 	if _, err := susaninVersion(susaninBin); err != nil {
 		return nil // never installed
+	}
+	// Upstream's uninstall.sh runs under `set -e` and, unconditionally,
+	// does `[ -f "$INITD" ] && rm -f "$INITD" && say ...` as a bare
+	// statement -- when that file doesn't exist (see susaninInitd's
+	// comment: it never does, on a router this addon installed), the
+	// compound expression's exit status is non-zero and the whole script
+	// aborts right there, before ever reaching the actual file removal
+	// further down. It does stop the daemon and tear down the data plane
+	// first (those steps are properly guarded), so the practical symptom
+	// is "🗑 Удалить runs, susanin stops working, but still shows
+	// installed" -- nothing was actually deleted. Touch a harmless empty
+	// placeholder so upstream's own check passes; it removes the
+	// placeholder itself moments later as part of its normal cleanup.
+	if err := writeFile(susaninInitd, nil, 0o644); err != nil {
+		return fmt.Errorf("susanin: подготовка к удалению не удалась: %w", err)
 	}
 	if out, err := runScript(ctx, susaninTools+"/uninstall.sh"); err != nil {
 		return fmt.Errorf("susanin uninstall.sh: %w\n%s", err, strings.TrimSpace(out))

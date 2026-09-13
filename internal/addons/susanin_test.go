@@ -76,11 +76,18 @@ func TestSusanin_Lifecycle(t *testing.T) {
 	if len(*calls) != 1 {
 		t.Fatalf("calls after Install = %v, want exactly one (install.sh)", *calls)
 	}
+	// Upstream's install.sh parses args as a plain `case "$1" in --prefix)
+	// PREFIX="$2"; shift ;; ...` -- it has no GNU-style --flag=value
+	// support, so "--prefix=X" as one combined arg hits its `*) die
+	// "unknown arg"` fallback. Must be passed as two separate args.
 	installCall := (*calls)[0]
-	for _, want := range []string{"install.sh", "--yes", "--no-start", "--prefix=" + susaninPrefix} {
+	for _, want := range []string{"install.sh", "--yes", "--no-start", "--prefix " + susaninPrefix} {
 		if !strings.Contains(installCall, want) {
 			t.Errorf("install.sh call = %q, missing %q", installCall, want)
 		}
+	}
+	if strings.Contains(installCall, "--prefix=") {
+		t.Errorf("install.sh call = %q, upstream doesn't understand --prefix=X (space-separated only)", installCall)
 	}
 
 	st := a.Detect(ctx)

@@ -33,6 +33,7 @@ func TestReconcileSteps_NoRouterIsNoop(t *testing.T) {
 	reconcileProxy0(ctx, cfg, logf)
 	reconcileWGTransport(ctx, cfg, logf)
 	reconcileMSSClamp(ctx, cfg, logf)
+	reconcileSusanin(ctx, logf)
 }
 
 // The loop returns promptly on a cancelled context and never ticks

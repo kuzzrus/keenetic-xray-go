@@ -251,6 +251,78 @@ func TestSusanin_Install_LeavesUnconfiguredWhenWGTransportInactive(t *testing.T)
 	}
 }
 
+func TestEnsureSusaninRunning_NotInstalled(t *testing.T) {
+	withFakeSys(t, newFakeSys())
+	_, calls := withFakeSusanincore(t) // installed=false by default
+
+	acted, err := EnsureSusaninRunning(context.Background())
+	if err != nil || acted {
+		t.Fatalf("EnsureSusaninRunning = (%v, %v), want (false, nil) when never installed", acted, err)
+	}
+	if len(*calls) != 0 {
+		t.Errorf("should not shell out when never installed, calls = %v", *calls)
+	}
+}
+
+func TestEnsureSusaninRunning_NotConfigured(t *testing.T) {
+	f := newFakeSys()
+	withFakeSys(t, f)
+	installed, calls := withFakeSusanincore(t)
+	*installed = true
+	f.files[susaninConf] = []byte("egress_interface=\n")
+
+	acted, err := EnsureSusaninRunning(context.Background())
+	if err != nil || acted {
+		t.Fatalf("EnsureSusaninRunning = (%v, %v), want (false, nil) when never configured", acted, err)
+	}
+	if len(*calls) != 0 {
+		t.Errorf("should not shell out when never configured, calls = %v", *calls)
+	}
+}
+
+func TestEnsureSusaninRunning_AlreadyRunning(t *testing.T) {
+	f := newFakeSys()
+	withFakeSys(t, f)
+	installed, calls := withFakeSusanincore(t)
+	*installed = true
+	f.files[susaninConf] = []byte("egress_interface=nwg3\n")
+	f.procMatch["susanin-agent"] = true
+
+	acted, err := EnsureSusaninRunning(context.Background())
+	if err != nil || acted {
+		t.Fatalf("EnsureSusaninRunning = (%v, %v), want (false, nil) when already running", acted, err)
+	}
+	if len(*calls) != 0 {
+		t.Errorf("should not shell out when already running, calls = %v", *calls)
+	}
+}
+
+func TestEnsureSusaninRunning_StartsWhenStopped(t *testing.T) {
+	f := newFakeSys()
+	withFakeSys(t, f)
+	installed, calls := withFakeSusanincore(t)
+	*installed = true
+	f.files[susaninConf] = []byte("egress_interface=nwg3\nlan_interfaces=br0\n")
+	f.procMatch["susanin-agent"] = false
+
+	acted, err := EnsureSusaninRunning(context.Background())
+	if err != nil {
+		t.Fatalf("EnsureSusaninRunning: %v", err)
+	}
+	if !acted {
+		t.Fatal("EnsureSusaninRunning should report acted=true when it had to start the daemon")
+	}
+	found := false
+	for _, c := range *calls {
+		if strings.Contains(c, "susanin.sh") && strings.Contains(c, "start") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a susanin.sh start call, got %v", *calls)
+	}
+}
+
 func TestSusanin_Lifecycle(t *testing.T) {
 	f := newFakeSys()
 	withFakeSys(t, f)

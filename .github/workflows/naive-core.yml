@@ -37,7 +37,7 @@ jobs:
           VER: ${{ inputs.naive_version }}
         run: |
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && exit 0
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --latest=false \
             --title "naive $VER (mirrored)" \
             --notes "Mirrored klzgrad/naiveproxy $VER naive client, re-packaged for keenetic-xray's router targets. Upstream: https://github.com/klzgrad/naiveproxy/releases/tag/$VER — BSD-3-Clause (Chromium). See each asset's .provenance.txt."
 

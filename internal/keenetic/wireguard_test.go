@@ -88,22 +88,42 @@ func TestActiveWGIface_FindsOurs(t *testing.T) {
 	}
 }
 
+// fakeIPAddr swaps ipAddrExec to return a fixed `ip -o addr show` listing,
+// same pattern as fakeNdmc.
+func fakeIPAddr(t *testing.T, out string) {
+	t.Helper()
+	orig := ipAddrExec
+	ipAddrExec = func(context.Context) (string, error) { return out, nil }
+	t.Cleanup(func() { ipAddrExec = orig })
+}
+
 func TestInterfaceOSName(t *testing.T) {
 	show := "               id: Wireguard4\n" +
 		"             type: Wireguard\n" +
-		"   interface-name: nwg0\n" +
+		"          address: 172.31.209.2\n" +
 		"            state: up\n"
 	fakeNdmc(t, map[string]string{"show interface Wireguard4": show})
+	fakeIPAddr(t, "1: lo    inet 127.0.0.1/8 scope host lo\\       valid_lft forever preferred_lft forever\n"+
+		"45: nwg3    inet 172.31.209.2/32 scope global nwg3\\       valid_lft forever preferred_lft forever\n")
 	got, err := InterfaceOSName(context.Background(), "Wireguard4")
-	if err != nil || got != "nwg0" {
-		t.Fatalf("InterfaceOSName = (%q, %v), want nwg0", got, err)
+	if err != nil || got != "nwg3" {
+		t.Fatalf("InterfaceOSName = (%q, %v), want nwg3", got, err)
 	}
 }
 
-func TestInterfaceOSName_MissingField(t *testing.T) {
-	fakeNdmc(t, map[string]string{"show interface Wireguard4": wgIfaceShow}) // no interface-name line
+func TestInterfaceOSName_MissingAddressField(t *testing.T) {
+	fakeNdmc(t, map[string]string{"show interface Wireguard4": wgIfaceShow}) // no address line
 	if _, err := InterfaceOSName(context.Background(), "Wireguard4"); err == nil {
-		t.Error("expected an error when the interface-name field is absent")
+		t.Error("expected an error when the address field is absent")
+	}
+}
+
+func TestInterfaceOSName_NoKernelDeviceHoldsAddress(t *testing.T) {
+	show := "               id: Wireguard4\n          address: 172.31.209.2\n"
+	fakeNdmc(t, map[string]string{"show interface Wireguard4": show})
+	fakeIPAddr(t, "1: lo    inet 127.0.0.1/8 scope host lo\\       valid_lft forever preferred_lft forever\n")
+	if _, err := InterfaceOSName(context.Background(), "Wireguard4"); err == nil {
+		t.Error("expected an error when no kernel device currently holds the address")
 	}
 }
 

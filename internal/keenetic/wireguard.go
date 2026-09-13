@@ -3,6 +3,7 @@ package keenetic
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -280,23 +281,77 @@ func ActiveWGIface(ctx context.Context) (string, error) {
 	return ours, err
 }
 
+// ipAddrExec runs `ip -o addr show`, listing every real kernel network
+// device and the addresses it currently holds. Swappable in tests, same
+// pattern as ndmcExec.
+var ipAddrExec = func(ctx context.Context) (string, error) {
+	out, err := exec.CommandContext(ctx, "ip", "-o", "addr", "show").Output()
+	return string(out), err
+}
+
+// kernelIfaceByAddress scans `ip -o addr show` for the real kernel
+// interface currently holding ipv4Addr (bare dotted-quad, no mask) and
+// returns its name -- e.g. "nwg3". Every `ip -o addr show` line starts
+// with "<idx>: <name>", so the name is always the second field regardless
+// of which address family/flags follow it on the rest of the line.
+func kernelIfaceByAddress(ctx context.Context, ipv4Addr string) (string, error) {
+	out, err := ipAddrExec(ctx)
+	if err != nil {
+		return "", fmt.Errorf("ip -o addr show: %w", err)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(line)
+		if len(f) < 2 {
+			continue
+		}
+		name := strings.TrimSuffix(f[1], ":")
+		for _, tok := range f[2:] {
+			addr, _, _ := strings.Cut(tok, "/")
+			if addr == ipv4Addr {
+				return name, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("no kernel interface currently holds address %s", ipv4Addr)
+}
+
 // InterfaceOSName returns the OS-level (kernel) network device name
-// backing a Keenetic interface -- e.g. "Wireguard4" (the NDM name) might
-// be "nwg0" at the `ip`/iptables level. Keenetic reports this as the
-// `interface-name` field of `show interface`; needed by anything that
-// has to drive the device directly rather than through ndmc.
+// backing a Keenetic interface -- e.g. NDM's "Wireguard4" might be "nwg0"
+// at the `ip`/iptables level -- needed by anything that has to drive the
+// device directly rather than through ndmc.
+//
+// This used to just read the `interface-name:` field of `show interface`
+// verbatim, trusting it to always hold the real kernel device name.
+// Confirmed wrong on real hardware: on at least one Keenetic model/
+// firmware, `show interface Wireguard3` reports `interface-name:
+// Wireguard3` -- the identical NDM name -- while `ip addr show
+// Wireguard3` answers "can't find device"; listing every real interface
+// (`ip -o link show`) and cross-checking by MTU/state found the actual
+// kernel device was "nwg3". So instead of trusting that field, this reads
+// the interface's own `address:` and finds which real kernel device
+// currently carries that exact address -- correct by construction,
+// independent of whatever naming convention NDM happens to use.
 func InterfaceOSName(ctx context.Context, iface string) (string, error) {
 	out, err := ndmcRun(ctx, "show interface "+iface)
 	if err != nil {
 		return "", fmt.Errorf("show interface %s: %w", iface, err)
 	}
+	addr := ""
 	for _, line := range strings.Split(out, "\n") {
 		f := strings.Fields(line)
-		if len(f) >= 2 && f[0] == "interface-name:" {
-			return f[1], nil
+		if len(f) >= 2 && f[0] == "address:" {
+			addr = stripMask(f[1])
+			break
 		}
 	}
-	return "", fmt.Errorf("show interface %s: no interface-name field (interface down or not fully up yet?)", iface)
+	if addr == "" {
+		return "", fmt.Errorf("show interface %s: no address field (interface down or not fully up yet?)", iface)
+	}
+	name, err := kernelIfaceByAddress(ctx, addr)
+	if err != nil {
+		return "", fmt.Errorf("%s (address %s): %w", iface, addr, err)
+	}
+	return name, nil
 }
 
 // ShowWGTransport returns a short human summary of our WG interface's

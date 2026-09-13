@@ -97,13 +97,12 @@ func withFakeSys(t *testing.T, f *fakeSys) {
 
 func TestAll_OrderAndFind(t *testing.T) {
 	got := All()
-	if len(got) != 6 {
-		t.Fatalf("All() len = %d, want 6", len(got))
+	if len(got) != 7 {
+		t.Fatalf("All() len = %d, want 7", len(got))
 	}
-	// naive-core isn't in the fixed `order` list, so it sorts after the
-	// ones that are -- there being only one such addon right now, that
-	// just means last.
-	want := []string{"unbound", "dnscrypt", "nfqws2", "conntrack", "cron", "naive-core"}
+	// naive-core and susanin aren't in the fixed `order` list, so they
+	// sort alphabetically after the ones that are.
+	want := []string{"unbound", "dnscrypt", "nfqws2", "conntrack", "cron", "naive-core", "susanin"}
 	for i, id := range want {
 		if got[i].ID() != id {
 			t.Errorf("All()[%d] = %q, want %q", i, got[i].ID(), id)

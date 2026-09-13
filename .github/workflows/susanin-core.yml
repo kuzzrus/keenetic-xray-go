@@ -1,0 +1,152 @@
+name: Susanin-core build
+
+# Manually-triggered mirror of R17a/Susanin.Keenetic's prebuilt release
+# tarball (adaptive conntrack-based routing -- see docs/HANDOFF-susanin.md
+# and packaging/susanin-core/README.md) for the two router architectures,
+# re-hosted under this repo's own releases so susanincore.Ensure has a
+# known-good archive to fetch. Not opkg-packaged upstream and this project
+# doesn't build it from source (MIT, upstream already publishes static-ish
+# per-arch binaries) -- same trust shape as naive-core, except the asset is
+# a tarball (binary + install/control scripts + default lists), not a bare
+# binary, so this workflow re-packs the same tarball with just the binary
+# UPX-compressed rather than shipping a lone binary asset.
+# Produces, per arch:
+#   susanin-<ver>-linux-<goarch>.tar.gz            same layout as upstream's own tarball, susanin-agent UPX-packed in place
+#   susanin-<ver>-linux-<goarch>.tar.gz.sha256      checksum, as packed by this workflow
+#   susanin-<ver>-linux-<goarch>.provenance.txt
+# All uploaded to a release tagged  susanin/<ver>  (separate from the
+# keenetic-xray, xray-core and naive-core release lines). MIT -- see
+# upstream's LICENSE; the provenance file records exactly what was
+# fetched from where.
+
+on:
+  workflow_dispatch:
+    inputs:
+      susanin_version:
+        description: "R17a/Susanin.Keenetic release tag to mirror (e.g. v0.3.6). The pin (packaging/susanin-core/version) decides what susanincore.PinnedVersion fetches by default."
+        required: true
+        default: v0.3.6
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create or reuse the susanin/<ver> release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: susanin/${{ inputs.susanin_version }}
+          VER: ${{ inputs.susanin_version }}
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && exit 0
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --title "susanin-core $VER (mirrored)" \
+            --notes "Mirrored R17a/Susanin.Keenetic $VER, re-packaged for keenetic-xray's router targets (susanin-agent UPX-packed; scripts/config/lists unchanged). Upstream: https://github.com/R17a/Susanin.Keenetic/releases/tag/$VER — MIT. See each asset's .provenance.txt."
+
+  mirror:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goarch: arm64
+            upstream_arch: aarch64
+            upx: "--lzma"
+          - goarch: mipsle
+            upstream_arch: mipsel
+            upx: "" # NRV, not LZMA: UPX's LZMA path doesn't cover mips ELF (same as naive-core/xray-core)
+    steps:
+      - name: Download susanin ${{ inputs.susanin_version }} (${{ matrix.upstream_arch }})
+        env:
+          VER: ${{ inputs.susanin_version }}
+          UPSTREAM_ARCH: ${{ matrix.upstream_arch }}
+        run: |
+          set -eu
+          cd "$RUNNER_TEMP"
+          asset="susanin-keenetic-deploy-${UPSTREAM_ARCH}.tar.gz"
+          base_url="https://github.com/R17a/Susanin.Keenetic/releases/download/${VER}"
+          curl -fL --retry 3 -o "$asset" "${base_url}/${asset}"
+          curl -fL --retry 3 -o SHA256SUMS "${base_url}/SHA256SUMS"
+
+          want=$(awk -v f="$asset" '$2==f{print $1}' SHA256SUMS)
+          [ -n "$want" ] || { echo "no checksum for $asset in SHA256SUMS" >&2; exit 1; }
+          got=$(sha256sum "$asset" | awk '{print $1}')
+          [ "$want" = "$got" ] || { echo "checksum mismatch for $asset: got $got want $want" >&2; exit 1; }
+
+          mkdir extracted
+          tar -xzf "$asset" -C extracted
+          [ -f extracted/susanin-agent ] || { echo "susanin-agent missing from $asset" >&2; exit 1; }
+          {
+            echo "UPSTREAM_URL=${base_url}/${asset}"
+            echo "UPSTREAM_SHA256=${want}"
+          } >> "$GITHUB_ENV"
+
+      - name: Package (UPX-pack susanin-agent, re-tar)
+        env:
+          VER: ${{ inputs.susanin_version }}
+          GOARCH: ${{ matrix.goarch }}
+          UPSTREAM_ARCH: ${{ matrix.upstream_arch }}
+          UPX_FLAGS: ${{ matrix.upx }}
+        run: |
+          set -eu
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq upx-ucl
+          cd "$RUNNER_TEMP/extracted"
+
+          size_unpacked="$(wc -c < susanin-agent)"
+          sha_unpacked="$(sha256sum susanin-agent | awk '{print $1}')"
+
+          # shellcheck disable=SC2086
+          upx -9 $UPX_FLAGS susanin-agent
+          upx -t susanin-agent
+
+          base="susanin-${VER}-linux-${GOARCH}"
+          tarball="../${base}.tar.gz"
+          tar -czf "$tarball" .
+          cd ..
+          sha256sum "$(basename "$tarball")" > "${base}.tar.gz.sha256"
+
+          {
+            echo "susanin ${VER} (${GOARCH}, upstream ${UPSTREAM_ARCH})"
+            echo "upstream asset:  ${UPSTREAM_URL}"
+            echo "upstream sha256: ${UPSTREAM_SHA256}"
+            echo "pack:            $(upx --version | head -n1) -9 ${UPX_FLAGS} (susanin-agent only; scripts/config/lists unchanged)"
+            echo "susanin-agent size unpacked: ${size_unpacked}"
+            echo "susanin-agent size packed:   $(wc -c < extracted/susanin-agent)"
+            echo "susanin-agent sha256 unpacked: ${sha_unpacked}"
+            echo "tarball sha256:  $(sha256sum "$(basename "$tarball")" | awk '{print $1}')"
+            echo "license:         MIT — https://github.com/R17a/Susanin.Keenetic/blob/main/LICENSE"
+            echo "note:            no separate unpacked fallback asset is published here -- upstream's own"
+            echo "                 release ($UPSTREAM_URL) remains available directly if ever needed."
+          } > "${base}.provenance.txt"
+
+          ls -l "${base}.tar.gz" "${base}.tar.gz.sha256" "${base}.provenance.txt"
+
+      - name: Smoke test under QEMU
+        env:
+          VER: ${{ inputs.susanin_version }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -eu
+          sudo apt-get install -y -qq qemu-user-static
+          case "$GOARCH" in
+            arm64)  Q=qemu-aarch64-static ;;
+            mipsle) Q=qemu-mipsel-static ;;
+          esac
+          cd "$RUNNER_TEMP"
+          echo "== packed (from the re-tarred archive) =="
+          mkdir -p smoketest && tar -xzf "susanin-${VER}-linux-${GOARCH}.tar.gz" -C smoketest susanin-agent
+          "$Q" ./smoketest/susanin-agent version
+
+      - name: Upload to susanin/${{ inputs.susanin_version }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: susanin/${{ inputs.susanin_version }}
+          BASE: susanin-${{ inputs.susanin_version }}-linux-${{ matrix.goarch }}
+        run: |
+          cd "$RUNNER_TEMP"
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            "${BASE}.tar.gz" "${BASE}.tar.gz.sha256" "${BASE}.provenance.txt"

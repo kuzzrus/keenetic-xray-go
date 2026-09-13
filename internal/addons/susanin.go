@@ -137,6 +137,16 @@ func (susaninAddon) Configure(ctx context.Context, kv map[string]string) error {
 	if err := shellConfSet(susaninConf, set); err != nil {
 		return err
 	}
+	// susanin.sh install brings up the data plane (iptables chain, ip
+	// rules/routes, ipsets) from the config just written -- idempotent
+	// (upstream's own datapath.sh: "delete-then-add"). It's a distinct
+	// step from the daemon process itself and from this addon's Install(),
+	// which only lays out files (see the --no-start comment there);
+	// restart alone never brought up anything beyond a bare daemon
+	// process watching a data plane that never existed.
+	if out, err := runScript(ctx, susaninTools+"/susanin.sh", "install"); err != nil {
+		return fmt.Errorf("susanin: настройка дата-плейна не удалась: %w\n%s", err, strings.TrimSpace(out))
+	}
 	if out, err := runScript(ctx, susaninTools+"/susanin.sh", "restart"); err != nil {
 		return fmt.Errorf("susanin не перезапустился после изменения настроек: %w\n%s", err, strings.TrimSpace(out))
 	}

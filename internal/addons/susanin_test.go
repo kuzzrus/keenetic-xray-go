@@ -124,7 +124,13 @@ func TestSusanin_Lifecycle(t *testing.T) {
 	if !strings.Contains(conf, `lan_interfaces="br0,br1"`) {
 		t.Errorf("conf missing lan_interfaces: %s", conf)
 	}
-	restartCall := (*calls)[len(*calls)-1]
+	// Configure must bring up the data plane (susanin.sh install ->
+	// datapath.sh up + $BIN setup), not just the daemon process -- restart
+	// alone leaves the iptables chain/ip rules/ipsets never created.
+	installCall, restartCall := (*calls)[len(*calls)-2], (*calls)[len(*calls)-1]
+	if !strings.Contains(installCall, "susanin.sh") || !strings.Contains(installCall, "install") {
+		t.Errorf("Configure should run susanin.sh install before restart, got %q", installCall)
+	}
 	if !strings.Contains(restartCall, "susanin.sh") || !strings.Contains(restartCall, "restart") {
 		t.Errorf("Configure should end with a susanin.sh restart, last call = %q", restartCall)
 	}

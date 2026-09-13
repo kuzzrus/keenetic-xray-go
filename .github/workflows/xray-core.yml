@@ -34,7 +34,7 @@ jobs:
           VER: ${{ inputs.xray_version }}
         run: |
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && exit 0
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --latest=false \
             --title "Xray-core $VER (vendored)" \
             --notes "Vendored Xray-core $VER built for keenetic-xray's router targets. Upstream: https://github.com/XTLS/Xray-core/releases/tag/$VER — MPL-2.0. See each asset's .provenance.txt."
 

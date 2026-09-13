@@ -48,7 +48,7 @@ jobs:
           VER: ${{ inputs.susanin_version }}
         run: |
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && exit 0
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --latest=false \
             --title "susanin-core $VER (mirrored)" \
             --notes "Mirrored R17a/Susanin.Keenetic $VER, re-hosted for keenetic-xray's router targets (unmodified -- not UPX-packed, see the workflow file for why). Upstream: https://github.com/R17a/Susanin.Keenetic/releases/tag/$VER — MIT. See each asset's .provenance.txt."
 

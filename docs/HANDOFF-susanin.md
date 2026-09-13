@@ -89,13 +89,15 @@ arcs. See the plan file for the full risk list.
   (`./susanin-agent`, `./install.sh`, `./susanin.sh`, `./datapath.sh`,
   `./update.sh`, `./uninstall.sh`, `./config.example.conf`,
   `./vpn_always.txt`, `./vpn_never.txt`, `./DEPLOY.md`) -- no subdirectory.
-- `susanin-agent` (mipsel v0.3.6): 827 KB, statically linked, **not
-  stripped**. `.github/workflows/susanin-core.yml` UPX-packs it in place
-  (`--lzma` arm64, NRV mipsle -- same split as xray-core/naive-core) and
-  re-tars the whole layout; deliberately does **not** add a separate
-  `strip` step (naive-core.yml doesn't either, and avoiding a
-  cross-arch-strip-toolchain-availability question on the CI runner was
-  judged not worth the marginal size gain over UPX alone).
+- `susanin-agent` (mipsel v0.3.6): 827 KB, statically linked, not
+  stripped. `.github/workflows/susanin-core.yml` re-tars the whole layout
+  **unmodified** -- deliberately **not** UPX-packed: a real attempt at it
+  (`--lzma` on the aarch64 build) produced a SIGILL under
+  `qemu-aarch64-static` specifically (plain UPX on mipsel packed and ran
+  fine), caught by actually dispatching the workflow, not assumed. Not
+  worth chasing down for what a ~800 KB binary would save; xray-core/
+  naive-core UPX-pack because their unpacked sizes (tens of MB) actually
+  matter.
   `susanin-agent version` prints a bare version string and exits 0
   (confirmed from `src/main.c`) -- the smoke-test / `Version()` hook.
 - Upstream's `install.sh` supports a fully offline, non-interactive mode:

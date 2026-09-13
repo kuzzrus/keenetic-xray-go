@@ -6,10 +6,11 @@ The `susanin` addon (`internal/addons`) wraps [Susanin.Keenetic](https://github.
 [`docs/HANDOFF-susanin.md`](../../docs/HANDOFF-susanin.md) (Phase 1 of the
 plan). Susanin isn't in any Entware feed and this project doesn't build it:
 upstream already publishes a ready per-arch release tarball, so this
-package just re-hosts a repacked copy of one of those under this repo's
+package just re-hosts a verified copy of one of those under this repo's
 own releases -- the same trust shape as `naive-core`, except the asset is
 a tarball (binary + upstream's own install/control scripts + default
-lists), not a bare binary.
+lists), not a bare binary, and it's re-hosted **unmodified** rather than
+UPX-repacked (see "Mirroring" below for why).
 
 ## The pin
 
@@ -35,42 +36,40 @@ upstream's `aarch64`, `mipsle` from upstream's `mipsel`):
 https://github.com/R17a/Susanin.Keenetic/releases/download/<ver>/susanin-keenetic-deploy-<upstream-arch>.tar.gz
 ```
 
-verifies it against upstream's own `SHA256SUMS`, extracts it, UPX-packs
-*just* the `susanin-agent` binary in place (`--lzma` for arm64; NRV for
-mipsle, same as xray-core/naive-core -- UPX's LZMA path doesn't cover mips
-ELF), and re-tars the whole thing (upstream's own `install.sh`/`susanin.sh`/
-`datapath.sh`/`update.sh`/`uninstall.sh`, `config.example.conf`,
-`vpn_always.txt`, `vpn_never.txt`, now with the smaller binary) into a
-release tagged `susanin/<ver>`:
+verifies it against upstream's own `SHA256SUMS`, extracts it, and re-tars
+the whole thing (upstream's own `install.sh`/`susanin.sh`/`datapath.sh`/
+`update.sh`/`uninstall.sh`, `config.example.conf`, `vpn_always.txt`,
+`vpn_never.txt`, `susanin-agent`) unmodified into a release tagged
+`susanin/<ver>`:
 
 | asset | what |
 |---|---|
-| `susanin-<ver>-linux-<arch>.tar.gz` | upstream's own tarball layout, `susanin-agent` UPX-packed |
-| `susanin-<ver>-linux-<arch>.tar.gz.sha256` | checksum, as packed by this workflow |
-| `susanin-<ver>-linux-<arch>.provenance.txt` | upstream URL, upstream's own sha256, pack details |
+| `susanin-<ver>-linux-<arch>.tar.gz` | upstream's own tarball layout, byte-for-byte (re-tarred, not re-encoded) |
+| `susanin-<ver>-linux-<arch>.tar.gz.sha256` | checksum, as packaged by this workflow |
+| `susanin-<ver>-linux-<arch>.provenance.txt` | upstream URL, upstream's own sha256, binary size/sha256 |
 
-No separate unpacked-binary fallback is published (unlike naive-core's
-`.xz`) -- upstream's own release stays available directly at the URL the
-provenance file records if the UPX build ever doesn't `exec` on some
-router; this is lower-stakes, opt-in addon territory, not the egress path
-itself.
+**Not UPX-packed**, unlike xray-core/naive-core: `susanin-agent` is
+already small (827 KB unpacked for mipsel v0.3.6), and an actual attempt
+at it hit a real compatibility problem -- `upx --lzma` on the aarch64
+build produced a SIGILL under `qemu-aarch64-static` specifically (plain
+UPX on mipsel packed and ran fine), caught by dispatching the workflow for
+real rather than assumed. Not worth chasing down for the size this
+particular binary would save.
 
 ## Trust
 
 The binary is third-party (R17a/Susanin.Keenetic, MIT); this repo only
-re-packs what upstream already publishes -- UPX-compression is the only
-change, everything else in the tarball (scripts, default config, default
-`vpn_always`/`vpn_never` lists) is unmodified. Verified against upstream's
-own `SHA256SUMS` before repacking; the provenance file records the exact
-upstream asset URL and hash so anyone can re-fetch and confirm.
-`susanincore.Ensure` verifies the tarball it downloads against the sha256
-this repo's own release publishes alongside it, and smoke-tests the
-packed binary (`susanin-agent version`) before extracting it anywhere
-persistent -- no opkg or other fallback if that fails, since Susanin isn't
-available any other way on this platform.
+re-hosts what upstream already publishes, unmodified -- verified against
+upstream's own `SHA256SUMS` before re-tarring, and the provenance file
+records the exact upstream asset URL and hash so anyone can re-fetch and
+confirm. `susanincore.Ensure` verifies the tarball it downloads against
+the sha256 this repo's own release publishes alongside it, and
+smoke-tests the extracted binary (`susanin-agent version`) before handing
+it back anywhere persistent -- no opkg or other fallback if that fails,
+since Susanin isn't available any other way on this platform.
 
 ## License
 
 Susanin.Keenetic is MIT: <https://github.com/R17a/Susanin.Keenetic/blob/main/LICENSE>.
-Redistribution of the tarball (with the binary UPX-repacked) is permitted;
-the source is the upstream repo at the pinned release.
+Redistribution of the tarball, unmodified, is permitted; the source is the
+upstream repo at the pinned release.

@@ -8,11 +8,18 @@ name: Susanin-core build
 # doesn't build it from source (MIT, upstream already publishes static-ish
 # per-arch binaries) -- same trust shape as naive-core, except the asset is
 # a tarball (binary + install/control scripts + default lists), not a bare
-# binary, so this workflow re-packs the same tarball with just the binary
-# UPX-compressed rather than shipping a lone binary asset.
+# binary.
+#
+# Unlike xray-core/naive-core, susanin-agent is NOT UPX-packed: it's
+# already small (827 KB unpacked for mipsel v0.3.6) and an attempt at it
+# hit a real compatibility wall -- `upx --lzma` on the aarch64 build
+# produced a SIGILL under qemu-aarch64-static specifically (plain UPX on
+# mipsel worked fine), and the size this binary would save isn't worth
+# chasing that down. Re-tars upstream's own tarball verbatim (re-hosting,
+# not repacking) once verified against their SHA256SUMS.
 # Produces, per arch:
-#   susanin-<ver>-linux-<goarch>.tar.gz            same layout as upstream's own tarball, susanin-agent UPX-packed in place
-#   susanin-<ver>-linux-<goarch>.tar.gz.sha256      checksum, as packed by this workflow
+#   susanin-<ver>-linux-<goarch>.tar.gz            same layout as upstream's own tarball, unmodified
+#   susanin-<ver>-linux-<goarch>.tar.gz.sha256      checksum, as packaged by this workflow
 #   susanin-<ver>-linux-<goarch>.provenance.txt
 # All uploaded to a release tagged  susanin/<ver>  (separate from the
 # keenetic-xray, xray-core and naive-core release lines). MIT -- see
@@ -43,7 +50,7 @@ jobs:
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && exit 0
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
             --title "susanin-core $VER (mirrored)" \
-            --notes "Mirrored R17a/Susanin.Keenetic $VER, re-packaged for keenetic-xray's router targets (susanin-agent UPX-packed; scripts/config/lists unchanged). Upstream: https://github.com/R17a/Susanin.Keenetic/releases/tag/$VER — MIT. See each asset's .provenance.txt."
+            --notes "Mirrored R17a/Susanin.Keenetic $VER, re-hosted for keenetic-xray's router targets (unmodified -- not UPX-packed, see the workflow file for why). Upstream: https://github.com/R17a/Susanin.Keenetic/releases/tag/$VER — MIT. See each asset's .provenance.txt."
 
   mirror:
     needs: prepare
@@ -54,10 +61,8 @@ jobs:
         include:
           - goarch: arm64
             upstream_arch: aarch64
-            upx: "--lzma"
           - goarch: mipsle
             upstream_arch: mipsel
-            upx: "" # NRV, not LZMA: UPX's LZMA path doesn't cover mips ELF (same as naive-core/xray-core)
     steps:
       - name: Download susanin ${{ inputs.susanin_version }} (${{ matrix.upstream_arch }})
         env:
@@ -84,24 +89,17 @@ jobs:
             echo "UPSTREAM_SHA256=${want}"
           } >> "$GITHUB_ENV"
 
-      - name: Package (UPX-pack susanin-agent, re-tar)
+      - name: Package (re-tar, verbatim)
         env:
           VER: ${{ inputs.susanin_version }}
           GOARCH: ${{ matrix.goarch }}
           UPSTREAM_ARCH: ${{ matrix.upstream_arch }}
-          UPX_FLAGS: ${{ matrix.upx }}
         run: |
           set -eu
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq upx-ucl
           cd "$RUNNER_TEMP/extracted"
 
-          size_unpacked="$(wc -c < susanin-agent)"
-          sha_unpacked="$(sha256sum susanin-agent | awk '{print $1}')"
-
-          # shellcheck disable=SC2086
-          upx -9 $UPX_FLAGS susanin-agent
-          upx -t susanin-agent
+          size="$(wc -c < susanin-agent)"
+          sha_bin="$(sha256sum susanin-agent | awk '{print $1}')"
 
           base="susanin-${VER}-linux-${GOARCH}"
           tarball="../${base}.tar.gz"
@@ -117,14 +115,14 @@ jobs:
             echo "susanin ${VER} (${GOARCH}, upstream ${UPSTREAM_ARCH})"
             echo "upstream asset:  ${UPSTREAM_URL}"
             echo "upstream sha256: ${UPSTREAM_SHA256}"
-            echo "pack:            $(upx --version | head -n1) -9 ${UPX_FLAGS} (susanin-agent only; scripts/config/lists unchanged)"
-            echo "susanin-agent size unpacked: ${size_unpacked}"
-            echo "susanin-agent size packed:   $(wc -c < extracted/susanin-agent)"
-            echo "susanin-agent sha256 unpacked: ${sha_unpacked}"
+            echo "pack:            none -- susanin-agent is shipped exactly as upstream built it"
+            echo "                 (827 KB unpacked for mipsel v0.3.6; not worth UPX here -- an"
+            echo "                 earlier attempt at --lzma on the aarch64 build produced a SIGILL"
+            echo "                 under qemu-aarch64-static, so this workflow doesn't pack at all)"
+            echo "susanin-agent size:   ${size}"
+            echo "susanin-agent sha256: ${sha_bin}"
             echo "tarball sha256:  $(sha256sum "$(basename "$tarball")" | awk '{print $1}')"
             echo "license:         MIT — https://github.com/R17a/Susanin.Keenetic/blob/main/LICENSE"
-            echo "note:            no separate unpacked fallback asset is published here -- upstream's own"
-            echo "                 release ($UPSTREAM_URL) remains available directly if ever needed."
           } > "${base}.provenance.txt"
 
           ls -l "${base}.tar.gz" "${base}.tar.gz.sha256" "${base}.provenance.txt"
@@ -141,7 +139,7 @@ jobs:
             mipsle) Q=qemu-mipsel-static ;;
           esac
           cd "$RUNNER_TEMP"
-          echo "== packed (from the re-tarred archive) =="
+          echo "== from the re-tarred archive (unmodified upstream binary) =="
           mkdir -p smoketest && tar -xzf "susanin-${VER}-linux-${GOARCH}.tar.gz" -C smoketest susanin-agent
           "$Q" ./smoketest/susanin-agent version
 

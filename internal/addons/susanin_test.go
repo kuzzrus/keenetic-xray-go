@@ -1,0 +1,202 @@
+package addons
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/kuzzrus/keenetic-xray-go/internal/susanincore"
+)
+
+// withFakeSusanincore swaps susaninEnsure/susaninVersion/runScript for
+// fakes driven by a simple installed bool plus a recorded call log --
+// susanin's lifecycle is upstream's own install.sh/susanin.sh/uninstall.sh
+// (invoked via runScript), not opkg/init.d, so it needs its own tiny seam
+// alongside withFakeSys, same reasoning as withFakeNaivecore.
+func withFakeSusanincore(t *testing.T) (installed *bool, calls *[]string) {
+	t.Helper()
+	saveEnsure, saveVersion, saveRun := susaninEnsure, susaninVersion, runScript
+	t.Cleanup(func() { susaninEnsure, susaninVersion, runScript = saveEnsure, saveVersion, saveRun })
+
+	installed = new(bool)
+	var log []string
+	calls = &log
+
+	susaninEnsure = func(ctx context.Context, opts susanincore.Options) (string, error) {
+		return t.TempDir(), nil // Install only needs *a* path to hand to runScript
+	}
+	susaninVersion = func(bin string) (string, error) {
+		if bin != susaninBin {
+			t.Errorf("Detect/Status/Remove: binary = %q, want %q", bin, susaninBin)
+		}
+		if !*installed {
+			return "", errors.New("exec: not found")
+		}
+		return "0.3.6", nil
+	}
+	runScript = func(ctx context.Context, path string, args ...string) (string, error) {
+		*calls = append(*calls, strings.TrimSpace(path+" "+strings.Join(args, " ")))
+		// "uninstall.sh" itself ends with "install.sh", so this must be
+		// an exact basename match, not a suffix check.
+		switch filepath.Base(path) {
+		case "install.sh":
+			*installed = true
+		case "uninstall.sh":
+			*installed = false
+		}
+		return "", nil
+	}
+	return installed, calls
+}
+
+func TestSusanin_Lifecycle(t *testing.T) {
+	f := newFakeSys()
+	withFakeSys(t, f)
+	installed, calls := withFakeSusanincore(t)
+	ctx := context.Background()
+
+	a, ok := Find("susanin")
+	if !ok {
+		t.Fatal(`Find("susanin") not found`)
+	}
+
+	if a.Detect(ctx).Installed {
+		t.Fatal("susanin should start not installed")
+	}
+
+	if err := a.Install(ctx); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if !*installed {
+		t.Fatal("Install should have run install.sh")
+	}
+	if len(*calls) != 1 {
+		t.Fatalf("calls after Install = %v, want exactly one (install.sh)", *calls)
+	}
+	installCall := (*calls)[0]
+	for _, want := range []string{"install.sh", "--yes", "--no-start", "--prefix=" + susaninPrefix} {
+		if !strings.Contains(installCall, want) {
+			t.Errorf("install.sh call = %q, missing %q", installCall, want)
+		}
+	}
+
+	st := a.Detect(ctx)
+	if !st.Installed || st.Version != "0.3.6" {
+		t.Fatalf("Detect after Install = %+v", st)
+	}
+	if !strings.Contains(st.Detail, "не настроен") {
+		t.Errorf("Detail should flag the missing egress before Configure: %q", st.Detail)
+	}
+
+	// Not configured yet -> Status says so without shelling out to susanin.sh.
+	if s, err := a.Status(ctx); err != nil || !strings.Contains(s, "не настроен") {
+		t.Errorf("Status before configure = %q, %v", s, err)
+	}
+	if len(*calls) != 1 {
+		t.Errorf("Status before configure should not call any script, got %v", *calls)
+	}
+
+	// In production, install.sh writes susanin.conf from its own
+	// config.example.conf template (confirmed by reading install.sh --
+	// see docs/HANDOFF-susanin.md); the fake runScript above doesn't
+	// simulate that file-writing side effect, so seed it directly here,
+	// same as TestNfqws2_Configure pre-seeds nfqwsConf rather than faking
+	// opkg's postinst writing it.
+	f.files[susaninConf] = []byte("egress_interface=\nlan_interfaces=\nhealth_probe=\"1.1.1.1,8.8.8.8\"\n")
+
+	if err := a.Configure(ctx, map[string]string{"egress": "wireguard4", "lan": "br0,br1"}); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
+	conf := string(f.files[susaninConf])
+	if !strings.Contains(conf, `egress_interface="wireguard4"`) {
+		t.Errorf("conf missing egress_interface: %s", conf)
+	}
+	if !strings.Contains(conf, `lan_interfaces="br0,br1"`) {
+		t.Errorf("conf missing lan_interfaces: %s", conf)
+	}
+	restartCall := (*calls)[len(*calls)-1]
+	if !strings.Contains(restartCall, "susanin.sh") || !strings.Contains(restartCall, "restart") {
+		t.Errorf("Configure should end with a susanin.sh restart, last call = %q", restartCall)
+	}
+
+	if got := a.Detect(ctx).Detail; !strings.Contains(got, "wireguard4") {
+		t.Errorf("Detail after configure = %q, want it to name the egress", got)
+	}
+
+	if err := a.Configure(ctx, map[string]string{"nope": "1"}); err == nil {
+		t.Error("unknown key should fail")
+	}
+	if err := a.Configure(ctx, map[string]string{"egress": ""}); err == nil {
+		t.Error("empty egress should fail")
+	}
+	if err := a.Configure(ctx, map[string]string{}); err == nil {
+		t.Error("Configure with no keys should fail")
+	}
+
+	if err := a.Remove(ctx); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if *installed {
+		t.Error("Remove should have flipped installed back to false")
+	}
+	if a.Detect(ctx).Installed {
+		t.Error("susanin should be gone after Remove")
+	}
+	last := (*calls)[len(*calls)-1]
+	if !strings.Contains(last, "uninstall.sh") {
+		t.Errorf("Remove should have run uninstall.sh, last call = %q", last)
+	}
+}
+
+func TestSusanin_RemoveIsIdempotentWhenNeverInstalled(t *testing.T) {
+	f := newFakeSys()
+	withFakeSys(t, f)
+	_, calls := withFakeSusanincore(t)
+
+	a, _ := Find("susanin")
+	if err := a.Remove(context.Background()); err != nil {
+		t.Errorf("Remove on a never-installed susanin should not error, got %v", err)
+	}
+	if len(*calls) != 0 {
+		t.Errorf("Remove on a never-installed susanin should not shell out, got %v", *calls)
+	}
+}
+
+func TestSusanin_InstallPropagatesEnsureFailure(t *testing.T) {
+	withFakeSys(t, newFakeSys())
+	saveEnsure := susaninEnsure
+	t.Cleanup(func() { susaninEnsure = saveEnsure })
+	susaninEnsure = func(context.Context, susanincore.Options) (string, error) {
+		return "", errors.New("checksum mismatch")
+	}
+
+	a, _ := Find("susanin")
+	if err := a.Install(context.Background()); err == nil {
+		t.Error("Install should propagate a failed Ensure")
+	}
+}
+
+func TestSusanin_InstallCleansUpExtractedDir(t *testing.T) {
+	withFakeSys(t, newFakeSys())
+	saveEnsure, saveRun := susaninEnsure, runScript
+	t.Cleanup(func() { susaninEnsure, runScript = saveEnsure, saveRun })
+
+	dir := t.TempDir()
+	marker := dir + "/susanin-agent"
+	if err := os.WriteFile(marker, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	susaninEnsure = func(context.Context, susanincore.Options) (string, error) { return dir, nil }
+	runScript = func(context.Context, string, ...string) (string, error) { return "", nil }
+
+	a, _ := Find("susanin")
+	if err := a.Install(context.Background()); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("Install should remove the extracted staging dir, %s still exists", dir)
+	}
+}

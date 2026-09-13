@@ -105,7 +105,11 @@ jobs:
 
           base="susanin-${VER}-linux-${GOARCH}"
           tarball="../${base}.tar.gz"
-          tar -czf "$tarball" .
+          # `*` (not `.`) so archive members are flat names ("susanin-agent",
+          # not "./susanin-agent") -- matters for the plain `tar -xzf ...
+          # susanin-agent` named-member extraction in the smoke-test step
+          # below, which needs an exact string match against the member name.
+          tar -czf "$tarball" *
           cd ..
           sha256sum "$(basename "$tarball")" > "${base}.tar.gz.sha256"
 

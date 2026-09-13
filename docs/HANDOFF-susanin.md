@@ -1,7 +1,10 @@
 # Handoff — Susanin adaptive routing addon
 
 Kickoff brief for a fresh session with no access to a previous session's
-`.claude/memory/` files. Written 2026-09-13, repo at `v0.30.0` / `main`.
+`.claude/memory/` files. Written 2026-09-13, repo at `v0.30.0` / `main`;
+updated same day at `v0.30.12` after **Phase 1 was confirmed working
+end-to-end on real hardware for the first time** -- see "Current
+position" at the bottom for the full bug chain that took to get there.
 
 For what this project is and the general working conventions ("делай и
 сразу сливай" flow, CI checks, versioning, commit/PR trailers, language,
@@ -50,20 +53,25 @@ not silently assumed:**
    currently-live vless/naive profile with zero new xray code.
    **Auto-resolved as of the same-day follow-up (no longer a manual
    step when this holds)**: `Install()` calls `internal/keenetic.
-   ActiveWGIface` (new -- finds the interface carrying `WGIfaceMarker`
-   without allocating a new slot the way `FreeWireguardIface` would) then
-   `InterfaceOSName` (new -- the `interface-name:` field off `show
-   interface`, confirmed in `internal/keenetic/rci_reformat.go`) and, if
-   both resolve, writes `egress_interface` and brings the data plane up
-   itself -- best-effort, any failure anywhere in that chain just falls
-   back to today's manual path silently (Install must never fail over a
-   convenience step). `internal/addons` deliberately has no access to
-   `*config.Config` (established pattern -- addons are decoupled from
-   keenetic-xray's own config, same as nfqws2's `isp_interface=`), so this
-   discovers the marked interface directly off the router's own running
-   config rather than reading `WGTransportConfig.Iface`. Manual
-   `addon configure susanin egress=<iface>` remains the fallback/override
-   for WG-transport-not-yet-enabled, or a different intended egress.
+   ActiveWGIface` (finds the interface carrying `WGIfaceMarker` without
+   allocating a new slot the way `FreeWireguardIface` would) then
+   `InterfaceOSName` and, if both resolve, writes `egress_interface` and
+   brings the data plane up itself -- best-effort, any failure anywhere in
+   that chain just falls back to today's manual path silently (Install
+   must never fail over a convenience step). `internal/addons` deliberately
+   has no access to `*config.Config` (established pattern -- addons are
+   decoupled from keenetic-xray's own config, same as nfqws2's
+   `isp_interface=`), so this discovers the marked interface directly off
+   the router's own running config rather than reading
+   `WGTransportConfig.Iface`. Manual `addon configure susanin
+   egress=<iface>` remains the fallback/override for WG-transport-not-yet-
+   enabled, or a different intended egress.
+   **`InterfaceOSName` does NOT read the `interface-name:` field of `show
+   interface` anymore** (it did originally; confirmed wrong on real
+   hardware, see the bug chain below) -- it reads the interface's own
+   `address:` field and finds which real kernel device currently carries
+   that exact address via a new `ip -o addr show` scan
+   (`kernelIfaceByAddress` in `internal/keenetic/wireguard.go`).
 2. **Keenetic's own DNS-based routing must be off** while this addon is
    active, per upstream's own README -- that's the exact mechanism our
    `routes`/Proxy0/preset-catalogue system depends on. Not automated
@@ -221,11 +229,98 @@ dropped entirely; the workflow now re-hosts upstream's tarball verbatim.
 `susanin/v0.3.6` has all 6 assets (both arches) as of this note. **Phase 1
 is now actually done, not just merged.**
 
+## 2026-09-13 live debugging arc -- Phase 1 confirmed on real hardware
+
+Same day as the doc's initial write, the operator actually installed and
+configured Susanin on a real router (aarch64, KeeneticOS, WG-transport
+already active) via the bot. **Six more real bugs** surfaced in quick
+succession -- each found by reading upstream's actual scripts/source
+end-to-end against live command output, never guessed, same discipline
+as the three bugs above. End state: `susanin.sh status` shows the data
+plane fully `OK` (chain, PREROUTING jump, both `ip rule`s, default route
+in table) and `daemon: RUNNING` with a populated cache
+(`susanin_ok_tcp`/`_udp` in the hundreds from `vpn_always.txt`
+resolving) -- **the first genuine end-to-end confirmation of Phase 1**,
+not just QEMU/mirror-verified.
+
+1. **(#150) Install unreachable on an already-installed router** --
+   `addonInstall` in both dispatchers (`cmd/keenetic-xray/addon.go`,
+   `internal/botcontrol/addons.go`) short-circuited on `Detect().Installed`
+   before ever calling `Install()`. Harmless for opkg-based addons, but
+   made the egress auto-resolve above unreachable for a router that
+   already had the binary -- exactly the case that needed it. Every
+   addon's own `Install` is already safe to re-run, so both dispatchers
+   now always call it, keeping "already installed" only in the message.
+2. **(#150) `ipset`/`conntrack` never installed** -- upstream's own README
+   lists both as hard Entware requirements; neither upstream's scripts nor
+   this addon ever installed them, so the data plane died with "ipset not
+   found" the first time anything tried to bring it up. `Install()` now
+   `opkgInstall`s both first.
+3. **(#151) `looksLikeNDMName` heuristic was itself wrong** -- shipped in
+   #148 on the assumption that a Keenetic WireGuard interface's kernel
+   device name always differs from its NDM name (e.g. `nwg0` vs
+   `Wireguard3`). Disproven on real hardware: `ndmc -c show interface
+   Wireguard3` came back with `interface-name: Wireguard3` -- the
+   identical string -- on this router/firmware. The heuristic was
+   rejecting a manually-typed value that was actually correct. Removed;
+   a manual `egress=` value is now accepted as typed, `datapath.sh`'s own
+   bring-up is the only real judge.
+4. **(#152) `interface-name:` isn't reliably the kernel name at all** --
+   one step further: on this same router, `ip addr show Wireguard3`
+   answered "can't find device" despite `show interface` reporting
+   `interface-name: Wireguard3`. The real kernel device (found via
+   `ip -o link show`, cross-checked by MTU 1280 + `UP,LOWER_UP`) was
+   `nwg3` -- a completely different string. `InterfaceOSName` no longer
+   trusts that field at all; it resolves the interface's `address:` field
+   and finds which real kernel device currently holds that exact address
+   (`kernelIfaceByAddress`, a new `ip -o addr show` scan) -- correct by
+   construction, independent of NDM's naming convention for a given
+   firmware/interface type.
+5. Ruled out, for the record (each verified, each a dead end): `ip route
+   add default dev nwg3 table 100` run *by hand* always succeeded cleanly
+   -- table 250 vs 100 made no difference, installing Entware's `ip-full`
+   (real iproute2, confirmed via the actual package index) over the base
+   busybox `ip` made no difference, `nwg3`'s kernel flags were confirmed
+   `UP,LOWER_UP` throughout. None of these were the bug -- but each was a
+   real, necessary elimination, not wasted motion, because the eventual
+   root cause (#6) meant *every* automated attempt failed identically to
+   every manual isolation test succeeding, which is what pointed at "the
+   invocation path itself must differ" rather than at the interface/table.
+6. **(#153) THE root cause -- upstream's own `tools/susanin.sh` `install`
+   case doesn't thread its own config through:**
+   `install) sh "$TOOLS/datapath.sh" up; "$BIN" setup ;;` -- two commands.
+   Only the second (`$BIN setup`, `backend_provision`/`set_env()` in
+   `src/backend.c`) exports `SUSANIN_EGRESS`/`SUSANIN_LAN` from the loaded
+   `susanin.conf`. The first, bare `datapath.sh up` call sees neither and
+   silently falls back to `datapath.sh`'s own hardcoded default (egress
+   `nwg0`) -- regardless of what's configured. `susanin.sh` runs under its
+   own `set -eu`, so when that first call fails, it aborts right there,
+   never reaching the second command that would have gotten it right.
+   Live, `nwg0` existed but was administratively down (confirmed via
+   `ip -o link show`: no `UP`/`LOWER_UP`), so "RTNETLINK answers: Network
+   is down" was a true, honest error -- just about the wrong interface.
+   Reproduces identically for a manual `sh susanin.sh install`, which is
+   why #5's isolation tests kept coming back clean: it was never about
+   automated vs. manual invocation. Fixed without touching upstream's
+   file: `susaninApply` now calls a new `runScriptEnv` (sets
+   `SUSANIN_EGRESS`/`SUSANIN_LAN`, read back from `susanin.conf`, in the
+   child's own environment before running `susanin.sh install`/`restart`)
+   -- a shell script's children inherit its environment, so the bare
+   `datapath.sh up` call *inside* `susanin.sh` sees them too.
+
+**Non-issue, for the record**: `engine_run` (`src/engine.c`) logs
+`ERR: datapath provisioning failed` once at daemon startup if its own
+redundant `backend_provision` call loses a race (seen once, likely
+coincident with unrelated WireGuard handshake retry activity in `dmesg`
+during this same debugging session) -- confirmed from source this is
+non-fatal (`slogf` only, no exit) and self-heals via the engine's own
+15-second `backend_ready`/re-provision reconcile loop either way.
+
+**Still known, not yet fixed**: no boot-time persistence at all (see the
+bug #3 note above -- unchanged); manual `vpn_always.txt`/`vpn_never.txt`
+list editing (currently SSH-only, no bot/CLI convenience); reconciliation
+after a router reboot in general. All deferred, operator's call on
+priority.
+
 Not done, not attempted: anything from Phase 2 (still just the plan in
-memory); real-hardware verification of the whole Phase 1 flow (mipsel is
-QEMU-smoke-tested via the mirror workflow same as xray-core/naive-core,
-but installing via the bot end-to-end, resolving a real `egress=` value,
-and confirming Susanin-routed traffic actually reaches the live
-vless/naive egress through WG-transport has not been tried on the user's
-actual router yet -- flag this the same way naive's mipsel path was
-flagged before its own hardware confirmation).
+memory).

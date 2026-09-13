@@ -1098,6 +1098,67 @@ func TestRouterHandler_SelfUpdate(t *testing.T) {
 	}
 }
 
+func TestRouterHandler_SelfUpdate_LogsSuccess(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh on PATH to exercise the update spawn")
+	}
+	// A real HTTP server, not file:///dev/null -- curl's handling of
+	// file:// URLs turned out to be platform-dependent (fails on this
+	// Windows box, works on Linux), and the router's own curl always
+	// fetches over http(s) anyway, never file://.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK) // empty body -> downloaded script is empty -> sh no-ops, exit 0
+	}))
+	t.Cleanup(srv.Close)
+
+	logged := make(chan string, 1)
+	h := &RouterHandler{
+		Config:     config.Default(),
+		InstallURL: srv.URL,
+		Logf:       func(format string, a ...any) { logged <- fmt.Sprintf(format, a...) },
+	}
+	if _, err := h.Handle(context.Background(), Command{Action: ActionSelfUpdate}); err != nil {
+		t.Fatalf("self_update: %v", err)
+	}
+	select {
+	case line := <-logged:
+		if !strings.Contains(line, "install.sh finished") {
+			t.Errorf("logged line = %q, want it to say the run finished", line)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Logf was never called for a successful run")
+	}
+}
+
+func TestRouterHandler_SelfUpdate_LogsFailure(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh on PATH to exercise the update spawn")
+	}
+	// Port 1 on loopback: nothing listens there, so curl itself fails
+	// (connection refused) before sh ever runs. With the old `curl | sh`
+	// pipe and no pipefail, this exact case exited 0 (the second `sh` got
+	// empty stdin and "succeeded" doing nothing) -- silently, indefinitely.
+	// The download-then-run rewrite is what makes curl's own failure
+	// reach c.Wait() at all.
+	logged := make(chan string, 1)
+	h := &RouterHandler{
+		Config:     config.Default(),
+		InstallURL: "http://127.0.0.1:1/definitely-not-listening",
+		Logf:       func(format string, a ...any) { logged <- fmt.Sprintf(format, a...) },
+	}
+	if _, err := h.Handle(context.Background(), Command{Action: ActionSelfUpdate}); err != nil {
+		t.Fatalf("self_update: %v", err)
+	}
+	select {
+	case line := <-logged:
+		if !strings.Contains(line, "failed") {
+			t.Errorf("logged line = %q, want it to report the failure", line)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Logf was never called for a failed run -- the exact silent-failure bug this fix addresses")
+	}
+}
+
 func TestRouterHandler_SwitchTo(t *testing.T) {
 	d := newTestDaemon(t)
 	h := &RouterHandler{Daemon: d, Config: config.Default()}

@@ -248,6 +248,7 @@ func cmdDaemon(args []string) error {
 			WatchdogScript:   watchdogScriptPath(),
 			WatchdogLog:      watchdogLogPath(),
 			DaemonLog:        daemonLogPath(),
+			Logf:             logf,
 			QualityStatePath: qualityStatePath(),
 			SelfUpdateMarker: selfUpdateMarkerPath(),
 		}

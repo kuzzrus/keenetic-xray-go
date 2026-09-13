@@ -96,7 +96,7 @@ func (susaninAddon) Install(ctx context.Context) error {
 	// install.sh's own auto-detection guessed -- Configure's restart is
 	// what actually brings it up meaningfully.
 	installSh := filepath.Join(dir, "install.sh")
-	if out, err := runScript(ctx, installSh, "--yes", "--no-start", "--prefix="+susaninPrefix); err != nil {
+	if out, err := runScript(ctx, installSh, "--yes", "--no-start", "--prefix", susaninPrefix); err != nil {
 		return fmt.Errorf("susanin install.sh: %w\n%s", err, strings.TrimSpace(out))
 	}
 	return nil

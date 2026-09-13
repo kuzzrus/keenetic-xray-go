@@ -152,45 +152,24 @@ func TestSusanin_Configure_EgressAuto_FailsWhenUnresolvable(t *testing.T) {
 	}
 }
 
-func TestSusanin_Configure_RejectsNDMStyleEgress(t *testing.T) {
+func TestSusanin_Configure_AcceptsNDMStyleEgress(t *testing.T) {
 	f := newFakeSys()
 	withFakeSys(t, f)
 	withFakeSusanincore(t)
 	f.files[susaninConf] = []byte("egress_interface=\n")
 
-	// This is the actual mistake that happened live: an operator (misled
-	// by an earlier, confusing About() example) configured egress to the
-	// NDM interface name shown by ndmc/the router card instead of the
-	// kernel device name -- datapath.sh's `ip route add default dev
-	// Wireguard3` has no such device to route into, so the whole `up`
-	// sequence aborted under set -eu and the data plane was never created
-	// at all (susanin.sh status: everything MISSING, daemon stopped).
+	// A prior version rejected any egress value shaped like an NDM name
+	// (PascalCase, e.g. "Wireguard3"), on the assumption the OS-level
+	// kernel device name always differs from it -- confirmed wrong on real
+	// hardware (see the Configure comment above this case). A manual value
+	// must be accepted verbatim; only susanin.sh's own bring-up can judge
+	// whether it actually resolves to a usable device.
 	a, _ := Find("susanin")
-	err := a.Configure(context.Background(), map[string]string{"egress": "Wireguard3"})
-	if err == nil {
-		t.Fatal("egress=Wireguard3 (an NDM-style name) should be rejected, not silently break the data plane")
+	if err := a.Configure(context.Background(), map[string]string{"egress": "Wireguard3"}); err != nil {
+		t.Fatalf("Configure(egress=Wireguard3): %v", err)
 	}
-	if !strings.Contains(err.Error(), "auto") {
-		t.Errorf("error = %q, want it to point at egress=auto as the fix", err.Error())
-	}
-	if got := susaninConfValue("egress_interface"); got != "" {
-		t.Errorf("rejected egress must not be written: got %q", got)
-	}
-}
-
-func TestLooksLikeNDMName(t *testing.T) {
-	cases := map[string]bool{
-		"Wireguard3":       true,
-		"GigabitEthernet0": true,
-		"nwg0":             false,
-		"eth0":             false,
-		"br0":              false,
-		"":                 false,
-	}
-	for in, want := range cases {
-		if got := looksLikeNDMName(in); got != want {
-			t.Errorf("looksLikeNDMName(%q) = %v, want %v", in, got, want)
-		}
+	if got := susaninConfValue("egress_interface"); got != "Wireguard3" {
+		t.Errorf("egress_interface = %q, want Wireguard3", got)
 	}
 }
 

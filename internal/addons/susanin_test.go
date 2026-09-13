@@ -152,6 +152,12 @@ func TestSusanin_Lifecycle(t *testing.T) {
 	if err := a.Remove(ctx); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
+	// Remove must plant the S94susanin placeholder before calling
+	// uninstall.sh -- upstream's script aborts under set -e if that file
+	// is missing, before it ever reaches its own file-removal step.
+	if _, ok := f.files[susaninInitd]; !ok {
+		t.Error("Remove should touch susaninInitd before running uninstall.sh")
+	}
 	if *installed {
 		t.Error("Remove should have flipped installed back to false")
 	}

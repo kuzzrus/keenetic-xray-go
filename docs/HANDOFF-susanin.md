@@ -140,9 +140,9 @@ down via `datapath.sh down`); `Status`/`Detect` read `egress_interface`
 out of the config to report "not configured yet" before ever shelling out
 to `susanin.sh status`).
 
-**Two live bugs found and fixed post-ship (2026-09-13, on real hardware),
-both from the same root mistake -- trusting the wrapper's own shape
-instead of checking upstream's actual scripts/parsers byte-for-byte:**
+**Three live bugs found and fixed post-ship (2026-09-13, on real hardware),
+all from the same root mistake -- trusting the wrapper's own shape instead
+of checking upstream's actual scripts/parsers byte-for-byte:**
 1. `--prefix=/opt/susanin` (one combined arg) hit upstream's `unknown arg`
    fallback -- its case-statement parser only accepts `--prefix DIR` as two
    separate args. The shipped test had asserted the same wrong combined
@@ -153,18 +153,36 @@ instead of checking upstream's actual scripts/parsers byte-for-byte:**
    Phase 1 ever called it -- so the daemon ran (or tried to) against a data
    plane that never existed. Fixed by calling `install` before `restart` in
    `Configure`.
+3. `Remove` (🗑 Удалить in the bot) stopped the daemon and tore down the
+   data plane, but never actually deleted anything -- looked like a no-op.
+   Cause: upstream's `uninstall.sh` runs under `set -e` and, unconditionally
+   (not inside an `if`), does `[ -f "$INITD" ] && rm -f "$INITD" && say
+   ...` where `INITD=/opt/etc/init.d/S94susanin`. Confirmed against the
+   real upstream deploy tarball (`tar -tzf` on the actual release asset)
+   that it does **not** contain `S94susanin` at all -- that file lives only
+   in the git checkout's `init/entware`/`init/openwrt`, for someone
+   following the full manual DEPLOY.md flow by hand. So `install.sh`'s own
+   `[ -f "$DIR/S94susanin" ]` copy-if-present guard never fires for us
+   either, `$INITD` never exists on a router this addon installed, and
+   that bare `[ -f ... ] && ...` statement's non-zero exit aborts
+   `uninstall.sh` right there -- before it ever reaches the real `rm -rf
+   "$PREFIX/bin" "$PREFIX/tools"` a few lines down. Fixed by having
+   `Remove` touch an empty placeholder at `$INITD` before calling
+   `uninstall.sh` -- upstream's own script then removes it as part of its
+   normal cleanup, no patch to upstream's file needed.
 
-**Known, not yet fixed**: upstream's own boot-time init script
-(`init/entware/S94susanin`, installed by `install.sh`) only runs
-`susanin.sh start` on boot -- never `install`. Since the data plane
-(iptables/ip rule/ipset) is in-kernel state that doesn't survive a reboot,
-a router restart reproduces bug #2 above every time, even after the
-`Configure` fix. Not upstream's fault to blame exactly -- more that nothing
-in *our* integration re-asserts the data plane after a reboot either.
-Candidate fixes: hook susanin's data-plane presence into this project's
-existing `routerReconcileLoop`/ndm-event self-heal (same mechanism that
-already re-asserts MSS clamp/routes/WG-transport), rather than patching
-upstream's shipped init.d file. Not built yet.
+**Known, not yet fixed**: bug #3's root fact -- `S94susanin` is never
+present on a router this addon installed, at all, ever -- means susanin
+currently has **no boot-time start of any kind**, not "starts but doesn't
+reassert the data plane" as previously (incorrectly) noted here. A router
+reboot leaves susanin fully stopped until the operator manually reopens
+🧩 Дополнения → Susanin and reconfigures. Candidate fixes: hook susanin's
+presence+data-plane into this project's existing `routerReconcileLoop`/
+ndm-event self-heal (same mechanism that already re-asserts MSS clamp/
+routes/WG-transport) rather than trying to install upstream's own
+`init/entware/S94susanin` (which itself would still need the same `install`
+step #2 fixed for, so reconcile-loop is likely the more complete fix
+either way). Not built yet.
 
 **No separate CLI command was added** (no `ensure-susanin-core` mirroring
 `ensure-naive-core`) -- deliberately: naive-core needed one because

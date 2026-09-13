@@ -74,9 +74,9 @@ func (susaninAddon) About() string {
 		"`addon configure susanin egress=auto`.\n\n" +
 		"Настройки (addon configure susanin …):\n" +
 		"  egress=auto            пересчитать автоматически (см. выше)\n" +
-		"  egress=nwg0             OS-имя интерфейса вручную -- ВАЖНО: не то же самое, что NDM-имя " +
-		"(\"Wireguard3\" из ndmc/карточки роутера) -- такое значение отклоняется с понятной ошибкой. " +
-		"Настоящее узнать: `ndmc -c show interface <NDM-имя>` → строка `interface-name:`\n" +
+		"  egress=nwg0             OS-имя интерфейса вручную -- на части моделей/прошивок совпадает с " +
+		"NDM-именем (\"Wireguard3\"), на других отличается (\"nwg0\") -- не гадай, точно узнать: " +
+		"`ndmc -c show interface <NDM-имя>` → строка `interface-name:` (то же самое делает egress=auto)\n" +
 		"  lan=br0,br1           LAN-интерфейсы (по умолчанию определяются сами)\n" +
 		"  subnets=192.168.1.0/24  LAN-подсети (по умолчанию определяются сами)\n" +
 		"  health_probe=1.1.1.1,8.8.8.8  цели проверки живости туннеля\n\n" +
@@ -200,6 +200,17 @@ func (susaninAddon) Configure(ctx context.Context, kv map[string]string) error {
 		switch k {
 		case "egress":
 			v = strings.TrimSpace(v)
+			// No pattern-based validation beyond non-empty: an earlier
+			// version rejected anything shaped like an NDM name (PascalCase,
+			// e.g. "Wireguard3") on the assumption the OS-level kernel
+			// device name always differs from it. Confirmed wrong on real
+			// hardware -- `ndmc -c show interface Wireguard3` came back with
+			// `interface-name: Wireguard3`, the identical string, on that
+			// router/firmware. Whether the two match depends on the model/
+			// firmware, so a shape-based guard here produces false
+			// positives that block a genuinely correct manual value.
+			// egress=auto (resolveEgress) already does the real lookup;
+			// beyond that, only actually trying a value can confirm it.
 			if v == "auto" {
 				iface := resolveEgress(ctx)
 				if iface == "" {
@@ -209,19 +220,6 @@ func (susaninAddon) Configure(ctx context.Context, kv map[string]string) error {
 				v = iface
 			} else if v == "" {
 				return fmt.Errorf("egress=%q: пустое имя интерфейса", v)
-			} else if looksLikeNDMName(v) {
-				// This exact mistake has actually happened: the interface
-				// this project's own WG-transport creates is named e.g.
-				// "Wireguard3" at the NDM level, and that's what shows up
-				// in ndmc / the router card -- easy to paste in directly.
-				// But datapath.sh needs the kernel device name
-				// (`ip route add default dev <this>`); a NDM name there
-				// makes the whole `up` sequence fail under set -eu (the
-				// chain/jump/ip-rules never get created at all -- `susanin.sh
-				// status` shows everything as MISSING, daemon stopped).
-				return fmt.Errorf("egress=%q похоже на NDM-имя интерфейса (например, из ndmc или "+
-					"карточки роутера), а нужно OS-имя ядра (например nwg0) -- используй "+
-					"egress=auto, или сам: `ndmc -c show interface %s` → строка `interface-name:`", v, v)
 			}
 			set["egress_interface"] = v
 		case "lan":
@@ -235,23 +233,6 @@ func (susaninAddon) Configure(ctx context.Context, kv map[string]string) error {
 		}
 	}
 	return susaninApply(ctx, set)
-}
-
-// looksLikeNDMName is a heuristic guard against a real mistake that
-// happened: Keenetic's own interface names (ndmc, the router card) are
-// PascalCase -- "Wireguard3", "GigabitEthernet0" -- while kernel device
-// names are conventionally lowercase ("nwg0", "eth0", "br0"). Not a rule
-// the kernel enforces, just what every real router and Linux box does in
-// practice -- good enough to catch a pasted-in NDM name before it
-// silently breaks the whole data plane under datapath.sh's `set -eu`
-// (chain/jump/ip-rules never get created, daemon stays stopped) instead
-// of after.
-func looksLikeNDMName(v string) bool {
-	if v == "" {
-		return false
-	}
-	r := rune(v[0])
-	return r >= 'A' && r <= 'Z'
 }
 
 // susaninApply writes set into susanin.conf and brings the data plane +

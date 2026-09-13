@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/kuzzrus/keenetic-xray-go/internal/addons"
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 	"github.com/kuzzrus/keenetic-xray-go/internal/keenetic"
 )
@@ -59,6 +60,27 @@ func reconcileOnce(ctx context.Context, logf func(string, ...any)) {
 	reconcileWGTransport(ctx, cfg, logf)
 	reconcileMSSClamp(ctx, cfg, logf)
 	reconcileDNS(ctx, cfg, logf)
+	reconcileSusanin(ctx, logf)
+}
+
+// reconcileSusanin restarts susanin's daemon if the operator has it
+// installed and configured but it isn't currently running -- unlike the
+// other reconcile steps this needs no cfg: susanin's own state lives
+// entirely in its own susanin.conf, addons deliberately have no
+// *config.Config access (see internal/addons/susanin.go), so
+// addons.EnsureSusaninRunning reads that state itself and no-ops when
+// susanin isn't installed or was never configured.
+func reconcileSusanin(ctx context.Context, logf func(string, ...any)) {
+	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	acted, err := addons.EnsureSusaninRunning(cctx)
+	if err != nil {
+		logf("susanin: reconcile failed: %v", err)
+		return
+	}
+	if acted {
+		logf("susanin: daemon was stopped, restarted (no boot-time persistence yet)")
+	}
 }
 
 // reconcileProxy0 re-points the Proxy interface at the local inbound only

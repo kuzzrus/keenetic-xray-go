@@ -316,11 +316,78 @@ during this same debugging session) -- confirmed from source this is
 non-fatal (`slogf` only, no exit) and self-heals via the engine's own
 15-second `backend_ready`/re-provision reconcile loop either way.
 
-**Still known, not yet fixed**: no boot-time persistence at all (see the
-bug #3 note above -- unchanged); manual `vpn_always.txt`/`vpn_never.txt`
-list editing (currently SSH-only, no bot/CLI convenience); reconciliation
-after a router reboot in general. All deferred, operator's call on
-priority.
+**Corrected by a later PR (#155, same day)**: boot-time persistence is no
+longer "not fixed" -- `EnsureSusaninRunning` hooks into
+`cmd/keenetic-xray`'s existing periodic router-reconcile loop and starts
+the daemon if it's installed+configured but not running. Superseded the
+note that used to be here.
+
+**Still known, not yet fixed**: manual `vpn_always.txt`/`vpn_never.txt`
+list editing (currently SSH-only, no bot/CLI convenience).
 
 Not done, not attempted: anything from Phase 2 (still just the plan in
 memory).
+
+## 2026-09-14 -- health-check is structurally incompatible with this project's WG-transport, forced off
+
+Continuing the same live-hardware session (one day later). With Phase 1
+confirmed working end-to-end, the operator hit a real, reproducible "works
+for ~20 seconds after every restart, then goes back to doing nothing"
+pattern -- traced fully before touching any code, same discipline as the
+six bugs above.
+
+**Root cause, confirmed against real upstream source (`src/health.c`,
+`src/engine.c`) and real hardware (`ping -I <egress> 1.1.1.1`: 100% loss;
+`curl --interface <egress>`: 200, full speed, same tunnel)**: upstream's
+health-check is a raw ICMP ping to `health_probe`'s targets. This
+project's WG-transport egress is xray's own WireGuard *inbound*
+implementation (userspace, not a kernel WG pair) -- it proxies real
+TCP/UDP application traffic fine but never replies to ICMP through the
+tunnel at all. `engine_run`'s main loop calls `health_probe()` every
+`health_interval` regardless of state; each miss increments a counter,
+and once it reaches `health_miss_debounce` (upstream default 4, so ~20s)
+the engine sets `tunnel_up = 0`, logs `"tunnel DOWN, fail-open DIRECT"`,
+and flushes every ipset (`backend_ipset_flush`). Critically, `tunnel_up`
+also gates the *entire* per-destination classifier
+(`clr_fast`/`clr_soft`/`clr_judge` in the main loop all check it, not
+just whether to route already-confirmed destinations) -- and recovery
+requires a *successful* ICMP reply, which this tunnel will never produce,
+so once tripped it never self-heals. Net effect: since `tunnel_up` starts
+at 1 on daemon start, susanin classifies and routes correctly for the
+first ~20 seconds after every restart, then permanently stops doing
+anything until the next manual restart. This explains both the "empty
+ipsets whenever anyone checks" symptom and the "brief flash of a working
+preview, then nothing" one the operator described -- both are the same
+fail-open cycle, not two different bugs.
+
+**Fix**: `susaninApply` (shared by `Configure` and `Install`'s
+auto-configure) now unconditionally forces `health_miss_debounce=999999`
+into every write to `susanin.conf`, regardless of what the caller's own
+`set` asked for. This isn't a per-router tunable -- it's a structural
+mismatch between upstream's ICMP-based health-check and how *this
+project's* WG-transport is implemented, so it applies to every
+installation using it, not just misconfigured ones. Verified live: after
+applying manually and restarting, `susanin.log` showed continuous
+`AUTO-SUSANIN: FAST/CONFIRMED` classifier activity for 9+ minutes with no
+further `tunnel DOWN`, and `susanin_ok_tcp` went from empty to 300+
+real entries (Telegram's `149.154.x.x`, Meta's `31.13.72.x`/`157.240.x.x`,
+plus a large stretch of Google ranges from `vpn_always.txt`). Telegram and
+Instagram access were confirmed working end-to-end on the phone afterward.
+
+**Separate, non-bug finding from the same test**: YouTube video playback
+and Speedtest still didn't work even with the classifier running
+correctly. Not a bug -- both serve their actual payload from a large,
+per-session-dynamic pool of server IPs (YouTube: per-edge hostnames like
+`rr3---sn-xyz.googlevideo.com`, resolved fresh per session; Speedtest:
+geographically-distributed third-party test servers, chosen per run).
+Susanin's reactive per-IP classifier can only ever catch up to *already
+observed* destinations -- it structurally cannot pre-empt a pool this
+large and this dynamic. This project's own domain-based routing
+(`routes`/`presets` -- `youtube` and `speedtest` are already in the
+catalogue, see the geo-presets arc in [[bot-feature-roadmap]]) doesn't
+have this limitation: it snoops the live DNS *query* for any subdomain
+matching the object-group's pattern, so a never-before-seen
+`rr3---sn-xyz.googlevideo.com` is caught the moment it's looked up, not
+after the fact. `About()` now says this plainly: Susanin is for the
+unpredictable long tail not already in a domain list, not a replacement
+for domain-based routing on large, well-known CDN-backed services.

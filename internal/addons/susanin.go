@@ -38,6 +38,27 @@ const (
 	// DEPLOY.md flow), so this path never actually exists on a router
 	// this addon installed. See Remove's comment for why that matters.
 	susaninInitd = "/opt/etc/init.d/S94susanin"
+	// susaninHealthMissDebounceOverride is forced into every write to
+	// susanin.conf, regardless of what the caller's own `set` asked for.
+	// Upstream's health-check (src/health.c) is a raw ICMP ping to
+	// health_probe's targets; confirmed on real hardware (2026-09-14) that
+	// xray's own WireGuard inbound -- this project's WG-transport egress
+	// -- never replies to ICMP at all (100% loss via `ping -I <egress>
+	// 1.1.1.1`), while real TCP/UDP application traffic through the exact
+	// same tunnel works fine (curl through it: 200, full speed). Left at
+	// upstream's default health_miss_debounce=4 (health_interval=5s), the
+	// engine trips "tunnel DOWN, fail-open DIRECT" about 20 seconds after
+	// every daemon start and flushes every ipset -- and since tunnel_up
+	// also gates the entire per-destination classifier (engine.c:
+	// clr_fast/clr_soft/clr_judge, not just already-confirmed routes), the
+	// practical effect is that susanin only does anything at all for the
+	// first ~20 seconds after each restart. This is a structural mismatch
+	// between upstream's ICMP-based health-check and how this project's
+	// WG-transport is implemented (xray as the WG server), not a
+	// per-router misconfiguration -- it reproduces on any installation
+	// using this project's own WG-transport as the egress, so it's forced
+	// unconditionally rather than left as an opt-in `addon configure` key.
+	susaninHealthMissDebounceOverride = "999999"
 )
 
 // susaninEnsure / susaninVersion are susanincore.Ensure/Version, swappable
@@ -125,9 +146,17 @@ func (susaninAddon) About() string {
 		"`ndmc -c show interface <NDM-имя>` → строка `interface-name:` (то же самое делает egress=auto)\n" +
 		"  lan=br0,br1           LAN-интерфейсы (по умолчанию определяются сами)\n" +
 		"  subnets=192.168.1.0/24  LAN-подсети (по умолчанию определяются сами)\n" +
-		"  health_probe=1.1.1.1,8.8.8.8  цели проверки живости туннеля\n\n" +
+		"  health_probe=1.1.1.1,8.8.8.8  цели проверки живости туннеля (ICMP; см. ниже)\n\n" +
 		"Списки vpn_always.txt/vpn_never.txt (всегда через VPN / всегда напрямую) правятся " +
-		"напрямую на роутере: /opt/susanin/etc/{vpn_always,vpn_never}.txt."
+		"напрямую на роутере: /opt/susanin/etc/{vpn_always,vpn_never}.txt.\n\n" +
+		"⚠️ Проверка живости туннеля у Susanin — это ICMP-пинг, а наш WG-транспорт (xray в роли " +
+		"WG-сервера) на ICMP не отвечает — при штатных настройках это выключало бы весь движок " +
+		"через ~20 секунд после каждого старта. Поэтому этот компонент всегда держит " +
+		"`health_miss_debounce` практически недостижимым — сам факт неответа на пинг не мешает " +
+		"работе. Также учти: сервисы с большим динамическим пулом IP на сессию (видео YouTube, " +
+		"Speedtest и подобные) Susanin реактивно не успевает подхватывать -- для них используй " +
+		"обычную доменную маршрутизацию (📍 Маршруты → 📦 Готовые списки), Susanin — для " +
+		"непредсказуемых адресов, которых нет в списках."
 }
 
 func (susaninAddon) Detect(ctx context.Context) State {
@@ -291,6 +320,7 @@ func (susaninAddon) Configure(ctx context.Context, kv map[string]string) error {
 // restart alone never brought up anything beyond a bare daemon process
 // watching a data plane that never existed.
 func susaninApply(ctx context.Context, set map[string]string) error {
+	set["health_miss_debounce"] = susaninHealthMissDebounceOverride
 	if err := shellConfSet(susaninConf, set); err != nil {
 		return err
 	}

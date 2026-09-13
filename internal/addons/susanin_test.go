@@ -224,6 +224,46 @@ func TestSusanin_Configure_SetsEgressEnvForDatapath(t *testing.T) {
 	}
 }
 
+func TestSusanin_HealthMissDebounceAlwaysOverridden(t *testing.T) {
+	// Upstream's health-check is a raw ICMP ping (src/health.c); confirmed
+	// on real hardware that xray's own WireGuard inbound (this project's
+	// own WG-transport egress) never replies to ICMP at all, while real
+	// application traffic through the same tunnel works fine. Left at
+	// upstream's default, the engine fail-opens -- disabling its entire
+	// classifier, not just already-confirmed routes -- about 20 seconds
+	// after every daemon start. Must be forced on every write to
+	// susanin.conf, regardless of which other keys are being changed.
+	t.Run("via Configure", func(t *testing.T) {
+		f := newFakeSys()
+		withFakeSys(t, f)
+		withFakeSusanincore(t)
+		f.files[susaninConf] = []byte("egress_interface=\n")
+
+		a, _ := Find("susanin")
+		if err := a.Configure(context.Background(), map[string]string{"lan": "br0"}); err != nil {
+			t.Fatalf("Configure: %v", err)
+		}
+		if got := susaninConfValue("health_miss_debounce"); got != susaninHealthMissDebounceOverride {
+			t.Errorf("health_miss_debounce = %q, want %q", got, susaninHealthMissDebounceOverride)
+		}
+	})
+
+	t.Run("via Install auto-configure", func(t *testing.T) {
+		f := newFakeSys()
+		withFakeSys(t, f)
+		withFakeSusanincore(t)
+		withFakeWGTransport(t, "Wireguard4", "nwg0")
+
+		a, _ := Find("susanin")
+		if err := a.Install(context.Background()); err != nil {
+			t.Fatalf("Install: %v", err)
+		}
+		if got := susaninConfValue("health_miss_debounce"); got != susaninHealthMissDebounceOverride {
+			t.Errorf("health_miss_debounce = %q, want %q", got, susaninHealthMissDebounceOverride)
+		}
+	})
+}
+
 func TestSusanin_Install_LeavesUnconfiguredWhenWGTransportInactive(t *testing.T) {
 	f := newFakeSys()
 	withFakeSys(t, f)

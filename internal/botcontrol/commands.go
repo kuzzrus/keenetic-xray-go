@@ -1,6 +1,7 @@
 package botcontrol
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -70,6 +71,12 @@ type RouterHandler struct {
 	// DaemonLog is the daemon's own rolling log file (applog), tailed by
 	// the daemon_log action. Empty -> that action returns an error.
 	DaemonLog string
+
+	// Logf writes one line to the daemon's log (main.go's own `logf`
+	// closure over applog, shared with watchPostUpdate). nil -> selfUpdate
+	// runs the same way but its detached install.sh's outcome leaves no
+	// trace anywhere if the daemon never gets far enough to restart.
+	Logf func(string, ...any)
 
 	// QualityStatePath is the all-profiles quality-sweep result file
 	// (health.State). Empty or absent -> status just omits that block.
@@ -1068,12 +1075,54 @@ func (h *RouterHandler) selfUpdate() (string, error) {
 		}
 	}
 
-	c := exec.Command("sh", "-c", "sleep 2; curl -fsSL "+url+" | sh")
+	// Download-then-run, not `curl ... | sh`: a shell pipeline's exit
+	// status (what c.Wait() below observes) is the *last* command's --
+	// with no pipefail (not portable to busybox ash anyway), a curl
+	// failure that produces no output would leave `sh` running on an
+	// empty script and exiting 0, masking the real failure just as badly
+	// as the discarded output/error this whole function exists to fix.
+	// $$ (the shell's own pid) keeps this unique -- a fixed path would let
+	// two overlapping runs (a double tap, or a retry before the first
+	// finishes: this whole command already sleeps 2s before it does
+	// anything) race on the same file, one's `rm -f` deleting it out from
+	// under the other's `sh`.
+	const tmpScript = "/tmp/keenetic-xray-selfupdate.$$.sh"
+	cmd := "sleep 2; curl -fsSL " + url + " -o " + tmpScript +
+		" && sh " + tmpScript + "; rc=$?; rm -f " + tmpScript + "; exit $rc"
+	c := exec.Command("sh", "-c", cmd)
+	var out bytes.Buffer
+	c.Stdout, c.Stderr = &out, &out
 	if err := c.Start(); err != nil {
 		return "", fmt.Errorf("запуск обновления: %w", err)
 	}
-	go func() { _ = c.Wait() }()
+	go h.logSelfUpdateOutcome(c, &out)
 	return "обновление агента запущено — переустановка .ipk и рестарт демона через ~2с" + rollbackNote, nil
+}
+
+// logSelfUpdateOutcome waits for the detached install.sh run and logs
+// what happened. Without this, a curl/opkg failure was previously
+// indistinguishable from an update that never ran at all: the bot already
+// announces "started" before this goroutine even begins (selfUpdate
+// returns as soon as Start succeeds), and the child's stdout/stderr and
+// Wait error used to be discarded outright. A *successful* run that goes
+// on to restart the daemon is still separately reported by
+// watchPostUpdate's own "post-update:" lines on the next process's
+// startup -- this only covers the run itself, most usefully the failures
+// that never get that far.
+func (h *RouterHandler) logSelfUpdateOutcome(c *exec.Cmd, out *bytes.Buffer) {
+	err := c.Wait()
+	if h.Logf == nil {
+		return
+	}
+	tail := strings.TrimSpace(out.String())
+	if len(tail) > 4<<10 {
+		tail = "…" + tail[len(tail)-4<<10:]
+	}
+	if err != nil {
+		h.Logf("self-update: install.sh failed: %v\n%s", err, tail)
+		return
+	}
+	h.Logf("self-update: install.sh finished (daemon restart, if any, logs separately)\n%s", tail)
 }
 
 // ensureCore retries the xray-core install (vendored build, opkg

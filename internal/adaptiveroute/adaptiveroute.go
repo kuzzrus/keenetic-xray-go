@@ -45,6 +45,12 @@ var (
 	}
 	ipsetPresent     = func() bool { return exec.Command("ipset", "-v").Run() == nil }
 	opkgInstallIPSet = func(ctx context.Context) error {
+		// `opkg update` first, best-effort -- same reasoning as
+		// internal/addons' own opkgInstall helper and keenetic.
+		// opkgInstallIptables: a stale/empty local package index makes
+		// `opkg install <name>` fail as "not found" even when the
+		// package genuinely exists in the feed.
+		_ = exec.CommandContext(ctx, "opkg", "update").Run()
 		return exec.CommandContext(ctx, "opkg", "install", "ipset").Run()
 	}
 )

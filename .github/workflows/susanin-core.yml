@@ -30,9 +30,9 @@ on:
   workflow_dispatch:
     inputs:
       susanin_version:
-        description: "R17a/Susanin.Keenetic release tag to mirror (e.g. v0.3.6). The pin (packaging/susanin-core/version) decides what susanincore.PinnedVersion fetches by default."
+        description: "R17a/Susanin.Keenetic release tag to mirror (e.g. v0.3.8). The pin (packaging/susanin-core/version) decides what susanincore.PinnedVersion fetches by default."
         required: true
-        default: v0.3.6
+        default: v0.3.8
 
 permissions:
   contents: write

@@ -37,7 +37,7 @@ import (
 // PinnedVersion is the R17a/Susanin.Keenetic release this project has
 // mirrored and smoke-tested. Kept in sync with packaging/susanin-core/version
 // (enforced by a test, same as naivecore.PinnedVersion <-> packaging/naive-core/version).
-const PinnedVersion = "v0.3.6"
+const PinnedVersion = "v0.3.8"
 
 const defaultBaseURL = "https://github.com/kuzzrus/keenetic-xray-go/releases/download/susanin"
 

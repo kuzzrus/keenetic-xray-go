@@ -657,15 +657,25 @@ func (d *Daemon) ForceSwitch(ctx context.Context, role Role) error {
 // that are otherwise only computed at startup get refreshed too:
 // realActions.socks (the SOCKS address ProbeLive/ProbeIsolated dial,
 // cached from Failover.SOCKSPort) and Machine's own copy of the tunable
-// failure/recovery counts. Then, if both slots are still configured,
-// re-applies the current live role -- restarting only the supervised
-// xray-core child (SwitchLiveTo), not this daemon process -- so a
-// changed primary/backup profile or a changed port actually takes
-// effect. Runs on Run's own goroutine via do, serialized with Tick
-// exactly like ForceSwitch, so it can never race a health-check probe
-// mid-flight. Safe to call concurrently with Run; the return value is
-// false if Run isn't currently active to answer (e.g. a reload signal
-// arrived before Run started, or after it returned).
+// failure/recovery counts. Then, as long as a primary is configured
+// (Run refuses to start at all without one, so this is really just
+// guarding against the config having been cleared out from under a
+// still-running daemon), re-applies the current live role --
+// restarting only the supervised xray-core child (SwitchLiveTo), not
+// this daemon process -- so a changed primary/backup profile, a
+// changed port, or any other field GenerateXrayConfig reads (MSS
+// clamp, WG transport, adaptive routing, ...) actually takes effect.
+// This runs the same whether or not a backup is configured -- a
+// single-profile setup needs its live xray-core regenerated on
+// reload exactly as much as a failover one does; gating this on
+// Backup() != nil too (the behavior through 2026-09-14) silently
+// stranded every single-profile reload on the stale pre-reload
+// config, "применено на лету" or not. Runs on Run's own goroutine via
+// do, serialized with Tick exactly like ForceSwitch, so it can never
+// race a health-check probe mid-flight. Safe to call concurrently
+// with Run; the return value is false if Run isn't currently active
+// to answer (e.g. a reload signal arrived before Run started, or
+// after it returned).
 //
 // Not handled: a pretest instance already running (StateTestingRecovery
 // or later) keeps probing the pre-reload primary until the state
@@ -678,7 +688,7 @@ func (d *Daemon) ReloadConfig(ctx context.Context, fresh *config.Config) bool {
 		*d.cfg = *fresh
 		d.actions.socks = fmt.Sprintf("127.0.0.1:%d", d.cfg.Failover.SOCKSPort)
 		d.machine.cfg = failoverConfig(d.cfg.Failover)
-		if d.cfg.Primary() != nil && d.cfg.Backup() != nil {
+		if d.cfg.Primary() != nil {
 			_ = d.actions.SwitchLiveTo(ctx, d.actions.liveRole)
 		}
 	})

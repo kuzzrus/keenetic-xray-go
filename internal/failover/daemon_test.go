@@ -627,6 +627,83 @@ func TestDaemon_ReloadConfig(t *testing.T) {
 	}
 }
 
+// TestDaemon_ReloadConfig_SingleProfile_NoBackup is the regression test for
+// a real bug found live on hardware (2026-09-14): ReloadConfig used to only
+// regenerate xray-production.json and restart the supervised xray-core
+// child when *both* a primary and a backup profile were configured. A
+// single-profile setup (Run's own "no backup -- supervising primary, no
+// automatic switching" mode, a normal and supported configuration) has no
+// backup by design, so every CLI command that saves config.json and then
+// SIGHUPs the running daemon for a live reload (see cmd/keenetic-xray's
+// applyDaemonChange, which prints "применено на лету (рестарт не нужен)")
+// silently no-opped on the actual xray-core process: the config on disk
+// changed, but the already-running child never saw it, contradicting the
+// CLI's own "no restart needed" message. Confirmed on real hardware: the
+// adaptive-routing transparent inbound only started accepting connections
+// after a full daemon restart, never after `transport adaptive on`'s live
+// reload. This proves a single-profile reload now regenerates the live
+// config too.
+func TestDaemon_ReloadConfig_SingleProfile_NoBackup(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.Profiles = []config.Profile{
+		{UUID: "p", Address: "primary.invalid", Port: 443, Network: "tcp", Security: "none", Encryption: "none", Remark: "primary"},
+	}
+	cfg.PrimaryIndex = 0
+	cfg.BackupIndex = -1 // no backup -- single-profile mode
+	cfg.Failover.CheckIntervalSeconds = 60
+	cfg.Failover.FailuresRequired = 1 << 30
+
+	prodPath := filepath.Join(dir, "production.json")
+	paths := Paths{
+		XrayBinary:       os.Args[0],
+		ProductionConfig: prodPath,
+		PretestConfig:    filepath.Join(dir, "pretest.json"),
+		Env:              []string{"FAILOVER_TEST_HELPER=1"},
+	}
+	d := NewDaemon(paths, cfg)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runErr := make(chan error, 1)
+	go func() { runErr <- d.Run(ctx) }()
+
+	// State() round-trips through d.do(), which Run only starts serving
+	// after its own initial SwitchLiveTo(RolePrimary) call has returned --
+	// so this also proves the daemon has already written the first
+	// production.json (for primary.invalid) before ReloadConfig below.
+	if _, ran := d.State(ctx); !ran {
+		t.Fatal("State reported the daemon not running")
+	}
+
+	fresh := config.Default()
+	fresh.Profiles = []config.Profile{
+		{UUID: "p2", Address: "primary2.invalid", Port: 443, Network: "tcp", Security: "none", Encryption: "none", Remark: "primary2"},
+	}
+	fresh.PrimaryIndex = 0
+	fresh.BackupIndex = -1
+	fresh.Failover = cfg.Failover
+
+	if !d.ReloadConfig(ctx, fresh) {
+		t.Fatal("ReloadConfig reported the daemon not running")
+	}
+
+	data, err := os.ReadFile(prodPath)
+	if err != nil {
+		t.Fatalf("reading production config: %v", err)
+	}
+	if !strings.Contains(string(data), "primary2.invalid") {
+		t.Errorf("production config = %s, want it regenerated for the reloaded primary profile (primary2.invalid) even with no backup configured", data)
+	}
+
+	cancel()
+	select {
+	case <-runErr:
+	case <-time.After(20 * time.Second):
+		t.Fatal("Run did not return after ctx cancellation")
+	}
+}
+
 func TestDaemon_Snapshot(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()

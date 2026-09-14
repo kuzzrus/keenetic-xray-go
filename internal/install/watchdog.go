@@ -162,7 +162,12 @@ var (
 		// non-Entware cron package).
 		return exec.Command("sh", "-c", "ps | grep -v grep | grep -q crond").Run() == nil
 	}
-	cronOpkgInstall = func() error { return exec.Command("opkg", "install", "cron").Run() }
+	cronOpkgInstall = func() error {
+		// `opkg update` first, best-effort -- same reasoning as
+		// internal/addons' own opkgInstall helper.
+		_ = exec.Command("opkg", "update").Run()
+		return exec.Command("opkg", "install", "cron").Run()
+	}
 )
 
 // CronRunning reports whether a cron daemon is currently active, so

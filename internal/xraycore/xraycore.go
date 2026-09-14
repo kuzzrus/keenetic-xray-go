@@ -159,6 +159,11 @@ func realOpkgInstall(ctx context.Context) error {
 	if _, err := exec.LookPath("opkg"); err != nil {
 		return fmt.Errorf("opkg not found: %w", err)
 	}
+	// `opkg update` first, best-effort -- same reasoning as
+	// internal/addons' own opkgInstall helper: a stale/empty local
+	// package index makes `opkg install <name>` fail as "not found" even
+	// when the package genuinely exists in the feed.
+	_ = exec.CommandContext(ctx, "opkg", "update").Run()
 	c := exec.CommandContext(ctx, "opkg", "install", "xray-core")
 	c.Stdout, c.Stderr = os.Stdout, os.Stderr
 	return c.Run()

@@ -64,6 +64,14 @@ func adaptiveRouteOn(cfg *config.Config) error {
 	if err := adaptiveroute.EnsureIPSetTool(ctx); err != nil {
 		return err
 	}
+	// Best-effort, not fatal like EnsureIPSetTool above: without
+	// conntrack, the redirect itself still works (new connection
+	// attempts are caught cleanly), it's only an already-established
+	// flow's immediate re-route that degrades to "wait for the client's
+	// own retry" -- see internal/keenetic/conntrack.go's doc comment.
+	if err := keenetic.EnsureConntrackTool(ctx); err != nil {
+		fmt.Printf("предупреждение: conntrack недоступен (%v) — уже открытые соединения не будут сразу перенаправляться, только новые попытки\n", err)
+	}
 	iface, subnet, err := adaptiveRouteLAN(ctx, cfg)
 	if err != nil {
 		return err
@@ -152,6 +160,11 @@ func applyAdaptiveRouteAtStartup(cfg *config.Config, logf func(string, ...any)) 
 	if err := adaptiveroute.EnsureIPSetTool(ctx); err != nil {
 		logf("adaptive-route: ipset tool unavailable: %v", err)
 		return
+	}
+	// Best-effort, not fatal like EnsureIPSetTool above -- see
+	// adaptiveRouteOn's matching call for why.
+	if err := keenetic.EnsureConntrackTool(ctx); err != nil {
+		logf("adaptive-route: conntrack unavailable (%v) -- already-open flows won't be redirected immediately, only new attempts", err)
 	}
 	iface, _, err := adaptiveRouteLAN(ctx, cfg)
 	if err != nil {

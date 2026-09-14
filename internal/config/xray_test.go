@@ -369,6 +369,59 @@ func TestGenerateXrayConfig_WGInbound(t *testing.T) {
 	}
 }
 
+func TestGenerateXrayConfig_TransparentInbound(t *testing.T) {
+	// ListenHost: "0.0.0.0" at the top level must NOT leak onto the
+	// transparent inbound -- unlike socks-in/http-in/wg-in, nothing ever
+	// dials this port directly (Keenetic's own REDIRECT rule delivers to
+	// it locally), so it always binds 127.0.0.1 regardless.
+	base := XrayConfigOptions{SOCKSPort: 1080, HTTPPort: 1081, ListenHost: "0.0.0.0", Outbound: validProfile()}
+
+	data, err := GenerateXrayConfig(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := inboundProtocols(t, data); len(got) != 2 || contains(got, "dokodemo-door") {
+		t.Fatalf("without Transparent: protocols = %v", got)
+	}
+
+	withT := base
+	withT.Transparent = &TransparentOptions{Port: 12345}
+	data, err = GenerateXrayConfig(withT)
+	if err != nil {
+		t.Fatalf("with Transparent: %v", err)
+	}
+	var cfg struct {
+		Inbounds []map[string]any `json:"inbounds"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Inbounds) != 3 {
+		t.Fatalf("want 3 inbounds, got %d", len(cfg.Inbounds))
+	}
+	tin := cfg.Inbounds[2]
+	if tin["protocol"] != "dokodemo-door" || tin["tag"] != "transparent-in" {
+		t.Fatalf("transparent inbound shell = %#v", tin)
+	}
+	if tin["listen"] != "127.0.0.1" {
+		t.Errorf("listen = %v, want 127.0.0.1 always, regardless of the top-level ListenHost", tin["listen"])
+	}
+	if tin["port"].(float64) != 12345 {
+		t.Errorf("port = %v, want 12345", tin["port"])
+	}
+	s := tin["settings"].(map[string]any)
+	if s["network"] != "tcp,udp" || s["followRedirect"] != true {
+		t.Errorf("transparent settings = %#v", s)
+	}
+
+	for _, bad := range []int{0, -1, 65536} {
+		withT.Transparent = &TransparentOptions{Port: bad}
+		if _, err := GenerateXrayConfig(withT); err == nil {
+			t.Errorf("port %d: expected an error", bad)
+		}
+	}
+}
+
 func inboundProtocols(t *testing.T, data []byte) []string {
 	t.Helper()
 	var cfg struct {

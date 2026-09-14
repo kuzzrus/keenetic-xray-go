@@ -243,7 +243,7 @@ func adaptiveRouteClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 		actions = append(actions, classifier.ClrJudge(clsCfg, state, flows, now)...)
 		state.Expire(now)
 
-		applyAdaptiveRouteActions(ctx, actions)
+		applyAdaptiveRouteActions(ctx, actions, logf)
 	}
 }
 
@@ -252,13 +252,20 @@ func adaptiveRouteClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 // keenetic.FlushConntrackForGroups' per-IP deletes: a single failed
 // ipset/conntrack call isn't worth aborting the rest of the batch over,
 // and every one of these is naturally retried on the next tick anyway.
-func applyAdaptiveRouteActions(ctx context.Context, actions []classifier.Action) {
+// Logs AddIP/RemoveIP (the two user-meaningful events -- a destination
+// started or stopped being redirected) so `keenetic-xray logs`/📜 Логи
+// has something real to grep during hardware verification; the matching
+// conntrack -D is just plumbing underneath an Add/Remove, not its own
+// event.
+func applyAdaptiveRouteActions(ctx context.Context, actions []classifier.Action, logf func(string, ...any)) {
 	for _, a := range actions {
 		switch a.Kind {
 		case classifier.ActionAddIP:
 			_ = adaptiveroute.AddIP(ctx, adaptiveRouteIPSet, a.IP, a.TTL)
+			logf("adaptive-route: redirecting %s", a.IP)
 		case classifier.ActionRemoveIP:
 			_ = adaptiveroute.RemoveIP(ctx, adaptiveRouteIPSet, a.IP)
+			logf("adaptive-route: no longer redirecting %s", a.IP)
 		case classifier.ActionDeleteConntrack:
 			keenetic.DeleteConntrackFlow(ctx, a.Flow.Proto, a.Flow.Src, a.Flow.Dst, a.Flow.SPort, a.Flow.DPort)
 		}

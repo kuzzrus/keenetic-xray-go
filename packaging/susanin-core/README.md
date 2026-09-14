@@ -18,7 +18,7 @@ UPX-repacked (see "Mirroring" below for why).
 project has mirrored and smoke-tested -- currently:
 
 ```
-v0.3.6
+v0.3.8
 ```
 
 It must match `susanincore.PinnedVersion` (a test enforces this). Bump it

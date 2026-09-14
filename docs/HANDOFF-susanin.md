@@ -15,7 +15,7 @@ repeated.
 ## The task — an `internal/addons` wrapper for R17a/Susanin.Keenetic
 
 [Susanin.Keenetic](https://github.com/R17a/Susanin.Keenetic) (MIT, C,
-~v0.3.6) is a conntrack-based **adaptive router**: it watches
+~v0.3.8) is a conntrack-based **adaptive router**: it watches
 `/proc/net/nf_conntrack` for silent-block signals (TCP SYN retried with no
 reply, a stalled TCP flow, QUIC with no reply), routes just that
 destination IP through a VPN tunnel, remembers what worked (persists
@@ -102,7 +102,7 @@ arcs. See the plan file for the full risk list.
   (`./susanin-agent`, `./install.sh`, `./susanin.sh`, `./datapath.sh`,
   `./update.sh`, `./uninstall.sh`, `./config.example.conf`,
   `./vpn_always.txt`, `./vpn_never.txt`, `./DEPLOY.md`) -- no subdirectory.
-- `susanin-agent` (mipsel v0.3.6): 827 KB, statically linked, not
+- `susanin-agent` (mipsel v0.3.8): 827 KB, statically linked, not
   stripped. `.github/workflows/susanin-core.yml` re-tars the whole layout
   **unmodified** -- deliberately **not** UPX-packed: a real attempt at it
   (`--lzma` on the aarch64 build) produced a SIGILL under
@@ -391,3 +391,32 @@ matching the object-group's pattern, so a never-before-seen
 after the fact. `About()` now says this plainly: Susanin is for the
 unpredictable long tail not already in a domain list, not a replacement
 for domain-based routing on large, well-known CDN-backed services.
+
+## 2026-09-14 -- mirrored v0.3.8, which restores a real classifier regression relevant to the YouTube/Speedtest finding above
+
+Checked upstream for updates past the v0.3.6 pin: v0.3.7 (2026-09-13) was
+already confirmed text/docs-only (`gh api .../compare/v0.3.6...v0.3.7`,
+matches the entry above). **v0.3.8** (2026-09-14) is not cosmetic --
+`src/classifier.c` diff (+99/-6) restores `TCP-LATE-STALL`/
+`QUIC-LATE-STALL` detection (a flow that got a reply and then went quiet
+-- the classic DPI-throttle pattern) that had been *removed* as part of
+v0.3.5's "tightened candidate logic" (only fully silent flows qualified as
+candidates from v0.3.5 through v0.3.7). Upstream's own changelog names the
+exact regression this caused: YouTube preview/video and x.com/Instagram
+media auto-learning stopped working between v0.3.5 and v0.3.8.
+
+This directly touches the "YouTube video/Speedtest -- not a bug,
+structural" finding in the section above, which was tested against the
+v0.3.6 pin -- i.e. *with* this regression still in place. The "large,
+per-session-dynamic IP pool" reasoning likely still holds for full video
+playback (no per-IP pin helps against an edge IP never seen before), but
+some of what was actually observed (previews specifically, and the
+x.com/Instagram media symptom) may have been this regression rather than
+a structural limit. Not re-tested on hardware yet -- worth doing once this
+pin is live, before restating the earlier finding as settled.
+
+Mirrored and smoke-tested (both arches, QEMU): `susanin/v0.3.8` has all 6
+assets. `susanin-agent` size essentially unchanged (827168 B mipsel,
+851088 B arm64) despite the classifier diff -- the UPX-packing conclusion
+above still holds. `PinnedVersion`/`packaging/susanin-core/version`
+bumped v0.3.6 -> v0.3.8 in the same PR.

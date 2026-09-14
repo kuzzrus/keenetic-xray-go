@@ -283,6 +283,7 @@ func (a *realActions) SwitchLiveTo(ctx context.Context, role Role) error {
 		Outbound:     *profile,
 		XHTTPMode:    a.cfg.XHTTPMode,
 		WG:           wgInboundOpts(a.cfg),
+		Transparent:  transparentInboundOpts(a.cfg),
 		SidecarSOCKS: sidecarPort,
 	})
 	if err != nil {
@@ -370,6 +371,16 @@ func wgInboundOpts(cfg *config.Config) *config.WGInboundOptions {
 		PeerPSK:        w.PSK,
 		PeerAllowedIPs: []string{"0.0.0.0/0"},
 	}
+}
+
+// transparentInboundOpts returns the dokodemo-door inbound opts when
+// Susanin Phase 2 adaptive routing (cfg.AdaptiveRoute) is on, nil
+// otherwise. Never set for the isolated pretest instance, same as WG.
+func transparentInboundOpts(cfg *config.Config) *config.TransparentOptions {
+	if !cfg.AdaptiveRoute.Enabled {
+		return nil
+	}
+	return &config.TransparentOptions{Port: cfg.AdaptiveRoute.EffectivePort()}
 }
 
 // Daemon drives a Machine on a real ticker, using real xray-core processes

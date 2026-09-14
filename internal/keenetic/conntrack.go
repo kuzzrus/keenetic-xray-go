@@ -74,6 +74,24 @@ func FlushConntrackForGroups(ctx context.Context, groups []string) (string, erro
 	return "точечно (" + strconv.Itoa(len(seen)) + " IP)", nil
 }
 
+// DeleteConntrackFlow deletes one specific conntrack entry by its
+// original-direction 5-tuple (`conntrack -D -p <proto> -s <src> -d <dst>
+// --sport <sport> --dport <dport>`) -- used by the adaptive-routing
+// classifier (internal/classifier) to force a fresh connection attempt
+// through a just-changed routing decision without disturbing any other
+// flow to/from the same address, unlike FlushConntrackForGroups' whole-IP
+// `-D -d <ip>`. Best-effort, same as FlushConntrackForGroups' per-IP
+// deletes: a no-op when conntrack isn't installed, and "no such entry"
+// (the flow already closed on its own between the classifier's scan and
+// this call) is not an error either.
+func DeleteConntrackFlow(ctx context.Context, proto, src, dst string, sport, dport uint) {
+	if !conntrackPresent() {
+		return
+	}
+	_ = conntrackRun(ctx, "-D", "-p", proto, "-s", src, "-d", dst,
+		"--sport", strconv.FormatUint(uint64(sport), 10), "--dport", strconv.FormatUint(uint64(dport), 10))
+}
+
 // objectGroupIPs parses `show object-group fqdn <name>` for the IPv4
 // addresses Keenetic currently has resolved for that group. Format-
 // tolerant: any bare dotted-quad on a line that isn't an `excluded-*` or

@@ -214,6 +214,8 @@ func cmdDaemon(args []string) error {
 	applyWGTransportAtStartup(cfg, logf)
 	applyMSSClamp(cfg, logf)
 	applyDNSAtStartup(cfg, logf)
+	applyAdaptiveRouteAtStartup(cfg, logf)
+	go adaptiveRouteClassifyLoop(ctx, logf)
 	// Only built when the agent can actually deliver it -- presetRefreshLoop
 	// runs regardless (it also keeps the local overlay fresh for CLI-only
 	// use), so a nil channel here just means it skips the notify step.

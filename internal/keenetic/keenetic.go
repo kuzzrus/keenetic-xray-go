@@ -134,6 +134,32 @@ func LANIP(ctx context.Context, override string) (string, error) {
 	return "", fmt.Errorf("could not detect a LAN IPv4 on %s", strings.Join(lanInterfaces, "/"))
 }
 
+// LANInterfaceOSName returns the real kernel device name (e.g. "br0")
+// backing the LAN bridge, trying the same candidate NDM names LANIP
+// does. Goes through InterfaceOSName's by-address kernel lookup rather
+// than trusting the NDM name as-is -- the same lesson InterfaceOSName
+// itself exists for (see its doc comment): confirmed on real hardware
+// that a Keenetic interface's own `interface-name:` field is not
+// reliably the kernel device name, so it's never safe to assume "br0"
+// the NDM candidate string is also "br0" the kernel device iptables'
+// `-i` needs, even though that happens to be literally true on some
+// firmware/models.
+func LANInterfaceOSName(ctx context.Context) (string, error) {
+	if !Available() {
+		return "", fmt.Errorf("ndmc not found (not a Keenetic router?)")
+	}
+	var lastErr error
+	for _, iface := range lanInterfaces {
+		if name, err := InterfaceOSName(ctx, iface); err == nil {
+			return name, nil
+		} else {
+			lastErr = err
+		}
+	}
+	return "", fmt.Errorf("could not resolve a kernel device for any of %s: %w",
+		strings.Join(lanInterfaces, "/"), lastErr)
+}
+
 func lanIPFromRunningConfig(ctx context.Context, iface string) string {
 	out, err := ndmcRun(ctx, "show running-config")
 	if err != nil {

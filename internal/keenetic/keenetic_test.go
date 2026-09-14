@@ -81,6 +81,39 @@ func TestLANIP_FromRunningConfig_IgnoresWANLikeAddresses(t *testing.T) {
 	}
 }
 
+func TestLANInterfaceOSName_FindsFirstMatch(t *testing.T) {
+	fakeNdmc(t, map[string]string{
+		"show interface Bridge0": "               id: Bridge0\n          address: 192.168.1.1\n",
+	})
+	fakeIPAddr(t, "1: lo    inet 127.0.0.1/8 scope host lo\\       valid_lft forever preferred_lft forever\n"+
+		"2: br0    inet 192.168.1.1/24 scope global br0\\       valid_lft forever preferred_lft forever\n")
+	got, err := LANInterfaceOSName(context.Background())
+	if err != nil || got != "br0" {
+		t.Fatalf("LANInterfaceOSName = (%q, %v), want br0", got, err)
+	}
+}
+
+func TestLANInterfaceOSName_TriesNextCandidateOnFailure(t *testing.T) {
+	// Bridge0 doesn't exist on this router (no address field at all);
+	// the next candidate, Home, does.
+	fakeNdmc(t, map[string]string{
+		"show interface Home": "               id: Home\n          address: 192.168.1.1\n",
+	})
+	fakeIPAddr(t, "2: br0    inet 192.168.1.1/24 scope global br0\\       valid_lft forever preferred_lft forever\n")
+	got, err := LANInterfaceOSName(context.Background())
+	if err != nil || got != "br0" {
+		t.Fatalf("LANInterfaceOSName = (%q, %v), want br0 via the Home fallback", got, err)
+	}
+}
+
+func TestLANInterfaceOSName_AllCandidatesFail(t *testing.T) {
+	fakeNdmc(t, nil)
+	fakeIPAddr(t, "1: lo    inet 127.0.0.1/8 scope host lo\\       valid_lft forever preferred_lft forever\n")
+	if _, err := LANInterfaceOSName(context.Background()); err == nil {
+		t.Error("expected an error when none of Bridge0/Home/br0 resolve")
+	}
+}
+
 func TestConfigureProxy0_SendsSequenceAndVerifies(t *testing.T) {
 	// running-config reports the upstream we're about to set, so the
 	// read-back check passes.

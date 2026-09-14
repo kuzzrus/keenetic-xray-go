@@ -89,3 +89,34 @@ func TestFlushConntrack(t *testing.T) {
 		t.Errorf("ran %v, want a single [-F]", ran)
 	}
 }
+
+func TestDeleteConntrackFlow(t *testing.T) {
+	origRun, origPresent := conntrackRun, conntrackPresent
+	t.Cleanup(func() { conntrackRun, conntrackPresent = origRun, origPresent })
+	conntrackPresent = func() bool { return true }
+	var ran []string
+	conntrackRun = func(_ context.Context, args ...string) error {
+		ran = args
+		return nil
+	}
+
+	DeleteConntrackFlow(context.Background(), "tcp", "192.168.1.5", "1.2.3.4", 40000, 443)
+	want := []string{"-D", "-p", "tcp", "-s", "192.168.1.5", "-d", "1.2.3.4",
+		"--sport", "40000", "--dport", "443"}
+	if strings.Join(ran, " ") != strings.Join(want, " ") {
+		t.Errorf("ran = %v, want %v", ran, want)
+	}
+}
+
+func TestDeleteConntrackFlow_NotInstalledIsNoop(t *testing.T) {
+	origRun, origPresent := conntrackRun, conntrackPresent
+	t.Cleanup(func() { conntrackRun, conntrackPresent = origRun, origPresent })
+	conntrackPresent = func() bool { return false }
+	called := false
+	conntrackRun = func(_ context.Context, args ...string) error { called = true; return nil }
+
+	DeleteConntrackFlow(context.Background(), "tcp", "192.168.1.5", "1.2.3.4", 40000, 443)
+	if called {
+		t.Error("should not shell out when conntrack isn't installed")
+	}
+}

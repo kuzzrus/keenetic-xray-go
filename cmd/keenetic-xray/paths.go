@@ -57,6 +57,13 @@ func selfUpdateMarkerPath() string {
 	return envOr("KEENETIC_XRAY_SELFUPDATE_MARKER", logDir()+"/self-update.json")
 }
 
+// adaptiveRouteStatePath is where Susanin Phase 2's classifier persists
+// its test/ok/cooldown state (internal/classifier.SaveState/LoadState)
+// across restarts.
+func adaptiveRouteStatePath() string {
+	return envOr("KEENETIC_XRAY_ADAPTIVE_ROUTE_STATE", logDir()+"/adaptive-route-state.json")
+}
+
 const defaultOptPath = "/opt"
 
 func optPath() string {

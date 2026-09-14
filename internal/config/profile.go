@@ -417,6 +417,38 @@ func (r RCIConfig) BaseURL() string {
 	return r.URL
 }
 
+// AdaptiveRouteConfig is Susanin Phase 2: native per-IP adaptive routing
+// (internal/classifier's conntrack-based detector feeding an iptables
+// REDIRECT rule, internal/adaptiveroute) riding whatever vless/naive
+// profile is already the live egress -- no second daemon, no DNS-routing
+// conflict, unlike the Phase 1 `susanin` addon this replaces for anyone
+// who turns it on. See docs/HANDOFF-susanin.md.
+type AdaptiveRouteConfig struct {
+	Enabled bool `json:"enabled"`
+	Port    int  `json:"port,omitempty"` // xray dokodemo-door inbound port; 0 -> DefaultAdaptiveRoutePort
+
+	// LANSubnet overrides the auto-detected LAN client subnet (CIDR,
+	// e.g. "192.168.1.0/24"). "" -> derive a /24 around the router's own
+	// detected LAN IP (keenetic.LANIP) -- right for the overwhelming
+	// majority of Keenetic home-router setups, but a real assumption,
+	// not a guarantee; set this explicitly when it's wrong for a given
+	// router.
+	LANSubnet string `json:"lan_subnet,omitempty"`
+}
+
+// DefaultAdaptiveRoutePort is the xray dokodemo-door inbound's port.
+// Loopback-only (see config.TransparentOptions) so collision risk is low
+// regardless; picked simply to be distinctive and easy to recognize in a
+// `netstat`/`ss` listing.
+const DefaultAdaptiveRoutePort = 12080
+
+func (a AdaptiveRouteConfig) EffectivePort() int {
+	if a.Port > 0 {
+		return a.Port
+	}
+	return DefaultAdaptiveRoutePort
+}
+
 // Defaults for WGTransportConfig. The address is a deliberately obscure
 // RFC1918 /32 unlikely to collide with a hand-made tunnel; MTU 1280 is
 // the IPv6 minimum and matches KeeneticOS's own WG default.
@@ -557,6 +589,13 @@ type Config struct {
 	// running-config"`. A hedge for firmware that sandboxes Entware away
 	// from ndmc; writes and other reads still use ndmc. Off by default.
 	RCI RCIConfig `json:"rci,omitempty"`
+
+	// AdaptiveRoute is Susanin Phase 2 -- see AdaptiveRouteConfig's own
+	// doc comment. Off by default; mutually exclusive with the Phase 1
+	// `susanin` addon (internal/addons), not enforced here (that addon
+	// is opkg-managed, outside this package's reach) but documented at
+	// both surfaces.
+	AdaptiveRoute AdaptiveRouteConfig `json:"adaptive_route,omitempty"`
 
 	// XrayCoreTag pins which vendored Xray-core release this router
 	// tracks. Empty -> xraycore.DefaultTag (the stable pin). Set to an

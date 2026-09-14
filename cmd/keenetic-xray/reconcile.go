@@ -61,6 +61,7 @@ func reconcileOnce(ctx context.Context, logf func(string, ...any)) {
 	reconcileMSSClamp(ctx, cfg, logf)
 	reconcileDNS(ctx, cfg, logf)
 	reconcileSusanin(ctx, logf)
+	reconcileAdaptiveRoute(ctx, cfg, logf)
 }
 
 // reconcileSusanin gets susanin running again if the operator has it

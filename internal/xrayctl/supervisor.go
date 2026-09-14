@@ -34,7 +34,7 @@ type Supervisor struct {
 	ConfigPath string
 	Args       []string  // explicit argv (after BinaryPath); nil -> ["run", "-c", ConfigPath] (xray's own invocation)
 	Name       string    // for logging, e.g. "production" or "pretest"
-	Stderr     io.Writer // where the child's stderr goes; nil discards it
+	Stderr     io.Writer // where the child's stdout+stderr go; nil discards them. xray-core's default "log" handler (LogType_Console, used whenever the config's "log" section omits explicit access/error file paths -- ours does) writes both access and error/warning output to the child's stdout, not stderr, so this must capture stdout too or xray's own startup diagnostics vanish silently.
 	Env        []string  // extra env vars for the child; nil inherits the parent's environment
 
 	BackoffMin time.Duration // 0 -> DefaultBackoffMin
@@ -146,6 +146,7 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 		args = []string{"run", "-c", s.ConfigPath}
 	}
 	cmd := exec.CommandContext(ctx, s.BinaryPath, args...)
+	cmd.Stdout = s.stderrOrDiscard()
 	cmd.Stderr = s.stderrOrDiscard()
 	if s.Env != nil {
 		cmd.Env = append(append([]string{}, os.Environ()...), s.Env...)

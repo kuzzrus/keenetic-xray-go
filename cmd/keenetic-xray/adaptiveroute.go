@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/adaptiveroute"
@@ -174,11 +175,11 @@ func applyAdaptiveRouteAtStartup(cfg *config.Config, logf func(string, ...any)) 
 
 // adaptiveRouteClassifyLoop runs Susanin Phase 2's classifier
 // continuously while cfg.AdaptiveRoute.Enabled: scans conntrack, runs
-// FAST/SOFT/JUDGE (internal/classifier -- pure logic), and carries out
-// whatever Actions come back via internal/adaptiveroute (ipset) and
-// internal/keenetic (conntrack -D). Runs on its own ticker, independent
-// of routerReconcileLoop's 2-minute cadence -- this needs to run every
-// couple of seconds to mean anything.
+// FAST/SOFT/JUDGE plus block-promotion (internal/classifier -- pure
+// logic), and carries out whatever Actions come back via
+// internal/adaptiveroute (ipset) and internal/keenetic (conntrack -D).
+// Runs on its own ticker, independent of routerReconcileLoop's 2-minute
+// cadence -- this needs to run every couple of seconds to mean anything.
 //
 // LAN subnet/interface are resolved once, on the first tick after the
 // feature is (re-)found enabled, and kept for the rest of this process's
@@ -241,6 +242,7 @@ func adaptiveRouteClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 		actions = append(actions, classifier.ClrFast(clsCfg, state, flows, now)...)
 		actions = append(actions, classifier.ClrSoft(clsCfg, state, cache, flows, now)...)
 		actions = append(actions, classifier.ClrJudge(clsCfg, state, flows, now)...)
+		actions = append(actions, classifier.ClrBlockPromote(clsCfg, state, now)...)
 		state.Expire(now)
 
 		applyAdaptiveRouteActions(ctx, actions, logf)
@@ -262,7 +264,11 @@ func applyAdaptiveRouteActions(ctx context.Context, actions []classifier.Action,
 		switch a.Kind {
 		case classifier.ActionAddIP:
 			_ = adaptiveroute.AddIP(ctx, adaptiveRouteIPSet, a.IP, a.TTL)
-			logf("adaptive-route: redirecting %s", a.IP)
+			if strings.Contains(a.IP, "/") {
+				logf("adaptive-route: redirecting subnet %s (block-promoted)", a.IP)
+			} else {
+				logf("adaptive-route: redirecting %s", a.IP)
+			}
 		case classifier.ActionRemoveIP:
 			_ = adaptiveroute.RemoveIP(ctx, adaptiveRouteIPSet, a.IP)
 			logf("adaptive-route: no longer redirecting %s", a.IP)

@@ -82,11 +82,12 @@ func TestState_ExpireAcrossAllSets(t *testing.T) {
 	s.OK[1].add("b", now, time.Second)
 	s.Watch[0].add("c", now, time.Second)
 	s.Cooldown[1].add("d", now, time.Second)
+	s.Blocks[0].add("1.2.3.0/24", now, time.Second)
 
 	later := now.Add(2 * time.Second)
 	s.Expire(later)
 
-	for _, set := range []ttlSet{s.Test[0], s.OK[1], s.Watch[0], s.Cooldown[1]} {
+	for _, set := range []ttlSet{s.Test[0], s.OK[1], s.Watch[0], s.Cooldown[1], s.Blocks[0]} {
 		if len(set) != 0 {
 			t.Errorf("set = %v, want empty after Expire", set)
 		}

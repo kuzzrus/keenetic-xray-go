@@ -30,6 +30,20 @@ type Config struct {
 	CooldownOKTTL   time.Duration // after a previously-ok destination stops working: shorter cooldown
 	WatchTTL        time.Duration // ClrSoft's late-stall watch window
 	WatchRetryBelow time.Duration // confirm a late-stall once the watch window has this long or less left
+
+	// ClrBlockPromote: once at least BlockThreshold distinct addresses
+	// inside the same BlockCIDRBits-bit network are individually
+	// confirmed (state.OK, not just provisional state.Test) as needing
+	// the tunnel, redirect that whole network instead of waiting for
+	// every one of its other addresses to each earn its own promotion.
+	// Exists for large, fast-rotating CDNs (Instagram/Facebook, Netflix,
+	// ...) where a single page load fans out to dozens of addresses in
+	// the same /24 and per-IP reactive detection structurally can't keep
+	// up -- see docs/HANDOFF-susanin.md. BlockThreshold <= 0 disables
+	// this pass entirely.
+	BlockCIDRBits  int
+	BlockThreshold int
+	BlockTTL       time.Duration
 }
 
 // DefaultConfig mirrors config_set_defaults' thresholds (src/config.c)
@@ -45,6 +59,10 @@ func DefaultConfig() Config {
 		CooldownOKTTL:   30 * time.Second,
 		WatchTTL:        8 * time.Second,
 		WatchRetryBelow: 4 * time.Second,
+
+		BlockCIDRBits:  24,
+		BlockThreshold: 4,
+		BlockTTL:       30 * time.Minute,
 	}
 }
 

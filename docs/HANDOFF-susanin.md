@@ -420,3 +420,91 @@ assets. `susanin-agent` size essentially unchanged (827168 B mipsel,
 851088 B arm64) despite the classifier diff -- the UPX-packing conclusion
 above still holds. `PinnedVersion`/`packaging/susanin-core/version`
 bumped v0.3.6 -> v0.3.8 in the same PR.
+
+## 2026-09-14/15 -- Phase 2 first real-hardware round: three bugs, none of them where it looked like at first
+
+`transport adaptive on` (steps 1-5, shipped same day as the section
+above) looked completely dead on the user's router: `transparent-in`
+never appeared in any `/proc/net/tcp[6]`/`udp[6]` listener dump across
+several fresh restarts, and (at the time) `daemon.log` showed nothing
+from xray-core itself, not even its own startup banner -- suggesting a
+silent xray-core-side failure to bind the dokodemo-door inbound.
+
+**It wasn't that.** Chasing why *no* xray-core diagnostic output showed
+up anywhere surfaced the actual first bug: `xrayctl.Supervisor` (the
+thing that runs the supervised xray-core child) only ever wired
+`cmd.Stderr`, never `cmd.Stdout`. xray-core's default log handler
+(`LogType_Console`, confirmed against the real running version's source
+-- `v26.9.9`, notably *not* this project's stable pin `v26.3.27`, worth
+remembering next time a "read the source" investigation needs the right
+tag) writes both access logs and warning/error diagnostics to the
+child's **stdout**, not stderr, whenever the generated config's `"log"`
+section has no explicit `access`/`error` file paths -- which ours
+doesn't. Go connects an unset `cmd.Stdout` to `/dev/null` by default, so
+*any* startup complaint xray-core itself printed was silently discarded,
+completely independent of whatever the real dokodemo-door problem was.
+Fixed (`#166`): both streams now go to the same writer.
+
+With that blind spot gone, `daemon.log` started showing xray-core's own
+startup line -- but still nothing about a dokodemo-door failure. That's
+because there wasn't one: the second bug was in *this* project.
+`transport adaptive on`'s CLI message ("применено на лету, рестарт не
+нужен") SIGHUPs the running daemon, which calls `Daemon.ReloadConfig` --
+and `ReloadConfig` only re-ran `SwitchLiveTo` (the call that actually
+regenerates `xray-production.json` and restarts the supervised xray-core
+child) when *both* a primary and a backup profile were configured. A
+single-profile setup (no backup -- a normal, fully supported mode, see
+`Run`'s own "no backup -- supervising primary" branch) has no backup by
+design, so the "live reload" the CLI promised silently never touched
+the running xray-core process at all: `AdaptiveRoute.Enabled` flipped to
+`true` on disk, but the already-running child never saw it. A **full**
+daemon restart (`S99keenetic-xray restart`, not the SIGHUP path) worked
+immediately -- `Run()` calls `SwitchLiveTo` unconditionally on startup,
+regardless of backup. Fixed (`#167`): dropped the `Backup() != nil`
+requirement: `SwitchLiveTo` never needed it either (it already no-ops
+cleanly on a nil profile for whichever role is live). This bug wasn't
+specific to adaptive routing -- it silently affected *every* config
+field `GenerateXrayConfig` reads (MSS clamp, WG transport, ports, ...)
+for any single-profile user's "live" CLI changes.
+
+Confirmed on hardware once both fixes were live: `transparent-in`
+started accepting and proxying real connections (Facebook/Instagram,
+Telegram, Google/YouTube all observed in `daemon.log`) immediately after
+a full restart.
+
+**Third finding, not a bug in either project:** even working correctly,
+individual IPs the classifier catches from Instagram/Netflix-style
+traffic often don't visibly help -- by the time FAST/SOFT/JUDGE
+individually confirms one address, a retry has frequently already moved
+on to a sibling address nothing has flagged yet (these CDNs fan a single
+page/session out across dozens of rotating edge IPs). Same structural
+class as the YouTube/Speedtest finding above, just less obvious because
+the log genuinely does say "redirecting" -- the redirect worked, it just
+didn't cover the *next* request. `net.netfilter.nf_conntrack_tcp_loose`
+was checked and ruled out (already `1` on this router) as an alternative
+explanation before landing on this one.
+
+Addressed with a new, upstream-has-no-equivalent classifier pass,
+`ClrBlockPromote`: once >= `Config.BlockThreshold` (default 4) distinct
+addresses inside the same `Config.BlockCIDRBits`-bit network (default
+/24) are individually *confirmed* (state.OK only, never provisional
+state.Test -- promoting a whole subnet off unverified signals risks
+pulling unrelated same-subnet traffic through the tunnel) have needed
+the tunnel, the whole network is redirected at once instead of waiting
+for every remaining address in it to each earn its own promotion.
+Deliberately much simpler than per-IP state: no JUDGE-style verify/fail
+path, just a flat `Config.BlockTTL` (default 30m) re-justified from
+scratch on every pass. Required switching `internal/adaptiveroute`'s
+ipset from `hash:ip` to `hash:net` (accepts a bare IP as an implicit
+/32 *and* an arbitrary CIDR in the same set -- no second set, no
+dataplane change beyond the create call). Not yet verified on hardware.
+
+Also actioned in the same round, unrelated to the classifier: the
+existing curated `instagram`/`instagram-ip` presets (74 domains + 27
+Meta CIDR ranges, `routes preset add instagram --ip`) cover the
+Instagram case today without waiting on block-aggregation at all --
+proactive and already-curated beats reactive-and-just-improved for a
+known, cataloged service. Block-aggregation's actual value is the
+long tail nothing has cataloged, which is Susanin's whole reason to
+exist in the first place (see the "Susanin is for the unpredictable
+long tail" framing above).

@@ -334,25 +334,40 @@ func susaninApply(ctx context.Context, set map[string]string) error {
 	return nil
 }
 
-// EnsureSusaninRunning starts susanin's daemon if it's installed and
-// configured but not currently running, and reports whether it had to do
-// anything. No-op (false, nil) if susanin isn't installed, isn't
-// configured yet (no egress_interface), or is already running.
+// EnsureSusaninRunning gets susanin running if it's installed but isn't,
+// and reports whether it had to do anything. No-op (false, nil) if
+// susanin isn't installed or is already running.
 //
-// Used by cmd/keenetic-xray's periodic router-reconcile loop: susanin has
-// no boot-time persistence of its own (see Remove's comment on why
-// S94susanin never exists on a router this addon installed), so a reboot
-// otherwise leaves it stopped until the operator manually reopens the
-// addon screen. The data plane itself needs no separate re-assert here --
-// the daemon re-provisions it at its own startup and again every 15s
-// internally (engine.c's own backend_ready/backend_provision loop), so
-// starting the process is enough.
+// Two distinct gaps this closes, both because Install's own auto-configure
+// (resolveEgress, tried once at install time) is explicitly best-effort
+// and susanin has no boot-time persistence of its own:
+//   - never configured (egress_interface empty) -- e.g. WG-transport
+//     wasn't active yet when the operator hit "Установить", or ndmc/RCI
+//     was briefly unreachable that one time. Retries the same resolveEgress
+//     lookup Install() attempts; if WG-transport is (now) active this
+//     brings the whole data plane up via susaninApply, same as a manual
+//     `addon configure susanin egress=auto` would.
+//   - configured but stopped (e.g. after a reboot -- see Remove's comment
+//     on why S94susanin never exists on a router this addon installed).
+//     Just needs `susanin.sh start`; the data plane itself needs no
+//     separate re-assert here -- the daemon re-provisions it at its own
+//     startup and again every 15s internally (engine.c's own
+//     backend_ready/backend_provision loop).
+//
+// Used by cmd/keenetic-xray's periodic router-reconcile loop, so both
+// cases self-heal within reconcileInterval -- sooner if the trigger is an
+// ndm hook event, since WG-transport coming up later fires
+// ifstatechanged.d, exactly the event that unblocks the first case above.
 func EnsureSusaninRunning(ctx context.Context) (acted bool, err error) {
 	if _, err := susaninVersion(susaninBin); err != nil {
 		return false, nil
 	}
 	if susaninConfValue("egress_interface") == "" {
-		return false, nil
+		iface := resolveEgress(ctx)
+		if iface == "" {
+			return false, nil
+		}
+		return true, susaninApply(ctx, map[string]string{"egress_interface": iface})
 	}
 	if processMatches(ctx, "susanin-agent") {
 		return false, nil

@@ -2,6 +2,7 @@ package keenetic
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -118,5 +119,46 @@ func TestDeleteConntrackFlow_NotInstalledIsNoop(t *testing.T) {
 	DeleteConntrackFlow(context.Background(), "tcp", "192.168.1.5", "1.2.3.4", 40000, 443)
 	if called {
 		t.Error("should not shell out when conntrack isn't installed")
+	}
+}
+
+func TestEnsureConntrackTool_AlreadyPresentSkipsOpkg(t *testing.T) {
+	origPresent, origOpkg := conntrackPresent, opkgInstallConntrack
+	t.Cleanup(func() { conntrackPresent, opkgInstallConntrack = origPresent, origOpkg })
+	conntrackPresent = func() bool { return true }
+	called := false
+	opkgInstallConntrack = func(context.Context) error { called = true; return nil }
+
+	if err := EnsureConntrackTool(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Error("opkg install should not run when conntrack is already present")
+	}
+}
+
+func TestEnsureConntrackTool_InstallsWhenAbsent(t *testing.T) {
+	origPresent, origOpkg := conntrackPresent, opkgInstallConntrack
+	t.Cleanup(func() { conntrackPresent, opkgInstallConntrack = origPresent, origOpkg })
+	present := false
+	conntrackPresent = func() bool { return present }
+	opkgInstallConntrack = func(context.Context) error { present = true; return nil }
+
+	if err := EnsureConntrackTool(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !present {
+		t.Error("expected conntrack to be installed")
+	}
+}
+
+func TestEnsureConntrackTool_OpkgFailure(t *testing.T) {
+	origPresent, origOpkg := conntrackPresent, opkgInstallConntrack
+	t.Cleanup(func() { conntrackPresent, opkgInstallConntrack = origPresent, origOpkg })
+	conntrackPresent = func() bool { return false }
+	opkgInstallConntrack = func(context.Context) error { return fmt.Errorf("opkg: no feed") }
+
+	if err := EnsureConntrackTool(context.Background()); err == nil {
+		t.Fatal("want an error when opkg install fails")
 	}
 }

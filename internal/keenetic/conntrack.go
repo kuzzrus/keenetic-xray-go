@@ -2,6 +2,7 @@ package keenetic
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"os/exec"
 	"strconv"
@@ -16,20 +17,56 @@ import (
 // next packet (invisible for TCP; a blip for an active UDP stream), so
 // matched connections move into the tunnel right away.
 //
-// `conntrack` isn't on Keenetic by default and this project does not
-// pull it in: FlushConntrack is a no-op when the binary is absent, and
-// the caveat simply stands. `opkg install conntrack` enables it (Entware
-// names the package `conntrack`, not `conntrack-tools`).
+// `conntrack` isn't on Keenetic by default. FlushConntrack/
+// FlushConntrackForGroups (the `routes` use above) treat that as
+// acceptable best-effort degradation -- a no-op, no error, the caveat
+// simply stands -- since routes' own DNS-based matching still gets a
+// freshly-opened connection right either way. DeleteConntrackFlow's own
+// caller (adaptive routing's classify loop, internal/classifier) is
+// different: an already-established flow that just got promoted to
+// "route through the tunnel" has no other way to move over besides this
+// -- without it, that specific flow just sits there until the client's
+// own retry/timeout eventually opens a fresh one. So adaptive routing
+// calls EnsureConntrackTool explicitly (see cmd/keenetic-xray's
+// adaptiveRouteOn/applyAdaptiveRouteAtStartup), the same shape as
+// internal/adaptiveroute.EnsureIPSetTool for its own ipset dependency,
+// rather than silently accepting the gap the way routes does.
 
 var (
 	conntrackRun = func(ctx context.Context, args ...string) error {
 		return exec.CommandContext(ctx, "conntrack", args...).Run()
 	}
-	conntrackPresent = func() bool { return exec.Command("conntrack", "--version").Run() == nil }
+	conntrackPresent     = func() bool { return exec.Command("conntrack", "--version").Run() == nil }
+	opkgInstallConntrack = func(ctx context.Context) error {
+		// `opkg update` first, best-effort -- same reasoning as
+		// internal/addons' own opkgInstall helper and this project's
+		// other opkg-install call sites: a stale/empty local package
+		// index makes `opkg install <name>` fail as "not found" even
+		// when the package genuinely exists in the feed.
+		_ = exec.CommandContext(ctx, "opkg", "update").Run()
+		return exec.CommandContext(ctx, "opkg", "install", "conntrack").Run()
+	}
 )
 
 // ConntrackPresent reports whether the `conntrack` CLI is runnable.
 func ConntrackPresent() bool { return conntrackPresent() }
+
+// EnsureConntrackTool makes sure the `conntrack` CLI is runnable,
+// installing the Entware package if not. See the comment above for why
+// adaptive routing needs this guaranteed rather than accepting
+// FlushConntrack's silent-degradation default.
+func EnsureConntrackTool(ctx context.Context) error {
+	if conntrackPresent() {
+		return nil
+	}
+	if err := opkgInstallConntrack(ctx); err != nil {
+		return fmt.Errorf("installing conntrack via opkg: %w", err)
+	}
+	if !conntrackPresent() {
+		return fmt.Errorf("conntrack still not runnable after opkg install")
+	}
+	return nil
+}
 
 // FlushConntrack drops the whole conntrack table (`conntrack -F`).
 // Best-effort: a no-op, no error, when conntrack isn't installed.

@@ -86,6 +86,17 @@ type RouterHandler struct {
 	// (selfupdate.Marker) before re-running install.sh. Empty -> no
 	// rollback point is recorded (the update still runs).
 	SelfUpdateMarker string
+
+	// SelfUpdateEvents, if set, receives one Event when the detached
+	// install.sh run started by selfUpdate fails outright (before ever
+	// reaching a daemon restart). Logf already records the same failure
+	// to the daemon log either way -- this exists because a log line the
+	// operator has to remember to go check isn't the same as reaching
+	// the chat the way every other self-update outcome already does (see
+	// watchPostUpdate's own use of an Events channel for the
+	// post-restart confirmation/rollback case). nil -> the failure is
+	// still logged via Logf, just not pushed to chat.
+	SelfUpdateEvents chan<- Event
 }
 
 const defaultInstallURL = "https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/install.sh"
@@ -1086,8 +1097,15 @@ func (h *RouterHandler) selfUpdate() (string, error) {
 	// finishes: this whole command already sleeps 2s before it does
 	// anything) race on the same file, one's `rm -f` deleting it out from
 	// under the other's `sh`.
+	//
+	// --connect-timeout/--max-time on curl: without them a router WAN
+	// that stalls mid-connection (seen before on other fetches in this
+	// project) hangs this indefinitely -- c.Wait() in logSelfUpdateOutcome
+	// never returns, nothing ever gets logged or reported, which is
+	// exactly the "goes silent" symptom this bounds. install.sh's own
+	// fetch() of the actual .ipk is bounded the same way, separately.
 	const tmpScript = "/tmp/keenetic-xray-selfupdate.$$.sh"
-	cmd := "sleep 2; curl -fsSL " + url + " -o " + tmpScript +
+	cmd := "sleep 2; curl -fsSL --connect-timeout 10 --max-time 60 " + url + " -o " + tmpScript +
 		" && sh " + tmpScript + "; rc=$?; rm -f " + tmpScript + "; exit $rc"
 	c := exec.Command("sh", "-c", cmd)
 	var out bytes.Buffer
@@ -1120,6 +1138,16 @@ func (h *RouterHandler) logSelfUpdateOutcome(c *exec.Cmd, out *bytes.Buffer) {
 	}
 	if err != nil {
 		h.Logf("self-update: install.sh failed: %v\n%s", err, tail)
+		if h.SelfUpdateEvents != nil {
+			select {
+			case h.SelfUpdateEvents <- Event{
+				Kind: "self_update",
+				Text: fmt.Sprintf("⚠️ обновление агента не удалось: %v\nПодробности: keenetic-xray logs / 📜 Логи", err),
+				Time: time.Now(),
+			}:
+			default: // buffered chan already holds an unconsumed event -- don't block this goroutine over it
+			}
+		}
 		return
 	}
 	h.Logf("self-update: install.sh finished (daemon restart, if any, logs separately)\n%s", tail)

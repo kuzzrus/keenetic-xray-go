@@ -1,6 +1,8 @@
 package xrayctl
 
 import (
+	"bytes"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -25,6 +27,9 @@ func runTestHelperProcess() {
 		os.Exit(0)
 	case "exit1":
 		os.Exit(1)
+	case "stdout-then-sleep":
+		fmt.Println("hello from stdout")
+		time.Sleep(time.Hour) // blocks until killed by the supervisor
 	default:
 		os.Exit(2)
 	}
@@ -153,6 +158,32 @@ func TestSupervisor_RestartsOnCrash(t *testing.T) {
 			t.Fatalf("only saw %d restarts within timeout, want at least 3", seen)
 		}
 	}
+}
+
+// TestSupervisor_CapturesChildStdout guards against a real bug we shipped:
+// xray-core's default log handler (used whenever our generated config's
+// "log" section has no explicit access/error file paths) writes access AND
+// error/warning diagnostics to the child's stdout, not stderr. Supervisor
+// used to only wire cmd.Stderr, so Go silently sent the child's stdout to
+// /dev/null -- any startup warning or error xray-core printed (e.g. an
+// inbound failing to bind) was unconditionally lost, with nothing to grep
+// for in daemon.log. Stdout must land in the same writer as Stderr.
+func TestSupervisor_CapturesChildStdout(t *testing.T) {
+	var buf bytes.Buffer
+	sup := &Supervisor{
+		BinaryPath: os.Args[0],
+		ConfigPath: "unused",
+		Env:        helperEnv("stdout-then-sleep"),
+		Stderr:     &buf,
+	}
+	if err := sup.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer sup.Stop()
+
+	waitUntil(t, time.Second, func() bool {
+		return bytes.Contains(buf.Bytes(), []byte("hello from stdout"))
+	})
 }
 
 func TestSupervisor_Restart(t *testing.T) {

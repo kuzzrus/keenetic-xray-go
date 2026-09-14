@@ -26,6 +26,12 @@ var (
 	}
 	iptablesPresent     = func() bool { return exec.Command("iptables", "-V").Run() == nil }
 	opkgInstallIptables = func(ctx context.Context) error {
+		// `opkg update` first, best-effort: a router that's never run it
+		// (or hasn't in a while) can have a stale/empty local package
+		// index, which makes `opkg install <name>` fail as "not found"
+		// even though the package genuinely exists in the feed -- same
+		// reasoning as internal/addons' own opkgInstall helper.
+		_ = exec.CommandContext(ctx, "opkg", "update").Run()
 		return exec.CommandContext(ctx, "opkg", "install", "iptables").Run()
 	}
 )

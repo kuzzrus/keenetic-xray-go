@@ -41,11 +41,21 @@ type XrayConfigOptions struct {
 }
 
 // TransparentOptions describes the xray `dokodemo-door` inbound used for
-// REDIRECT-based transparent proxying. Always binds 127.0.0.1 only --
-// unlike the SOCKS/HTTP/WG inbounds above, nothing ever dials this port
-// directly; Keenetic's own REDIRECT rule in the nat table delivers
-// packets to it locally (see internal/adaptiveroute), so there's no
-// LAN-facing bind to configure.
+// REDIRECT-based transparent proxying. Always binds 0.0.0.0 -- confirmed
+// live (2026-09-14) that this must NOT be 127.0.0.1: iptables' REDIRECT
+// target rewrites the destination to the *primary address of the
+// incoming interface* for a non-locally-generated packet, only mapping
+// to 127.0.0.1 for packets the router itself originates (see
+// iptables-extensions(8)'s own REDIRECT description). Our REDIRECT rule
+// matches on `-i <lan-iface>` (internal/adaptiveroute), so every packet
+// it catches arrives on the LAN bridge and gets rewritten to *that
+// interface's own address* (e.g. the router's 192.168.1.1), never
+// loopback. Binding only 127.0.0.1 silently black-holed every redirected
+// connection -- the classifier still worked (ipset populated correctly),
+// but nothing ever reached xray. Same accepted exposure as Proxy0/WG's
+// own "must be reachable from the LAN" 0.0.0.0 bind: relies on
+// Keenetic's own firewall keeping the WAN out, not on this port being
+// otherwise unreachable.
 type TransparentOptions struct {
 	Port int // TCP+UDP listen port
 }
@@ -198,7 +208,7 @@ func transparentInbound(o TransparentOptions) (xrayInbound, error) {
 		return xrayInbound{}, fmt.Errorf("dokodemo-door inbound: bad port %d", o.Port)
 	}
 	return xrayInbound{
-		Listen:   "127.0.0.1",
+		Listen:   "0.0.0.0",
 		Port:     o.Port,
 		Protocol: "dokodemo-door",
 		Settings: map[string]any{

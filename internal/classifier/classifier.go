@@ -1,0 +1,325 @@
+package classifier
+
+import (
+	"strconv"
+	"time"
+)
+
+// ActionKind is what one Action asks an external caller to do.
+type ActionKind int
+
+const (
+	// ActionAddIP: add IP to the redirect ipset (internal/adaptiveroute),
+	// with the given TTL (0 = no per-entry expiry).
+	ActionAddIP ActionKind = iota
+	// ActionRemoveIP: remove IP from the redirect ipset.
+	ActionRemoveIP
+	// ActionDeleteConntrack: delete Flow's own conntrack entry (internal/
+	// keenetic) so a fresh connection attempt goes through the just-
+	// changed routing decision -- an already-established flow doesn't
+	// retroactively move when the ipset changes underneath it.
+	ActionDeleteConntrack
+)
+
+// Action is one external effect a classification pass wants applied.
+// The classifier itself is pure -- it only decides, mutating State in
+// memory; internal/adaptiveroute (ipset) and internal/keenetic
+// (conntrack -D) are what actually carry an Action out. Kept out of
+// this package on purpose so ClrFast/ClrSoft/ClrJudge are testable with
+// nothing but constructed Flows, no fake exec layer needed at all.
+type Action struct {
+	Kind ActionKind
+	IP   string        // ActionAddIP / ActionRemoveIP
+	TTL  time.Duration // ActionAddIP only
+	Flow Flow          // ActionDeleteConntrack only -- identifies exactly which conntrack entry to tear down
+}
+
+// promoteTest is upstream's promote_test (src/classifier.c): move dst
+// into the "test" tier (provisionally routed; ClrJudge decides later
+// whether it actually helped) and tear down the triggering flow's own
+// conntrack entry so a fresh connection goes through the now-redirected
+// path.
+func promoteTest(cfg *Config, state *State, f Flow, now time.Time) []Action {
+	i := protoIndex(f.L4Proto == 17)
+	state.Test[i].add(f.Dst, now, cfg.TestTTL)
+	state.Watch[i].remove(f.Dst)
+	return []Action{
+		{Kind: ActionAddIP, IP: f.Dst, TTL: cfg.TestTTL},
+		{Kind: ActionDeleteConntrack, Flow: f},
+	}
+}
+
+// ClrFast mirrors upstream's clr_fast (src/classifier.c): a completely
+// silent SYN retry, or a TCP close with next to no reply, is suspicious
+// enough on its own to try routing through the tunnel immediately -- no
+// second opinion needed the way ClrSoft's late-stall detection wants
+// one.
+func ClrFast(cfg *Config, state *State, flows []Flow, now time.Time) []Action {
+	var actions []Action
+	for _, f := range flows {
+		if f.L4Proto != 6 && f.L4Proto != 17 {
+			continue
+		}
+		if !fromLAN(cfg, f.Src) || isPrivateDst(f.Dst) {
+			continue
+		}
+		if !candidateOK(state, f.L4Proto == 17, f.Dst, now) {
+			continue
+		}
+
+		switch {
+		case f.L4Proto == 6 && f.TCPState == "SYN_SENT" &&
+			f.OP >= uint64(cfg.FastSynMinOp) && f.RP == 0:
+			actions = append(actions, promoteTest(cfg, state, f, now)...)
+		case f.L4Proto == 6 && f.TCPState == "CLOSE" &&
+			f.OP >= 1 && f.RP <= 2 && f.RB < 256:
+			actions = append(actions, promoteTest(cfg, state, f, now)...)
+		case f.L4Proto == 17 && f.DPort == 443 && f.OP >= 3 && f.RP == 0:
+			actions = append(actions, promoteTest(cfg, state, f, now)...)
+		}
+	}
+	return actions
+}
+
+// rateSample is one flow's most recently observed (OP,RP) pair.
+type rateSample struct{ op, rp uint64 }
+
+// RateCache is ClrSoft's own per-pass bookkeeping: has this flow's
+// original side sent more since the last SOFT pass, while its reply
+// side stayed exactly as silent? That combination is what flags a
+// "still active, but the reply just went quiet" late-stall candidate.
+// Mirrors upstream's rc_* cache (src/classifier.c) -- a map instead of
+// a fixed linear-scan array, otherwise the same begin/sample/end shape.
+// Owned by the caller and reused across calls (SOFT-pass-scoped
+// bookkeeping, not classification state, so it doesn't live on State).
+type RateCache struct {
+	samples map[string]rateSample
+	seen    map[string]bool
+}
+
+// NewRateCache returns an empty, ready-to-use RateCache.
+func NewRateCache() *RateCache {
+	return &RateCache{samples: map[string]rateSample{}, seen: map[string]bool{}}
+}
+
+func flowKey(f Flow) string {
+	return f.Proto + "|" + f.Src + "|" + strconv.FormatUint(uint64(f.SPort), 10) +
+		"|" + f.Dst + "|" + strconv.FormatUint(uint64(f.DPort), 10)
+}
+
+// beginPass resets seen-this-pass tracking -- call once before scanning.
+func (c *RateCache) beginPass() { c.seen = map[string]bool{} }
+
+// endPass drops every sample not touched in the pass just finished --
+// call once after scanning. A flow that vanished from conntrack (closed,
+// or timed out) stops being sampled, exactly like upstream's rc_end.
+func (c *RateCache) endPass() {
+	for key := range c.samples {
+		if !c.seen[key] {
+			delete(c.samples, key)
+		}
+	}
+}
+
+// delta reports whether f has a prior sample from an earlier pass
+// (hadPrev), and if so whether its orig side is active (more packets
+// than last time) and its reply side is silent (same packet count as
+// last time) -- then records f's current counters as the new sample.
+func (c *RateCache) delta(f Flow) (origActive, replSilent, hadPrev bool) {
+	key := flowKey(f)
+	c.seen[key] = true
+	prev, ok := c.samples[key]
+	c.samples[key] = rateSample{op: f.OP, rp: f.RP}
+	if !ok {
+		return false, false, false
+	}
+	return f.OP > prev.op, f.RP == prev.rp, true
+}
+
+// ClrSoft mirrors upstream's clr_soft (src/classifier.c). Two distinct
+// signals: an established TCP flow that sent real data and got
+// essentially nothing back is promoted immediately (TCP-STALL); one
+// that's still actively sending AND has gotten *some* reply, but whose
+// reply side suddenly goes quiet for roughly a full watch window, gets
+// the two-observation late-stall treatment (the DPI-throttle-after-
+// initial-response pattern -- see the classifier's package doc comment
+// and docs/HANDOFF-susanin.md for why this matters for YouTube/
+// Instagram specifically). UDP mirrors both cases for non-QUIC and QUIC
+// respectively.
+func ClrSoft(cfg *Config, state *State, cache *RateCache, flows []Flow, now time.Time) []Action {
+	var actions []Action
+	cache.beginPass()
+	for _, f := range flows {
+		if f.L4Proto != 6 && f.L4Proto != 17 {
+			continue
+		}
+		if !fromLAN(cfg, f.Src) || isPrivateDst(f.Dst) {
+			continue
+		}
+		udp := f.L4Proto == 17
+
+		switch {
+		case f.L4Proto == 6 && f.TCPState == "ESTABLISHED":
+			if f.OP >= 5 && f.OB >= 1000 && f.RP <= 2 && f.RB < 256 {
+				if candidateOK(state, udp, f.Dst, now) {
+					actions = append(actions, promoteTest(cfg, state, f, now)...)
+				}
+				continue
+			}
+			if f.OP >= 8 && f.RP > 0 {
+				if origActive, replSilent, hadPrev := cache.delta(f); hadPrev && origActive && replSilent {
+					actions = append(actions, watchOrConfirmLateStall(cfg, state, udp, f, now)...)
+				}
+			}
+		case f.L4Proto == 17:
+			if !f.HasReply {
+				if f.DPort != 443 && f.DPort != 53 && f.DPort != 67 && f.DPort != 68 &&
+					f.DPort != 123 && f.OP >= 12 && f.RP == 0 {
+					if candidateOK(state, udp, f.Dst, now) {
+						actions = append(actions, promoteTest(cfg, state, f, now)...)
+					}
+				}
+			} else if f.DPort == 443 && f.OP >= 8 {
+				if origActive, replSilent, hadPrev := cache.delta(f); hadPrev && origActive && replSilent {
+					actions = append(actions, watchOrConfirmLateStall(cfg, state, udp, f, now)...)
+				}
+			}
+		}
+	}
+	cache.endPass()
+	return actions
+}
+
+// watchOrConfirmLateStall is the watch-then-confirm block ClrSoft shares
+// between TCP and QUIC: first sighting of "active but reply gone quiet"
+// starts a short watch window; if it's *still* in that state close to
+// the window's end (seen again, roughly WatchTTL-WatchRetryBelow later,
+// since ClrSoft only runs every soft_interval), that's a confirmed
+// late-stall, not one noisy sample -- promote it.
+func watchOrConfirmLateStall(cfg *Config, state *State, udp bool, f Flow, now time.Time) []Action {
+	i := protoIndex(udp)
+	if !state.Watch[i].has(f.Dst, now) {
+		if candidateOK(state, udp, f.Dst, now) {
+			state.Watch[i].add(f.Dst, now, cfg.WatchTTL)
+		}
+		return nil
+	}
+	at := state.Watch[i].at(f.Dst, now)
+	if at.IsZero() || at.Sub(now) > cfg.WatchRetryBelow {
+		return nil
+	}
+	if !candidateOK(state, udp, f.Dst, now) {
+		return nil
+	}
+	state.Watch[i].remove(f.Dst)
+	return promoteTest(cfg, state, f, now)
+}
+
+// ClrJudge mirrors upstream's clr_judge (src/classifier.c): for a
+// destination currently in the test tier, decide whether routing it
+// through the tunnel actually fixed it (promote to ok) or didn't (drop
+// to cooldown); for one already in the ok tier, decide whether it's
+// still healthy or has stopped working (drop to a shorter cooldown) --
+// and opportunistically refresh a healthy ok entry's TTL before it
+// expires. See the package doc comment for why this checks State
+// directly instead of a conntrack mark the way upstream does.
+func ClrJudge(cfg *Config, state *State, flows []Flow, now time.Time) []Action {
+	var actions []Action
+	for _, f := range flows {
+		if f.L4Proto != 6 && f.L4Proto != 17 {
+			continue
+		}
+		if !fromLAN(cfg, f.Src) {
+			continue
+		}
+		udp := f.L4Proto == 17
+		i := protoIndex(udp)
+
+		switch {
+		case state.Test[i].has(f.Dst, now):
+			actions = append(actions, judgeTest(cfg, state, udp, f, now)...)
+		case state.OK[i].has(f.Dst, now):
+			actions = append(actions, judgeOK(cfg, state, udp, f, now)...)
+		}
+	}
+	return actions
+}
+
+func judgeTest(cfg *Config, state *State, udp bool, f Flow, now time.Time) []Action {
+	i := protoIndex(udp)
+	good, failed := false, false
+	if f.L4Proto == 6 {
+		if f.RP >= 2 || f.RB >= 128 {
+			good = true
+		}
+		if (f.TCPState == "SYN_SENT" && f.OP >= 3 && f.RP == 0) ||
+			(f.TCPState == "ESTABLISHED" && f.OP >= 10 && f.OB >= 3000 && f.RP <= 1 && f.RB < 128) {
+			failed = true
+		}
+	} else {
+		if f.RP >= 1 {
+			good = true
+		}
+		if (f.DPort == 443 && f.OP >= 10 && f.RP == 0) || (f.DPort != 443 && f.OP >= 20 && f.RP == 0) {
+			failed = true
+		}
+	}
+
+	switch {
+	case good:
+		state.OK[i].add(f.Dst, now, cfg.OKTTL)
+		state.Test[i].remove(f.Dst)
+		state.Watch[i].remove(f.Dst)
+		state.Cooldown[i].remove(f.Dst)
+		return []Action{{Kind: ActionAddIP, IP: f.Dst, TTL: cfg.OKTTL}}
+	case failed:
+		state.Test[i].remove(f.Dst)
+		state.Watch[i].remove(f.Dst)
+		state.Cooldown[i].add(f.Dst, now, cfg.CooldownTTL)
+		return []Action{
+			{Kind: ActionRemoveIP, IP: f.Dst},
+			{Kind: ActionDeleteConntrack, Flow: f},
+		}
+	}
+	return nil
+}
+
+func judgeOK(cfg *Config, state *State, udp bool, f Flow, now time.Time) []Action {
+	i := protoIndex(udp)
+	healthy, failed := false, false
+	if f.L4Proto == 6 {
+		if f.RP >= 2 || f.RB >= 128 {
+			healthy = true
+		}
+		if (f.TCPState == "SYN_SENT" && f.OP >= 4 && f.RP == 0) ||
+			(f.TCPState == "ESTABLISHED" && f.OP >= 15 && f.OB >= 5000 && f.RP <= 1 && f.RB < 128) {
+			failed = true
+		}
+	} else {
+		if f.RP >= 1 {
+			healthy = true
+		}
+		if f.DPort == 443 && f.OP >= 16 && f.RP == 0 {
+			failed = true
+		}
+	}
+
+	switch {
+	case failed && !healthy:
+		state.OK[i].remove(f.Dst)
+		state.Test[i].remove(f.Dst)
+		state.Watch[i].remove(f.Dst)
+		state.Cooldown[i].add(f.Dst, now, cfg.CooldownOKTTL)
+		return []Action{
+			{Kind: ActionRemoveIP, IP: f.Dst},
+			{Kind: ActionDeleteConntrack, Flow: f},
+		}
+	case healthy && !failed:
+		at := state.OK[i].at(f.Dst, now)
+		if !at.IsZero() && at.Sub(now) <= cfg.OKRefreshBelow {
+			state.OK[i].add(f.Dst, now, cfg.OKTTL)
+			return []Action{{Kind: ActionAddIP, IP: f.Dst, TTL: cfg.OKTTL}}
+		}
+	}
+	return nil
+}

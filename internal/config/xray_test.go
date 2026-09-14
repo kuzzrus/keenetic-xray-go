@@ -370,11 +370,15 @@ func TestGenerateXrayConfig_WGInbound(t *testing.T) {
 }
 
 func TestGenerateXrayConfig_TransparentInbound(t *testing.T) {
-	// ListenHost: "0.0.0.0" at the top level must NOT leak onto the
-	// transparent inbound -- unlike socks-in/http-in/wg-in, nothing ever
-	// dials this port directly (Keenetic's own REDIRECT rule delivers to
-	// it locally), so it always binds 127.0.0.1 regardless.
-	base := XrayConfigOptions{SOCKSPort: 1080, HTTPPort: 1081, ListenHost: "0.0.0.0", Outbound: validProfile()}
+	// ListenHost left at its "" (-> 127.0.0.1) default at the top level,
+	// deliberately: the transparent inbound must bind 0.0.0.0 on its own,
+	// not because it inherited that from the top-level setting -- a
+	// REDIRECT rule matching LAN-arriving traffic (internal/adaptiveroute)
+	// rewrites the destination to the *receiving interface's own address*
+	// (confirmed live -- see TransparentOptions' doc comment), never
+	// loopback, so xray must be reachable there regardless of what
+	// SOCKS/HTTP are bound to.
+	base := XrayConfigOptions{SOCKSPort: 1080, HTTPPort: 1081, Outbound: validProfile()}
 
 	data, err := GenerateXrayConfig(base)
 	if err != nil {
@@ -403,8 +407,8 @@ func TestGenerateXrayConfig_TransparentInbound(t *testing.T) {
 	if tin["protocol"] != "dokodemo-door" || tin["tag"] != "transparent-in" {
 		t.Fatalf("transparent inbound shell = %#v", tin)
 	}
-	if tin["listen"] != "127.0.0.1" {
-		t.Errorf("listen = %v, want 127.0.0.1 always, regardless of the top-level ListenHost", tin["listen"])
+	if tin["listen"] != "0.0.0.0" {
+		t.Errorf("listen = %v, want 0.0.0.0 always -- REDIRECT for LAN-arriving traffic never targets loopback", tin["listen"])
 	}
 	if tin["port"].(float64) != 12345 {
 		t.Errorf("port = %v, want 12345", tin["port"])

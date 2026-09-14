@@ -17,6 +17,7 @@
 package adaptiveroute
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os/exec"
@@ -28,16 +29,26 @@ import (
 // The points below are the only places this package touches the system
 // -- injectable, same convention as keenetic.iptablesRun/ndmcRun, so the
 // rule-shaping logic is testable without real iptables/ipset.
+//
+// iptablesRun/ipsetRun deliberately use CombinedOutput, not Run: a plain
+// Run leaves stdout+stderr connected to nothing, so a failure surfaces
+// as a bare "exit status 1" with the tool's own real complaint (e.g.
+// ipset's "Kernel error received: ..." when a set type's kernel module
+// isn't loaded) silently discarded -- confirmed live, this exact gap
+// hid the actual reason `ipset create ... hash:net ...` failed on one
+// router. runLogged folds that output into the returned error so it
+// reaches whoever's reporting the failure (CLI stdout, `keenetic-xray
+// logs`, ...) instead of vanishing.
 var (
 	iptablesRun = func(ctx context.Context, args ...string) error {
-		return exec.CommandContext(ctx, "iptables", args...).Run()
+		return runLogged(ctx, "iptables", args...)
 	}
 	iptablesListNAT = func(ctx context.Context) (string, error) {
 		out, err := exec.CommandContext(ctx, "iptables", "-t", "nat", "-S", "PREROUTING").Output()
 		return string(out), err
 	}
 	ipsetRun = func(ctx context.Context, args ...string) error {
-		return exec.CommandContext(ctx, "ipset", args...).Run()
+		return runLogged(ctx, "ipset", args...)
 	}
 	ipsetOutput = func(ctx context.Context, args ...string) (string, error) {
 		out, err := exec.CommandContext(ctx, "ipset", args...).Output()
@@ -54,6 +65,20 @@ var (
 		return exec.CommandContext(ctx, "opkg", "install", "ipset").Run()
 	}
 )
+
+// runLogged runs name with args and, on failure, folds the process's
+// combined stdout+stderr into the returned error -- see the var block
+// above for why a bare exec error isn't enough here.
+func runLogged(ctx context.Context, name string, args ...string) error {
+	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	if err != nil {
+		if msg := bytes.TrimSpace(out); len(msg) > 0 {
+			return fmt.Errorf("%w: %s", err, msg)
+		}
+		return err
+	}
+	return nil
+}
 
 // IPSetPresent reports whether `ipset` is runnable right now (no install
 // attempt).
@@ -85,10 +110,35 @@ func EnsureIPSetTool(ctx context.Context) error {
 // what lets the classifier's block-aggregation pass (ClrBlockPromote)
 // redirect a whole subnet once enough of its individual addresses are
 // confirmed, without a second set or a dataplane change of its own.
-// "-exist" makes a repeat create a no-op instead of an error. Membership
-// itself is managed by AddIP/RemoveIP (the classifier's job), not here.
+// "-exist" makes a repeat create a no-op instead of an error -- *when*
+// the existing set's own create parameters match exactly; ipset(8) is
+// explicit that a name collision with a *different* type is still a
+// real error even with "-exist". That's not hypothetical here: any
+// router that had adaptive routing on before this project switched the
+// set from hash:ip to hash:net already has one under this exact name,
+// so the plain create below fails deterministically on every such
+// upgrade until something clears it -- confirmed live. On that failure,
+// clear our own REDIRECT rule (an existing rule referencing the set is
+// exactly what stops "ipset destroy" from working -- "in use by a
+// kernel component") and destroy+recreate: membership is disposable,
+// freshly re-added by the classifier on its own TTLs, so losing it here
+// costs nothing. Whatever EnsureRedirect the caller runs right after
+// this re-adds the rule against the now-recreated set.
+//
+// Membership itself is managed by AddIP/RemoveIP (the classifier's
+// job), not here.
 func EnsureIPSet(ctx context.Context, name string) error {
-	return ipsetRun(ctx, "create", name, "hash:net", "timeout", "0", "-exist")
+	create := func() error {
+		return ipsetRun(ctx, "create", name, "hash:net", "timeout", "0", "-exist")
+	}
+	if err := create(); err != nil {
+		clearOurRedirectRules(ctx)
+		_ = ipsetRun(ctx, "destroy", name)
+		if err := create(); err != nil {
+			return fmt.Errorf("recreating %s as hash:net (a stale hash:ip set from an older version?): %w", name, err)
+		}
+	}
+	return nil
 }
 
 // AddIP adds ip -- a bare address or a CIDR block, hash:net accepts both

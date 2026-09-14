@@ -57,6 +57,84 @@ func TestEnsureIPSet(t *testing.T) {
 	}
 }
 
+// TestEnsureIPSet_RecoversFromStaleWrongTypeSet is the regression test
+// for a real bug found live during a v0.30.x -> v0.31.3 upgrade: a
+// router that already had a "keenetic_xray_adaptive" hash:ip set from
+// before this project switched to hash:net hit a deterministic "create"
+// failure on every subsequent EnsureIPSet call ("-exist" doesn't paper
+// over a type mismatch, only an identical redefinition) -- with no
+// automatic recovery, adaptive routing was permanently broken on that
+// router until someone ran `ipset destroy` by hand. EnsureIPSet must
+// clear any REDIRECT rule that still references the old set (ipset
+// can't destroy a set a kernel component holds a reference to) and
+// destroy+recreate it.
+func TestEnsureIPSet_RecoversFromStaleWrongTypeSet(t *testing.T) {
+	origIpset, origIptables, origList := ipsetRun, iptablesRun, iptablesListNAT
+	t.Cleanup(func() { ipsetRun, iptablesRun, iptablesListNAT = origIpset, origIptables, origList })
+
+	iptablesListNAT = func(context.Context) (string, error) {
+		return "-A PREROUTING -i br0 -p tcp -m set --match-set keenetic_xray_adaptive dst " +
+			"-m comment --comment " + redirectComment + " -j REDIRECT --to-ports 12080\n", nil
+	}
+	var iptablesCalls, ipsetCalls []string
+	iptablesRun = func(_ context.Context, args ...string) error {
+		iptablesCalls = append(iptablesCalls, strings.Join(args, " "))
+		return nil
+	}
+	firstCreateFailed := false
+	ipsetRun = func(_ context.Context, args ...string) error {
+		joined := strings.Join(args, " ")
+		ipsetCalls = append(ipsetCalls, joined)
+		if args[0] == "create" && !firstCreateFailed {
+			firstCreateFailed = true
+			return fmt.Errorf("Set cannot be created: set with the same name already exists")
+		}
+		return nil
+	}
+
+	if err := EnsureIPSet(context.Background(), "keenetic_xray_adaptive"); err != nil {
+		t.Fatalf("EnsureIPSet should recover from a stale wrong-type set, got: %v", err)
+	}
+
+	wantIpset := []string{
+		"create keenetic_xray_adaptive hash:net timeout 0 -exist", // fails: wrong-type collision
+		"destroy keenetic_xray_adaptive",
+		"create keenetic_xray_adaptive hash:net timeout 0 -exist", // succeeds
+	}
+	if len(ipsetCalls) != len(wantIpset) {
+		t.Fatalf("ipset calls = %v, want %v", ipsetCalls, wantIpset)
+	}
+	for i, w := range wantIpset {
+		if ipsetCalls[i] != w {
+			t.Errorf("ipset call %d = %q, want %q", i, ipsetCalls[i], w)
+		}
+	}
+	if len(iptablesCalls) != 1 || !strings.Contains(iptablesCalls[0], "-D") {
+		t.Errorf("iptables calls = %v, want the stale REDIRECT rule cleared before destroy", iptablesCalls)
+	}
+}
+
+func TestEnsureIPSet_GenuineFailureSurfacesAfterRetry(t *testing.T) {
+	origIpset, origList := ipsetRun, iptablesListNAT
+	t.Cleanup(func() { ipsetRun, iptablesListNAT = origIpset, origList })
+
+	iptablesListNAT = func(context.Context) (string, error) { return "", nil }
+	ipsetRun = func(_ context.Context, args ...string) error {
+		if args[0] == "create" {
+			return fmt.Errorf("Kernel error received: Unknown error -524")
+		}
+		return nil
+	}
+
+	err := EnsureIPSet(context.Background(), "keenetic_xray_adaptive")
+	if err == nil {
+		t.Fatal("want an error when create keeps failing even after the recovery attempt")
+	}
+	if !strings.Contains(err.Error(), "Unknown error -524") {
+		t.Errorf("error = %v, want the underlying ipset message preserved", err)
+	}
+}
+
 func TestAddRemoveFlushIP(t *testing.T) {
 	_, sent := fakeSystem(t, "", true, nil)
 	ctx := context.Background()

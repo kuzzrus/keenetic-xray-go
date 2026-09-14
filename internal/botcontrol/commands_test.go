@@ -1159,6 +1159,40 @@ func TestRouterHandler_SelfUpdate_LogsFailure(t *testing.T) {
 	}
 }
 
+func TestRouterHandler_SelfUpdate_FailureAlsoPushesEvent(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh on PATH to exercise the update spawn")
+	}
+	// Logf alone means the operator has to remember to go check the log;
+	// SelfUpdateEvents is what actually reaches the chat, the same way
+	// watchPostUpdate's post-restart confirmation/rollback already does.
+	// This is the fix for "жмёшь Обновить агент и тишина" when the
+	// failure happens before any restart is ever attempted (e.g. a
+	// stalled WAN connection, now bounded by a timeout rather than
+	// hanging forever -- see the curl flags in selfUpdate).
+	events := make(chan Event, 1)
+	h := &RouterHandler{
+		Config:           config.Default(),
+		InstallURL:       "http://127.0.0.1:1/definitely-not-listening",
+		Logf:             func(string, ...any) {},
+		SelfUpdateEvents: events,
+	}
+	if _, err := h.Handle(context.Background(), Command{Action: ActionSelfUpdate}); err != nil {
+		t.Fatalf("self_update: %v", err)
+	}
+	select {
+	case ev := <-events:
+		if ev.Kind != "self_update" {
+			t.Errorf("event Kind = %q, want self_update", ev.Kind)
+		}
+		if !strings.Contains(ev.Text, "не удалось") {
+			t.Errorf("event Text = %q, want it to say the update failed", ev.Text)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("SelfUpdateEvents never received an event for a failed run")
+	}
+}
+
 func TestRouterHandler_SwitchTo(t *testing.T) {
 	d := newTestDaemon(t)
 	h := &RouterHandler{Daemon: d, Config: config.Default()}

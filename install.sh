@@ -65,20 +65,31 @@ done
 # at all ("not an http or ftp url" for an https:// URL) while curl on
 # the same device handles it fine. Falls back to wget for routers where
 # it's the other way around.
+#
+# Bounded, deliberately: neither curl nor wget has a default timeout, so
+# a router WAN that accepts the connection but then stalls (seen on real
+# hardware on other fetches in this project -- ISP/DPI interference is
+# the leading suspect) used to hang this call forever. For a plain `curl
+# | sh` run that's just a stuck terminal; for the self_update bot action
+# (internal/botcontrol/commands.go) it was silent and indefinite --
+# nothing ever reaches the exit-code check that logs a failure, because
+# there never is one. 15s to open the connection, 180s total is generous
+# for the .ipk (a few MB) even on a slow mobile uplink, and turns a
+# permanent hang into a bounded, reported failure.
 fetch() {
     url="$1"
     out="${2:-}"
     if command -v curl >/dev/null 2>&1; then
         if [ -n "$out" ]; then
-            curl -fsSL "$url" -o "$out"
+            curl -fsSL --connect-timeout 15 --max-time 180 "$url" -o "$out"
         else
-            curl -fsSL "$url"
+            curl -fsSL --connect-timeout 15 --max-time 180 "$url"
         fi
     else
         if [ -n "$out" ]; then
-            wget -q "$url" -O "$out"
+            wget -q -T 180 "$url" -O "$out"
         else
-            wget -qO- "$url"
+            wget -qO- -T 180 "$url"
         fi
     fi
 }

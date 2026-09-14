@@ -233,12 +233,14 @@ func cmdDaemon(args []string) error {
 		}
 		postUpd := make(chan botcontrol.Event, 1)
 		go watchPostUpdate(ctx, d.State, selfUpdateMarkerPath(), postUpd, logf)
+		selfUpdateFail := make(chan botcontrol.Event, 1)
 		opts.Events = botcontrol.Merge(ctx,
 			botcontrol.WatchStuckPrimary(ctx, d.Snapshot,
 				cfg.Failover.PrimaryStuckWarnAfter(),
 				botcontrol.FailoverEvents(ctx, d.Events())),
 			postUpd,
 			presetDrift,
+			selfUpdateFail,
 		)
 		handler := &botcontrol.RouterHandler{
 			Daemon: d, Config: cfg, ConfigPath: configPath(),
@@ -251,6 +253,7 @@ func cmdDaemon(args []string) error {
 			Logf:             logf,
 			QualityStatePath: qualityStatePath(),
 			SelfUpdateMarker: selfUpdateMarkerPath(),
+			SelfUpdateEvents: selfUpdateFail,
 		}
 		opts.StatusFunc = func(ctx context.Context) string {
 			out, _ := handler.Handle(ctx, botcontrol.Command{Action: botcontrol.ActionStatus})

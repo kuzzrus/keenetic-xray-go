@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"sync"
 	"testing"
 	"time"
 )
@@ -160,6 +161,26 @@ func TestSupervisor_RestartsOnCrash(t *testing.T) {
 	}
 }
 
+// syncBuffer is a bytes.Buffer safe for the concurrent writes os/exec makes
+// when Stdout and Stderr are the same io.Writer: Cmd.Start copies each
+// stream on its own goroutine, and plain bytes.Buffer isn't safe for that.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) Contains(s string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return bytes.Contains(b.buf.Bytes(), []byte(s))
+}
+
 // TestSupervisor_CapturesChildStdout guards against a real bug we shipped:
 // xray-core's default log handler (used whenever our generated config's
 // "log" section has no explicit access/error file paths) writes access AND
@@ -169,12 +190,12 @@ func TestSupervisor_RestartsOnCrash(t *testing.T) {
 // inbound failing to bind) was unconditionally lost, with nothing to grep
 // for in daemon.log. Stdout must land in the same writer as Stderr.
 func TestSupervisor_CapturesChildStdout(t *testing.T) {
-	var buf bytes.Buffer
+	buf := &syncBuffer{}
 	sup := &Supervisor{
 		BinaryPath: os.Args[0],
 		ConfigPath: "unused",
 		Env:        helperEnv("stdout-then-sleep"),
-		Stderr:     &buf,
+		Stderr:     buf,
 	}
 	if err := sup.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -182,7 +203,7 @@ func TestSupervisor_CapturesChildStdout(t *testing.T) {
 	defer sup.Stop()
 
 	waitUntil(t, time.Second, func() bool {
-		return bytes.Contains(buf.Bytes(), []byte("hello from stdout"))
+		return buf.Contains("hello from stdout")
 	})
 }
 

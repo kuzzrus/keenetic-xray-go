@@ -63,13 +63,14 @@ func reconcileOnce(ctx context.Context, logf func(string, ...any)) {
 	reconcileSusanin(ctx, logf)
 }
 
-// reconcileSusanin restarts susanin's daemon if the operator has it
-// installed and configured but it isn't currently running -- unlike the
-// other reconcile steps this needs no cfg: susanin's own state lives
-// entirely in its own susanin.conf, addons deliberately have no
-// *config.Config access (see internal/addons/susanin.go), so
-// addons.EnsureSusaninRunning reads that state itself and no-ops when
-// susanin isn't installed or was never configured.
+// reconcileSusanin gets susanin running again if the operator has it
+// installed but it's currently either stopped or never got its first
+// egress configure (see addons.EnsureSusaninRunning) -- unlike the other
+// reconcile steps this needs no cfg: susanin's own state lives entirely in
+// its own susanin.conf, addons deliberately have no *config.Config access
+// (see internal/addons/susanin.go), so addons.EnsureSusaninRunning reads
+// that state itself and no-ops when susanin isn't installed or is already
+// up and running.
 func reconcileSusanin(ctx context.Context, logf func(string, ...any)) {
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -79,7 +80,7 @@ func reconcileSusanin(ctx context.Context, logf func(string, ...any)) {
 		return
 	}
 	if acted {
-		logf("susanin: daemon was stopped, restarted (no boot-time persistence yet)")
+		logf("susanin: was unconfigured or stopped, self-healed")
 	}
 }
 

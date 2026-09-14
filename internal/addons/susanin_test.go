@@ -304,19 +304,58 @@ func TestEnsureSusaninRunning_NotInstalled(t *testing.T) {
 	}
 }
 
-func TestEnsureSusaninRunning_NotConfigured(t *testing.T) {
+func TestEnsureSusaninRunning_NotConfigured_StaysNoOpWithoutWGTransport(t *testing.T) {
 	f := newFakeSys()
 	withFakeSys(t, f)
 	installed, calls := withFakeSusanincore(t)
+	withFakeWGTransport(t, "", "") // still no WG-transport to resolve against
 	*installed = true
 	f.files[susaninConf] = []byte("egress_interface=\n")
 
 	acted, err := EnsureSusaninRunning(context.Background())
 	if err != nil || acted {
-		t.Fatalf("EnsureSusaninRunning = (%v, %v), want (false, nil) when never configured", acted, err)
+		t.Fatalf("EnsureSusaninRunning = (%v, %v), want (false, nil) when unconfigured and unresolvable", acted, err)
 	}
 	if len(*calls) != 0 {
-		t.Errorf("should not shell out when never configured, calls = %v", *calls)
+		t.Errorf("should not shell out when nothing resolves, calls = %v", *calls)
+	}
+}
+
+func TestEnsureSusaninRunning_AutoConfiguresWhenWGTransportBecomesActive(t *testing.T) {
+	f := newFakeSys()
+	withFakeSys(t, f)
+	installed, calls := withFakeSusanincore(t)
+	// Simulates the gap the operator hit live: susanin was installed
+	// before WG-transport was turned on, so Install's own best-effort
+	// resolveEgress attempt found nothing and left it unconfigured. Once
+	// WG-transport comes up, the ifstatechanged ndm hook fires a
+	// reconcile -- this is that reconcile pass, arriving later with
+	// WG-transport now active.
+	withFakeWGTransport(t, "Wireguard4", "nwg0")
+	*installed = true
+	f.files[susaninConf] = []byte("egress_interface=\nlan_interfaces=\n")
+
+	acted, err := EnsureSusaninRunning(context.Background())
+	if err != nil {
+		t.Fatalf("EnsureSusaninRunning: %v", err)
+	}
+	if !acted {
+		t.Fatal("EnsureSusaninRunning should report acted=true when it had to auto-configure")
+	}
+	if got := susaninConfValue("egress_interface"); got != "nwg0" {
+		t.Errorf("egress_interface = %q, want the auto-resolved nwg0", got)
+	}
+	var sawInstall, sawRestart bool
+	for _, c := range *calls {
+		if strings.Contains(c, "susanin.sh install") {
+			sawInstall = true
+		}
+		if strings.Contains(c, "susanin.sh restart") {
+			sawRestart = true
+		}
+	}
+	if !sawInstall || !sawRestart {
+		t.Errorf("expected susanin.sh install and restart (full bring-up, not just start), calls = %v", *calls)
 	}
 }
 

@@ -22,6 +22,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // The points below are the only places this package touches the system
@@ -69,17 +70,32 @@ func EnsureIPSetTool(ctx context.Context) error {
 	return nil
 }
 
-// EnsureIPSet creates the named hash:ip set if it doesn't already exist.
-// "-exist" makes a repeat create a no-op instead of an error. Membership
-// itself is managed by AddIP/RemoveIP (the classifier's job), not here.
+// EnsureIPSet creates the named hash:ip set if it doesn't already exist,
+// with per-entry timeout support enabled (default 0 = an entry added
+// without its own timeout never expires; AddIP can still give any
+// individual entry a shorter one). "-exist" makes a repeat create a
+// no-op instead of an error. Membership itself is managed by
+// AddIP/RemoveIP (the classifier's job), not here.
 func EnsureIPSet(ctx context.Context, name string) error {
-	return ipsetRun(ctx, "create", name, "hash:ip", "-exist")
+	return ipsetRun(ctx, "create", name, "hash:ip", "timeout", "0", "-exist")
 }
 
-// AddIP adds ip to setName. "-exist" makes adding an already-present IP
-// a no-op instead of an error.
-func AddIP(ctx context.Context, setName, ip string) error {
-	return ipsetRun(ctx, "add", setName, ip, "-exist")
+// AddIP adds ip to setName. ttl > 0 gives that entry a kernel-level
+// expiry (ipset's own `timeout`, in whole seconds) so a crashed or
+// killed classifier doesn't leave a redirect stuck on forever -- the
+// classifier's own state (which this mirrors) is what decides *when*,
+// but the kernel is the backstop if the classifier process itself never
+// gets to run that decision again. ttl <= 0 adds with no per-entry
+// timeout (the set's own default, set by EnsureIPSet). "-exist" makes
+// adding an already-present IP a no-op instead of an error (this also
+// refreshes that entry's timeout to the new value, ipset's own
+// behavior).
+func AddIP(ctx context.Context, setName, ip string, ttl time.Duration) error {
+	args := []string{"add", setName, ip, "-exist"}
+	if ttl > 0 {
+		args = append(args, "timeout", strconv.Itoa(int(ttl/time.Second)))
+	}
+	return ipsetRun(ctx, args...)
 }
 
 // RemoveIP removes ip from setName. "-exist" makes removing an absent IP

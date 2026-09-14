@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeSystem stubs every injectable hook for one test. natDump is what
@@ -51,7 +52,7 @@ func TestEnsureIPSet(t *testing.T) {
 	if err := EnsureIPSet(context.Background(), "susanin_ok"); err != nil {
 		t.Fatal(err)
 	}
-	if len(*sent) != 1 || (*sent)[0] != "create susanin_ok hash:ip -exist" {
+	if len(*sent) != 1 || (*sent)[0] != "create susanin_ok hash:ip timeout 0 -exist" {
 		t.Errorf("calls = %v", *sent)
 	}
 }
@@ -59,7 +60,10 @@ func TestEnsureIPSet(t *testing.T) {
 func TestAddRemoveFlushIP(t *testing.T) {
 	_, sent := fakeSystem(t, "", true, nil)
 	ctx := context.Background()
-	if err := AddIP(ctx, "s", "1.2.3.4"); err != nil {
+	if err := AddIP(ctx, "s", "1.2.3.4", 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := AddIP(ctx, "s", "5.6.7.8", 90*time.Second); err != nil {
 		t.Fatal(err)
 	}
 	if err := RemoveIP(ctx, "s", "1.2.3.4"); err != nil {
@@ -68,7 +72,12 @@ func TestAddRemoveFlushIP(t *testing.T) {
 	if err := Flush(ctx, "s"); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"add s 1.2.3.4 -exist", "del s 1.2.3.4 -exist", "flush s"}
+	want := []string{
+		"add s 1.2.3.4 -exist",
+		"add s 5.6.7.8 -exist timeout 90",
+		"del s 1.2.3.4 -exist",
+		"flush s",
+	}
 	if len(*sent) != len(want) {
 		t.Fatalf("calls = %v, want %v", *sent, want)
 	}

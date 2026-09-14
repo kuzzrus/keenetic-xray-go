@@ -26,6 +26,14 @@ import (
 	"time"
 )
 
+// RedirectSetName is the one ipset this project's adaptive-routing
+// feature uses everywhere -- both cmd/keenetic-xray's CLI (`transport
+// adaptive`) and internal/botcontrol's bot screen need to agree on the
+// exact same set to create/query, so it lives here (rather than as a
+// private constant duplicated in each caller) as the single source of
+// truth.
+const RedirectSetName = "keenetic_xray_adaptive"
+
 // The points below are the only places this package touches the system
 // -- injectable, same convention as keenetic.iptablesRun/ndmcRun, so the
 // rule-shaping logic is testable without real iptables/ipset.

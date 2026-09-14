@@ -413,6 +413,48 @@ func TestRouterHandler_WGTransport_WithoutNdmc(t *testing.T) {
 	}
 }
 
+func TestRouterHandler_AdaptiveRoute_WithoutNdmc(t *testing.T) {
+	h := &RouterHandler{Config: config.Default(), ConfigPath: filepath.Join(t.TempDir(), "c.json")}
+
+	// show is informational and never fails, even when disabled.
+	out, err := h.Handle(context.Background(), Command{Action: ActionAdaptiveRouteShow})
+	if err != nil {
+		t.Fatalf("adrt_show: %v", err)
+	}
+	if !strings.Contains(out, "выкл") {
+		t.Errorf("adrt_show output = %q, want it to report disabled", out)
+	}
+
+	// on requires ndmc; off just flips the flag + saves.
+	if _, err := h.Handle(context.Background(), Command{Action: ActionAdaptiveRouteOn}); err == nil {
+		t.Error("adrt_on should error without ndmc")
+	}
+	if _, err := h.Handle(context.Background(), Command{Action: ActionAdaptiveRouteOff}); err != nil {
+		t.Fatalf("adrt_off: %v", err)
+	}
+	if saved, _ := config.Load(h.ConfigPath); saved.AdaptiveRoute.Enabled {
+		t.Error("adrt_off left AdaptiveRoute.Enabled true")
+	}
+}
+
+func TestRouterHandler_AdaptiveRouteOn_RefusesWhenSusaninConfigured(t *testing.T) {
+	orig := susaninConfiguredFn
+	t.Cleanup(func() { susaninConfiguredFn = orig })
+	susaninConfiguredFn = func(context.Context) bool { return true }
+
+	h := &RouterHandler{Config: config.Default(), ConfigPath: filepath.Join(t.TempDir(), "c.json")}
+	_, err := h.Handle(context.Background(), Command{Action: ActionAdaptiveRouteOn})
+	if err == nil {
+		t.Fatal("adrt_on should refuse when susanin is configured")
+	}
+	if !strings.Contains(err.Error(), "susanin") {
+		t.Errorf("error = %v, want it to mention susanin", err)
+	}
+	if h.Config.AdaptiveRoute.Enabled {
+		t.Error("adrt_on must not have enabled adaptive routing")
+	}
+}
+
 func TestRouterHandler_UpdateCore(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "c.json")

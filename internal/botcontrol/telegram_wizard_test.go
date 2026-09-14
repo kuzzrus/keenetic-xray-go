@@ -339,6 +339,25 @@ func TestTelegramBot_TransportScreen_ProtocolAndInterface(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+
+	// Back to "Порты и транспорт", then "🎯 Адаптивная маршрутизация" ->
+	// its sub-screen; "Включить" -> adrt_on.
+	fake.pushCallback(1, msgID, "ptm:r1")
+	fake.waitForEditContaining(t, 3*time.Second, "Порты и транспорт")
+	fake.pushCallback(1, msgID, "adrt:r1")
+	fake.waitForEditContaining(t, 3*time.Second, "Адаптивная маршрутизация")
+	fake.pushCallback(1, msgID, "act:adrt_on:r1")
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if cmd, _ := store.Dequeue("r1"); cmd != nil {
+			if cmd.Action != ActionAdaptiveRouteOn {
+				t.Errorf("dequeued = %q, want adrt_on", cmd.Action)
+			}
+			_ = store.RecordResult("r1", Result{CommandID: cmd.ID, Output: "адаптивная маршрутизация включена"})
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 func TestTelegramBot_CoreScreen(t *testing.T) {

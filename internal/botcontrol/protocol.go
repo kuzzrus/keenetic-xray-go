@@ -81,6 +81,13 @@ const (
 	ActionWGTransportShow = "wg_show" // no args
 	ActionWGTransportOn   = "wg_on"   // no args -- creates/reconciles the interface, generates keys
 	ActionWGTransportOff  = "wg_off"  // no args -- removes the interface
+	// Adaptive routing (Susanin Phase 2): a conntrack classifier feeding
+	// an iptables REDIRECT rule into xray's dokodemo-door inbound, riding
+	// whatever profile is already the live egress. See
+	// cmd/keenetic-xray/adaptiveroute.go and internal/adaptiveroute.
+	ActionAdaptiveRouteShow = "adrt_show" // no args
+	ActionAdaptiveRouteOn   = "adrt_on"   // no args -- checks/installs ipset+conntrack, refuses if susanin (Phase 1) is configured
+	ActionAdaptiveRouteOff  = "adrt_off"  // no args -- clears the REDIRECT rule
 	// Keenetic dns-proxy secure upstreams (DoT/DoH). See
 	// internal/keenetic.ApplyDNS + internal/dnsupstream.
 	ActionDNSShow   = "dns_show"   // no args -> config + live upstreams (human text)

@@ -16,13 +16,15 @@ import (
 )
 
 // adaptiveRouteIPSet is the one ipset internal/adaptiveroute's REDIRECT
-// rule matches against. Unlike upstream Susanin's four (test/ok x tcp/
-// udp), this project doesn't need the kernel to distinguish test-tier
-// from ok-tier membership -- both need the same REDIRECT treatment, and
-// internal/classifier's own State (test/ok/cooldown) is what actually
-// tracks which tier an address is in. See internal/classifier's package
-// doc comment.
-const adaptiveRouteIPSet = "keenetic_xray_adaptive"
+// rule matches against (internal/adaptiveroute.RedirectSetName -- shared
+// with internal/botcontrol's bot screen for the same feature, so both
+// point at the exact same set). Unlike upstream Susanin's four (test/ok
+// x tcp/udp), this project doesn't need the kernel to distinguish
+// test-tier from ok-tier membership -- both need the same REDIRECT
+// treatment, and internal/classifier's own State (test/ok/cooldown) is
+// what actually tracks which tier an address is in. See
+// internal/classifier's package doc comment.
+const adaptiveRouteIPSet = adaptiveroute.RedirectSetName
 
 // classifyInterval is how often adaptiveRouteClassifyLoop scans conntrack
 // and runs FAST/SOFT/JUDGE. Upstream uses three separate knobs (fast/

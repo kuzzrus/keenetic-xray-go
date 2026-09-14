@@ -143,6 +143,7 @@ func portsTransportScreenKB(id string) inlineKeyboard {
 		{{Text: "📶 MSS: Авто", CallbackData: "ptmss:" + id + ":auto"}, {Text: "1400", CallbackData: "ptmss:" + id + ":1400"}},
 		{{Text: "1280", CallbackData: "ptmss:" + id + ":1280"}, {Text: "MSS: Выкл", CallbackData: "ptmss:" + id + ":off"}},
 		{{Text: "🔌 WG-транспорт", CallbackData: "wgt:" + id}, {Text: "🧭 DNS", CallbackData: "dnsm:" + id}},
+		{{Text: "🎯 Адаптивная маршрутизация", CallbackData: "adrt:" + id}},
 		{{Text: "📊 Показать", CallbackData: "act:proxy0_show:" + id}, {Text: "⬅️ Назад", CallbackData: "router:" + id}},
 	}}
 }
@@ -164,6 +165,29 @@ func wgTransportScreenKB(id string) inlineKeyboard {
 	return inlineKeyboard{InlineKeyboard: [][]inlineButton{
 		{{Text: "✅ Включить", CallbackData: "act:wg_on:" + id}, {Text: "⛔ Выключить", CallbackData: "act:wg_off:" + id}},
 		{{Text: "📊 Показать", CallbackData: "act:wg_show:" + id}, {Text: "⬅️ Назад", CallbackData: "ptm:" + id}},
+	}}
+}
+
+func adaptiveRouteScreenText(id string) string {
+	return "🎯 Адаптивная маршрутизация " + id + "\n\n" +
+		"Свой классификатор следит за conntrack и сам ловит адреса, которые выглядят " +
+		"заблокированными (оборванный SYN, TCP/QUIC-затык без ответа) — без списка доменов. " +
+		"Пойманный адрес идёт через REDIRECT в локальный xray и едет тем же каналом " +
+		"(vless/naive), что уже активен по failover.\n\n" +
+		"⚠️ Тестовая фича, не до конца обкатана на разных сценариях — возможны шероховатости. " +
+		"Нельзя включать одновременно с аддоном susanin (🧩 Дополнения) — та же идея, " +
+		"конфликтующий дата-плейн; включение это теперь проверяет само.\n\n" +
+		"Памятка для SSH:\n" +
+		"`transport adaptive show|on|off` — статус/вкл/выкл\n" +
+		"`keenetic-xray logs 200 | grep adaptive-route` — лог классификатора\n" +
+		"`/opt/etc/init.d/S99keenetic-xray restart` — полный рестарт демона\n\n" +
+		"Состояние — 📊 Показать."
+}
+
+func adaptiveRouteScreenKB(id string) inlineKeyboard {
+	return inlineKeyboard{InlineKeyboard: [][]inlineButton{
+		{{Text: "✅ Включить", CallbackData: "act:adrt_on:" + id}, {Text: "⛔ Выключить", CallbackData: "act:adrt_off:" + id}},
+		{{Text: "📊 Показать", CallbackData: "act:adrt_show:" + id}, {Text: "⬅️ Назад", CallbackData: "ptm:" + id}},
 	}}
 }
 
@@ -244,6 +268,12 @@ func callbackAction(name string) string {
 		return ActionWGTransportOn
 	case "wg_off":
 		return ActionWGTransportOff
+	case "adrt_show":
+		return ActionAdaptiveRouteShow
+	case "adrt_on":
+		return ActionAdaptiveRouteOn
+	case "adrt_off":
+		return ActionAdaptiveRouteOff
 	case "wd_show":
 		return ActionWatchdogShow
 	case "wd_enable":
@@ -359,6 +389,13 @@ func (b *TelegramBot) handleCallback(ctx context.Context, cb tgCallbackQuery) {
 			return
 		}
 		b.editCB(ctx, cb, wgTransportScreenText(id), wgTransportScreenKB(id))
+	case strings.HasPrefix(data, "adrt:"):
+		id := strings.TrimPrefix(data, "adrt:")
+		if !b.Store.HasRouter(id) {
+			b.editCB(ctx, cb, "нет такого роутера: "+id, b.routersListKB())
+			return
+		}
+		b.editCB(ctx, cb, adaptiveRouteScreenText(id), adaptiveRouteScreenKB(id))
 	case strings.HasPrefix(data, "ptwiz:"):
 		b.startPortsWizard(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "ptwiz:"))
 	case strings.HasPrefix(data, "ptif:"):

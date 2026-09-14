@@ -186,6 +186,12 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 		return h.wgTransportOn(ctx)
 	case ActionWGTransportOff:
 		return h.wgTransportOff(ctx)
+	case ActionAdaptiveRouteShow:
+		return h.adaptiveRouteShow(ctx)
+	case ActionAdaptiveRouteOn:
+		return h.adaptiveRouteOn(ctx)
+	case ActionAdaptiveRouteOff:
+		return h.adaptiveRouteOff(ctx)
 	case ActionDaemonRestart:
 		return h.daemonRestart()
 	case ActionEnsureCore:

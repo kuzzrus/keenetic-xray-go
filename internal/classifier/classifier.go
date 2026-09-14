@@ -1,6 +1,7 @@
 package classifier
 
 import (
+	"net"
 	"strconv"
 	"time"
 )
@@ -322,4 +323,75 @@ func judgeOK(cfg *Config, state *State, udp bool, f Flow, now time.Time) []Actio
 		}
 	}
 	return nil
+}
+
+// ClrBlockPromote has no upstream equivalent. A large CDN (Facebook/
+// Instagram, Netflix, ...) serves one logical service from dozens of
+// addresses that rotate faster than per-flow FAST/SOFT/JUDGE can
+// individually confirm each of them -- confirmed live on hardware: by
+// the time one address earns its own OK promotion, a retry has often
+// already moved on to a sibling address nothing has flagged yet. This
+// pass looks only at state.OK (individually *confirmed*, not merely
+// provisional state.Test -- promoting a whole subnet off unverified
+// signals would risk pulling unrelated same-subnet traffic through the
+// tunnel for nothing) grouped by their containing cfg.BlockCIDRBits-bit
+// network, and once cfg.BlockThreshold distinct confirmed addresses
+// share one network, redirects that network wholesale instead of
+// waiting for every remaining address in it to each earn its own.
+//
+// A promoted block is deliberately much simpler than a single address:
+// no JUDGE-style verify/fail path of its own, just a flat cfg.BlockTTL
+// that this same pass re-justifies from scratch on every call (still
+// >= threshold confirmed addresses inside it -> refreshed for another
+// BlockTTL; otherwise left alone to expire, both in state.Blocks and,
+// via the matching kernel-level ipset timeout, in the dataplane too --
+// see internal/adaptiveroute.AddIP). state.Blocks[i].has is what keeps
+// an already-current block from producing a new Action (and a new log
+// line) on every single tick.
+//
+// cfg.BlockThreshold <= 0 disables this pass outright -- the zero Config
+// would otherwise "promote" every OK address into its own /24 block
+// immediately, which is never what an unconfigured Config should do.
+func ClrBlockPromote(cfg *Config, state *State, now time.Time) []Action {
+	if cfg.BlockThreshold <= 0 || cfg.BlockCIDRBits <= 0 {
+		return nil
+	}
+	var actions []Action
+	for i := 0; i < 2; i++ {
+		counts := map[string]int{}
+		for addr, exp := range state.OK[i] {
+			if !exp.After(now) {
+				continue
+			}
+			if block, ok := containingBlock(addr, cfg.BlockCIDRBits); ok {
+				counts[block]++
+			}
+		}
+		for block, n := range counts {
+			if n < cfg.BlockThreshold || state.Blocks[i].has(block, now) {
+				continue
+			}
+			state.Blocks[i].add(block, now, cfg.BlockTTL)
+			actions = append(actions, Action{Kind: ActionAddIP, IP: block, TTL: cfg.BlockTTL})
+		}
+	}
+	return actions
+}
+
+// containingBlock returns addr's containing IPv4 network at bits prefix
+// length, in CIDR string form (e.g. "31.13.72.0/24"). ok is false for an
+// unparseable or non-IPv4 addr -- shouldn't happen, Flow.Dst always comes
+// from the kernel's own conntrack table, but this package treats that
+// the same way isPrivateDst does rather than risk a panic on it.
+func containingBlock(addr string, bits int) (block string, ok bool) {
+	ip := net.ParseIP(addr)
+	if ip == nil {
+		return "", false
+	}
+	v4 := ip.To4()
+	if v4 == nil {
+		return "", false
+	}
+	mask := net.CIDRMask(bits, 32)
+	return (&net.IPNet{IP: v4.Mask(mask), Mask: mask}).String(), true
 }

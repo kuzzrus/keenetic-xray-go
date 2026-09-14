@@ -15,6 +15,14 @@
 // question with a State lookup instead (see ClrJudge). Functionally
 // identical, and actually cheaper: a Go map lookup instead of a kernel
 // round-trip upstream only needed because C had no cheaper way to ask.
+//
+// A second, additive divergence with no upstream equivalent at all:
+// ClrBlockPromote. Upstream classifies one address at a time with no
+// notion of a containing network; this port adds a network-level pass on
+// top for large, fast-rotating CDNs (Instagram/Facebook, Netflix, ...)
+// where per-IP reactive detection structurally can't keep up with how
+// many addresses a single page load touches -- confirmed live on real
+// hardware. See ClrBlockPromote's own doc comment.
 package classifier
 
 import (

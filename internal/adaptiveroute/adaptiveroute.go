@@ -76,26 +76,31 @@ func EnsureIPSetTool(ctx context.Context) error {
 	return nil
 }
 
-// EnsureIPSet creates the named hash:ip set if it doesn't already exist,
+// EnsureIPSet creates the named hash:net set if it doesn't already exist,
 // with per-entry timeout support enabled (default 0 = an entry added
 // without its own timeout never expires; AddIP can still give any
-// individual entry a shorter one). "-exist" makes a repeat create a
-// no-op instead of an error. Membership itself is managed by
-// AddIP/RemoveIP (the classifier's job), not here.
+// individual entry a shorter one). hash:net (rather than hash:ip) is
+// deliberate: it accepts a bare IP exactly as hash:ip would (stored as an
+// implicit /32) *and* an arbitrary CIDR block in the same set, which is
+// what lets the classifier's block-aggregation pass (ClrBlockPromote)
+// redirect a whole subnet once enough of its individual addresses are
+// confirmed, without a second set or a dataplane change of its own.
+// "-exist" makes a repeat create a no-op instead of an error. Membership
+// itself is managed by AddIP/RemoveIP (the classifier's job), not here.
 func EnsureIPSet(ctx context.Context, name string) error {
-	return ipsetRun(ctx, "create", name, "hash:ip", "timeout", "0", "-exist")
+	return ipsetRun(ctx, "create", name, "hash:net", "timeout", "0", "-exist")
 }
 
-// AddIP adds ip to setName. ttl > 0 gives that entry a kernel-level
-// expiry (ipset's own `timeout`, in whole seconds) so a crashed or
-// killed classifier doesn't leave a redirect stuck on forever -- the
-// classifier's own state (which this mirrors) is what decides *when*,
-// but the kernel is the backstop if the classifier process itself never
-// gets to run that decision again. ttl <= 0 adds with no per-entry
-// timeout (the set's own default, set by EnsureIPSet). "-exist" makes
-// adding an already-present IP a no-op instead of an error (this also
-// refreshes that entry's timeout to the new value, ipset's own
-// behavior).
+// AddIP adds ip -- a bare address or a CIDR block, hash:net accepts both
+// -- to setName. ttl > 0 gives that entry a kernel-level expiry (ipset's
+// own `timeout`, in whole seconds) so a crashed or killed classifier
+// doesn't leave a redirect stuck on forever -- the classifier's own
+// state (which this mirrors) is what decides *when*, but the kernel is
+// the backstop if the classifier process itself never gets to run that
+// decision again. ttl <= 0 adds with no per-entry timeout (the set's own
+// default, set by EnsureIPSet). "-exist" makes adding an already-present
+// entry a no-op instead of an error (this also refreshes that entry's
+// timeout to the new value, ipset's own behavior).
 func AddIP(ctx context.Context, setName, ip string, ttl time.Duration) error {
 	args := []string{"add", setName, ip, "-exist"}
 	if ttl > 0 {

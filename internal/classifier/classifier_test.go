@@ -320,3 +320,114 @@ func TestClrJudge_IgnoresUntrackedDestination(t *testing.T) {
 		t.Errorf("actions = %+v, want none for a flow JUDGE isn't tracking", got)
 	}
 }
+
+// --- ClrBlockPromote ---
+
+func addOK(state *State, i int, now time.Time, ttl time.Duration, addrs ...string) {
+	for _, a := range addrs {
+		state.OK[i].add(a, now, ttl)
+	}
+}
+
+func TestClrBlockPromote_ThresholdMet(t *testing.T) {
+	cfg, state, now := testConfig(), NewState(), time.Now()
+	addOK(state, 0, now, cfg.OKTTL, "1.2.3.1", "1.2.3.2", "1.2.3.3", "1.2.3.4")
+
+	actions := ClrBlockPromote(cfg, state, now)
+	if len(actions) != 1 {
+		t.Fatalf("actions = %+v, want exactly one block promotion", actions)
+	}
+	a := actions[0]
+	if a.Kind != ActionAddIP || a.IP != "1.2.3.0/24" || a.TTL != cfg.BlockTTL {
+		t.Errorf("action = %+v, want AddIP 1.2.3.0/24 ttl=%v", a, cfg.BlockTTL)
+	}
+	if !state.Blocks[0].has("1.2.3.0/24", now) {
+		t.Error("promoted block should be recorded in state.Blocks")
+	}
+}
+
+func TestClrBlockPromote_ThresholdNotMet(t *testing.T) {
+	cfg, state, now := testConfig(), NewState(), time.Now()
+	addOK(state, 0, now, cfg.OKTTL, "1.2.3.1", "1.2.3.2", "1.2.3.3") // one short of the default threshold (4)
+
+	if got := ClrBlockPromote(cfg, state, now); len(got) != 0 {
+		t.Errorf("actions = %+v, want none below BlockThreshold", got)
+	}
+}
+
+func TestClrBlockPromote_AlreadyPromotedNotReEmitted(t *testing.T) {
+	cfg, state, now := testConfig(), NewState(), time.Now()
+	addOK(state, 0, now, cfg.OKTTL, "1.2.3.1", "1.2.3.2", "1.2.3.3", "1.2.3.4")
+	state.Blocks[0].add("1.2.3.0/24", now, cfg.BlockTTL) // already promoted this pass
+
+	if got := ClrBlockPromote(cfg, state, now); len(got) != 0 {
+		t.Errorf("actions = %+v, want none -- block already current, no repeat Action/log line", got)
+	}
+}
+
+func TestClrBlockPromote_ReJustifiedAfterExpiry(t *testing.T) {
+	cfg, state, now := testConfig(), NewState(), time.Now()
+	addOK(state, 0, now, cfg.OKTTL, "1.2.3.1", "1.2.3.2", "1.2.3.3", "1.2.3.4")
+	state.Blocks[0]["1.2.3.0/24"] = now.Add(-time.Second) // expired as of now (ttlSet.add(...,ttl<=0) means never-expires, not this)
+
+	actions := ClrBlockPromote(cfg, state, now)
+	if len(actions) != 1 || actions[0].IP != "1.2.3.0/24" {
+		t.Fatalf("actions = %+v, want the block re-promoted since its own entry has expired", actions)
+	}
+}
+
+func TestClrBlockPromote_TestTierAloneDoesNotCount(t *testing.T) {
+	cfg, state, now := testConfig(), NewState(), time.Now()
+	for _, a := range []string{"1.2.3.1", "1.2.3.2", "1.2.3.3", "1.2.3.4"} {
+		state.Test[0].add(a, now, cfg.TestTTL) // provisional only, never confirmed
+	}
+
+	if got := ClrBlockPromote(cfg, state, now); len(got) != 0 {
+		t.Errorf("actions = %+v, want none -- block promotion must only count confirmed (OK) addresses", got)
+	}
+}
+
+func TestClrBlockPromote_IgnoresExpiredOKEntries(t *testing.T) {
+	cfg, state, now := testConfig(), NewState(), time.Now()
+	addOK(state, 0, now, cfg.OKTTL, "1.2.3.1", "1.2.3.2", "1.2.3.3")
+	state.OK[0]["1.2.3.4"] = now.Add(-time.Second) // stale map entry, already expired (ttlSet.add(...,ttl<=0) means never-expires, not this)
+
+	if got := ClrBlockPromote(cfg, state, now); len(got) != 0 {
+		t.Errorf("actions = %+v, want none -- the 4th address is expired and shouldn't count", got)
+	}
+}
+
+func TestClrBlockPromote_DisabledWhenThresholdZero(t *testing.T) {
+	cfg, state, now := testConfig(), NewState(), time.Now()
+	cfg.BlockThreshold = 0
+	addOK(state, 0, now, cfg.OKTTL, "1.2.3.1", "1.2.3.2", "1.2.3.3", "1.2.3.4", "1.2.3.5")
+
+	if got := ClrBlockPromote(cfg, state, now); len(got) != 0 {
+		t.Errorf("actions = %+v, want none -- BlockThreshold<=0 disables the pass", got)
+	}
+}
+
+func TestClrBlockPromote_TCPAndUDPTrackedSeparately(t *testing.T) {
+	cfg, state, now := testConfig(), NewState(), time.Now()
+	addOK(state, 0, now, cfg.OKTTL, "1.2.3.1", "1.2.3.2") // tcp: 2
+	addOK(state, 1, now, cfg.OKTTL, "1.2.3.3", "1.2.3.4") // udp: 2 -- 4 total, but split, neither alone meets threshold=4
+
+	if got := ClrBlockPromote(cfg, state, now); len(got) != 0 {
+		t.Errorf("actions = %+v, want none -- tcp and udp OK entries don't combine toward one block's threshold", got)
+	}
+}
+
+func TestContainingBlock(t *testing.T) {
+	if b, ok := containingBlock("31.13.72.5", 24); !ok || b != "31.13.72.0/24" {
+		t.Errorf("containingBlock(...,24) = %q,%v, want 31.13.72.0/24,true", b, ok)
+	}
+	if b, ok := containingBlock("31.13.72.5", 16); !ok || b != "31.13.0.0/16" {
+		t.Errorf("containingBlock(...,16) = %q,%v, want 31.13.0.0/16,true", b, ok)
+	}
+	if _, ok := containingBlock("not-an-ip", 24); ok {
+		t.Error("containingBlock on garbage input should report ok=false")
+	}
+	if _, ok := containingBlock("2001:db8::1", 24); ok {
+		t.Error("containingBlock on an IPv6 address should report ok=false")
+	}
+}

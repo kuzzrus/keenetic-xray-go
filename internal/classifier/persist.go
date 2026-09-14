@@ -10,7 +10,12 @@ import (
 // over a restart -- Watch is short-lived, SOFT-pass-scoped bookkeeping
 // not worth persisting: a missed late-stall confirmation right after a
 // restart just means the next SOFT pass starts a fresh watch window,
-// costing at most one extra WatchTTL before catching it again.
+// costing at most one extra WatchTTL before catching it again. Blocks
+// isn't persisted either, for a similar reason: ClrBlockPromote derives
+// it fresh from whatever's currently in OK on every pass, so once OK is
+// restored a still-qualifying block gets re-promoted on the very first
+// post-restart pass -- a redundant (but harmless, ipset "-exist" is
+// idempotent) re-add, not a gap.
 type persistedState struct {
 	Test, OK, Cooldown [2]ttlSet
 }

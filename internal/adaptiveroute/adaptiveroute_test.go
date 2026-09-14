@@ -52,7 +52,7 @@ func TestEnsureIPSet(t *testing.T) {
 	if err := EnsureIPSet(context.Background(), "susanin_ok"); err != nil {
 		t.Fatal(err)
 	}
-	if len(*sent) != 1 || (*sent)[0] != "create susanin_ok hash:ip timeout 0 -exist" {
+	if len(*sent) != 1 || (*sent)[0] != "create susanin_ok hash:net timeout 0 -exist" {
 		t.Errorf("calls = %v", *sent)
 	}
 }
@@ -69,6 +69,11 @@ func TestAddRemoveFlushIP(t *testing.T) {
 	if err := RemoveIP(ctx, "s", "1.2.3.4"); err != nil {
 		t.Fatal(err)
 	}
+	// hash:net accepts a CIDR block exactly like a bare IP -- AddIP
+	// doesn't need to (and doesn't) treat the two differently.
+	if err := AddIP(ctx, "s", "9.9.9.0/24", 0); err != nil {
+		t.Fatal(err)
+	}
 	if err := Flush(ctx, "s"); err != nil {
 		t.Fatal(err)
 	}
@@ -76,6 +81,7 @@ func TestAddRemoveFlushIP(t *testing.T) {
 		"add s 1.2.3.4 -exist",
 		"add s 5.6.7.8 -exist timeout 90",
 		"del s 1.2.3.4 -exist",
+		"add s 9.9.9.0/24 -exist",
 		"flush s",
 	}
 	if len(*sent) != len(want) {
@@ -95,7 +101,7 @@ func TestMembers(t *testing.T) {
 		if strings.Join(args, " ") != "list susanin_ok -output save" {
 			t.Errorf("unexpected ipset args: %v", args)
 		}
-		return "create susanin_ok hash:ip family inet hashsize 1024 maxelem 65536\n" +
+		return "create susanin_ok hash:net family inet hashsize 1024 maxelem 65536\n" +
 			"add susanin_ok 1.2.3.4\n" +
 			"add susanin_ok 5.6.7.8\n", nil
 	}

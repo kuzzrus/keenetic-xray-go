@@ -14,7 +14,8 @@ func TestSaveLoadState_Roundtrip(t *testing.T) {
 	s.Test[0].add("1.1.1.1", now, time.Hour)
 	s.OK[1].add("2.2.2.2", now, time.Hour)
 	s.Cooldown[0].add("3.3.3.3", now, time.Hour)
-	s.Watch[0].add("4.4.4.4", now, time.Hour) // deliberately not persisted
+	s.Watch[0].add("4.4.4.4", now, time.Hour)     // deliberately not persisted
+	s.Blocks[0].add("5.6.7.0/24", now, time.Hour) // deliberately not persisted -- rederived from OK
 
 	if err := SaveState(path, s); err != nil {
 		t.Fatal(err)
@@ -34,6 +35,9 @@ func TestSaveLoadState_Roundtrip(t *testing.T) {
 	}
 	if loaded.Watch[0].has("4.4.4.4", now) {
 		t.Error("watch state should not be persisted")
+	}
+	if loaded.Blocks[0].has("5.6.7.0/24", now) {
+		t.Error("blocks state should not be persisted")
 	}
 }
 

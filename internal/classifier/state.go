@@ -56,8 +56,15 @@ func (s ttlSet) expire(now time.Time) {
 // susanin_state (src/state.h) one-for-one. Index 0 = tcp, 1 = udp, same
 // as upstream's st_test(st,udp)-style macros; use protoIndex to compute
 // it from a Flow.
+//
+// Blocks has no upstream equivalent: CIDR blocks (string form, e.g.
+// "31.13.72.0/24") that ClrBlockPromote has redirected wholesale, kept
+// separately from Test/OK/Watch/Cooldown (which are always single
+// addresses) purely so a block already promoted and not yet due for
+// re-justification isn't re-emitted as a new Action on every tick.
 type State struct {
 	Test, OK, Watch, Cooldown [2]ttlSet
+	Blocks                    [2]ttlSet
 }
 
 // NewState returns an empty, ready-to-use State.
@@ -68,6 +75,7 @@ func NewState() *State {
 		s.OK[i] = ttlSet{}
 		s.Watch[i] = ttlSet{}
 		s.Cooldown[i] = ttlSet{}
+		s.Blocks[i] = ttlSet{}
 	}
 	return s
 }
@@ -79,7 +87,7 @@ func protoIndex(udp bool) int {
 	return 0
 }
 
-// Expire prunes every expired entry across all 8 sets. Cheap to call
+// Expire prunes every expired entry across all 10 sets. Cheap to call
 // periodically (e.g. once per JUDGE pass, which already runs on a
 // short interval) -- reads are always correct without it, this is only
 // about bounding memory for state nothing has touched in a while.
@@ -89,5 +97,6 @@ func (s *State) Expire(now time.Time) {
 		s.OK[i].expire(now)
 		s.Watch[i].expire(now)
 		s.Cooldown[i].expire(now)
+		s.Blocks[i].expire(now)
 	}
 }

@@ -28,6 +28,26 @@ type XrayConfigOptions struct {
 	// instead of (or alongside) Proxy0/SOCKS. Never set for the isolated
 	// recovery-pretest instance.
 	WG *WGInboundOptions
+
+	// Transparent, when set, adds a `dokodemo-door` inbound for
+	// REDIRECT-based transparent proxying -- adaptive per-IP routing
+	// (Susanin Phase 2, see docs/HANDOFF-susanin.md) points an iptables
+	// REDIRECT rule at this port for destinations its own classifier has
+	// confirmed are blocked, so that traffic rides whatever vless/naive
+	// profile is currently the live outbound below, same as every other
+	// inbound here -- no separate egress, no second daemon. Never set
+	// for the isolated recovery-pretest instance.
+	Transparent *TransparentOptions
+}
+
+// TransparentOptions describes the xray `dokodemo-door` inbound used for
+// REDIRECT-based transparent proxying. Always binds 127.0.0.1 only --
+// unlike the SOCKS/HTTP/WG inbounds above, nothing ever dials this port
+// directly; Keenetic's own REDIRECT rule in the nat table delivers
+// packets to it locally (see internal/adaptiveroute), so there's no
+// LAN-facing bind to configure.
+type TransparentOptions struct {
+	Port int // TCP+UDP listen port
 }
 
 // WGInboundOptions describes the xray `wireguard` inbound for the
@@ -91,6 +111,13 @@ func GenerateXrayConfig(opts XrayConfigOptions) ([]byte, error) {
 			return nil, err
 		}
 		inbounds = append(inbounds, wgIn)
+	}
+	if opts.Transparent != nil {
+		tIn, err := transparentInbound(*opts.Transparent)
+		if err != nil {
+			return nil, err
+		}
+		inbounds = append(inbounds, tIn)
 	}
 
 	outbound, err := buildOutbound(opts.Outbound, opts.XHTTPMode, opts.SidecarSOCKS)
@@ -156,6 +183,29 @@ func wgInbound(o WGInboundOptions) (xrayInbound, error) {
 		Protocol: "wireguard",
 		Settings: settings,
 		Tag:      "wg-in",
+	}, nil
+}
+
+// transparentInbound renders the `dokodemo-door` inbound. followRedirect
+// makes xray recover the real destination via SO_ORIGINAL_DST (TCP) / the
+// packet's own original destination (UDP) instead of treating 127.0.0.1
+// itself as the target -- confirmed against infra/conf/dokodemo.go at
+// this project's pinned xray-core tag. No routing block is needed for
+// this inbound any more than for socks-in/http-in/wg-in above: it falls
+// through to the same single default "proxy" outbound.
+func transparentInbound(o TransparentOptions) (xrayInbound, error) {
+	if o.Port <= 0 || o.Port > 65535 {
+		return xrayInbound{}, fmt.Errorf("dokodemo-door inbound: bad port %d", o.Port)
+	}
+	return xrayInbound{
+		Listen:   "127.0.0.1",
+		Port:     o.Port,
+		Protocol: "dokodemo-door",
+		Settings: map[string]any{
+			"network":        "tcp,udp",
+			"followRedirect": true,
+		},
+		Tag: "transparent-in",
 	}, nil
 }
 

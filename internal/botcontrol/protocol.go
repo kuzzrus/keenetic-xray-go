@@ -90,6 +90,14 @@ const (
 	ActionAdaptiveRouteOff    = "adrt_off"   // no args -- clears the REDIRECT rule and the redirect ipset
 	ActionAdaptiveRouteFlush  = "adrt_flush" // no args -- clears the ipset + classifier's persisted state, restarts the daemon (see that method's own doc comment for why a bare ipset flush alone made things worse, not better)
 	ActionAdaptiveRouteSetTTL = "adrt_ttl"   // args[0] = whole hours (e.g. "12") -- applies live within one classify tick, no restart
+	// L7 SNI hostname detection, a companion to adaptive routing above --
+	// feeds the same redirect ipset from a direct NFLOG read of TLS SNI/
+	// HTTP Host instead of conntrack timing. See internal/l7capture and
+	// cmd/keenetic-xray/l7sni_linux.go. No live-apply path (checked once
+	// at the capture loop's own startup, never re-read) -- both of these
+	// restart the daemon directly rather than trying rebindXray first.
+	ActionL7SNIOn  = "l7sni_on"  // no args -- enables the config flag, restarts the daemon
+	ActionL7SNIOff = "l7sni_off" // no args -- disables the config flag, clears the NFLOG iptables rules, restarts the daemon
 	// Keenetic dns-proxy secure upstreams (DoT/DoH). See
 	// internal/keenetic.ApplyDNS + internal/dnsupstream.
 	ActionDNSShow   = "dns_show"   // no args -> config + live upstreams (human text)

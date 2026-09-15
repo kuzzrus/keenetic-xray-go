@@ -492,6 +492,48 @@ func TestRouterHandler_AdaptiveRouteOn_RefusesWhenSusaninConfigured(t *testing.T
 	}
 }
 
+func TestRouterHandler_L7SNI_WithoutNdmc(t *testing.T) {
+	h := &RouterHandler{Config: config.Default(), ConfigPath: filepath.Join(t.TempDir(), "c.json")}
+
+	// on requires ndmc, same as adrt_on.
+	if _, err := h.Handle(context.Background(), Command{Action: ActionL7SNIOn}); err == nil {
+		t.Error("l7sni_on should error without ndmc")
+	}
+	if h.Config.L7SNI.Enabled {
+		t.Error("l7sni_on must not have enabled L7SNI without ndmc")
+	}
+
+	// off doesn't require ndmc: it only skips the best-effort iptables
+	// clear, still flips the flag, saves, and (best-effort) restarts.
+	if _, err := h.Handle(context.Background(), Command{Action: ActionL7SNIOff}); err != nil {
+		t.Fatalf("l7sni_off: %v", err)
+	}
+	if saved, _ := config.Load(h.ConfigPath); saved.L7SNI.Enabled {
+		t.Error("l7sni_off left L7SNI.Enabled true")
+	}
+}
+
+func TestRouterHandler_AdaptiveRouteShow_IncludesL7SNIStatus(t *testing.T) {
+	h := &RouterHandler{Config: config.Default(), ConfigPath: filepath.Join(t.TempDir(), "c.json")}
+
+	out, err := h.Handle(context.Background(), Command{Action: ActionAdaptiveRouteShow})
+	if err != nil {
+		t.Fatalf("adrt_show: %v", err)
+	}
+	if !strings.Contains(out, "L7 SNI: выкл") {
+		t.Errorf("adrt_show output = %q, want it to mention L7 SNI disabled", out)
+	}
+
+	h.Config.L7SNI.Enabled = true
+	out, err = h.Handle(context.Background(), Command{Action: ActionAdaptiveRouteShow})
+	if err != nil {
+		t.Fatalf("adrt_show: %v", err)
+	}
+	if !strings.Contains(out, "L7 SNI: вкл") {
+		t.Errorf("adrt_show output = %q, want it to mention L7 SNI enabled", out)
+	}
+}
+
 func TestRouterHandler_UpdateCore(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "c.json")

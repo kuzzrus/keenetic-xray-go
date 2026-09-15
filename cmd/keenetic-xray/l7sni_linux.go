@@ -104,6 +104,16 @@ func l7SNIClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 		return
 	}
 
+	// Found live (2026-09-15): EnsureRules below fails outright with
+	// "iptables: No chain/target/match by that name" until the kernel
+	// modules NFLOG needs are actually loaded -- this project's opkg
+	// feed doesn't carry a separate installable package for either one,
+	// see EnsureNFLOGModule's own doc comment for the full story.
+	if err := l7capture.EnsureNFLOGModule(ctx); err != nil {
+		logf("l7sni: loading NFLOG kernel modules failed: %v", err)
+		return
+	}
+
 	wan, err := l7capture.ResolveWANInterface("")
 	if err != nil {
 		logf("l7sni: WAN interface detection failed: %v", err)

@@ -85,9 +85,10 @@ const (
 	// an iptables REDIRECT rule into xray's dokodemo-door inbound, riding
 	// whatever profile is already the live egress. See
 	// cmd/keenetic-xray/adaptiveroute.go and internal/adaptiveroute.
-	ActionAdaptiveRouteShow = "adrt_show" // no args
-	ActionAdaptiveRouteOn   = "adrt_on"   // no args -- checks/installs ipset+conntrack, refuses if susanin (Phase 1) is configured
-	ActionAdaptiveRouteOff  = "adrt_off"  // no args -- clears the REDIRECT rule
+	ActionAdaptiveRouteShow   = "adrt_show" // no args
+	ActionAdaptiveRouteOn     = "adrt_on"   // no args -- checks/installs ipset+conntrack, refuses if susanin (Phase 1) is configured
+	ActionAdaptiveRouteOff    = "adrt_off"  // no args -- clears the REDIRECT rule
+	ActionAdaptiveRouteSetTTL = "adrt_ttl"  // args[0] = whole hours (e.g. "12") -- applies live within one classify tick, no restart
 	// Keenetic dns-proxy secure upstreams (DoT/DoH). See
 	// internal/keenetic.ApplyDNS + internal/dnsupstream.
 	ActionDNSShow   = "dns_show"   // no args -> config + live upstreams (human text)

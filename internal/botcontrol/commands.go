@@ -192,6 +192,8 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 		return h.adaptiveRouteOn(ctx)
 	case ActionAdaptiveRouteOff:
 		return h.adaptiveRouteOff(ctx)
+	case ActionAdaptiveRouteSetTTL:
+		return h.adaptiveRouteSetTTL(cmd.Args)
 	case ActionDaemonRestart:
 		return h.daemonRestart()
 	case ActionEnsureCore:

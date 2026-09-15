@@ -437,6 +437,38 @@ func TestRouterHandler_AdaptiveRoute_WithoutNdmc(t *testing.T) {
 	}
 }
 
+func TestRouterHandler_AdaptiveRouteSetTTL(t *testing.T) {
+	h := &RouterHandler{Config: config.Default(), ConfigPath: filepath.Join(t.TempDir(), "c.json")}
+
+	out, err := h.Handle(context.Background(), Command{Action: ActionAdaptiveRouteSetTTL, Args: []string{"12"}})
+	if err != nil {
+		t.Fatalf("adrt_ttl: %v", err)
+	}
+	if !strings.Contains(out, "12") {
+		t.Errorf("out = %q, want it to mention the new TTL", out)
+	}
+	if h.Config.AdaptiveRoute.OKTTLHours != 12 {
+		t.Errorf("OKTTLHours = %d, want 12", h.Config.AdaptiveRoute.OKTTLHours)
+	}
+	saved, err := config.Load(h.ConfigPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if saved.AdaptiveRoute.OKTTLHours != 12 {
+		t.Errorf("saved OKTTLHours = %d, want 12", saved.AdaptiveRoute.OKTTLHours)
+	}
+}
+
+func TestRouterHandler_AdaptiveRouteSetTTL_RejectsGarbage(t *testing.T) {
+	h := &RouterHandler{Config: config.Default(), ConfigPath: filepath.Join(t.TempDir(), "c.json")}
+
+	for _, args := range [][]string{nil, {"0"}, {"-5"}, {"not-a-number"}} {
+		if _, err := h.Handle(context.Background(), Command{Action: ActionAdaptiveRouteSetTTL, Args: args}); err == nil {
+			t.Errorf("adrt_ttl with args=%v should have errored", args)
+		}
+	}
+}
+
 func TestRouterHandler_AdaptiveRouteOn_RefusesWhenSusaninConfigured(t *testing.T) {
 	orig := susaninConfiguredFn
 	t.Cleanup(func() { susaninConfiguredFn = orig })

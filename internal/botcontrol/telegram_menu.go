@@ -180,13 +180,17 @@ func adaptiveRouteScreenText(id string) string {
 		"Памятка для SSH:\n" +
 		"`transport adaptive show|on|off` — статус/вкл/выкл\n" +
 		"`keenetic-xray logs 200 | grep adaptive-route` — лог классификатора\n" +
+		"`tail -f /opt/var/log/keenetic-xray/daemon.log` — живой лог на лету, что куда редиректится прямо сейчас\n" +
 		"`/opt/etc/init.d/S99keenetic-xray restart` — полный рестарт демона\n\n" +
+		"TTL подтверждённых адресов (сколько держать адрес перенаправленным без переповторной проверки) — кнопки ниже.\n\n" +
 		"Состояние — 📊 Показать."
 }
 
 func adaptiveRouteScreenKB(id string) inlineKeyboard {
 	return inlineKeyboard{InlineKeyboard: [][]inlineButton{
 		{{Text: "✅ Включить", CallbackData: "act:adrt_on:" + id}, {Text: "⛔ Выключить", CallbackData: "act:adrt_off:" + id}},
+		{{Text: "TTL: 6ч", CallbackData: "adttl:" + id + ":6"}, {Text: "12ч", CallbackData: "adttl:" + id + ":12"},
+			{Text: "18ч", CallbackData: "adttl:" + id + ":18"}, {Text: "24ч", CallbackData: "adttl:" + id + ":24"}},
 		{{Text: "📊 Показать", CallbackData: "act:adrt_show:" + id}, {Text: "⬅️ Назад", CallbackData: "ptm:" + id}},
 	}}
 }
@@ -416,6 +420,14 @@ func (b *TelegramBot) handleCallback(ctx context.Context, cb tgCallbackQuery) {
 			return
 		}
 		b.enqueueCardArgs(ctx, cb, id, ActionSetMSS, []string{val})
+	case strings.HasPrefix(data, "adttl:"):
+		rest := strings.TrimPrefix(data, "adttl:")
+		id, hours, ok := strings.Cut(rest, ":")
+		if !ok {
+			b.editCB(ctx, cb, "плохая кнопка", mainMenuKB())
+			return
+		}
+		b.enqueueCardArgs(ctx, cb, id, ActionAdaptiveRouteSetTTL, []string{hours})
 	case strings.HasPrefix(data, "corem:"):
 		id := strings.TrimPrefix(data, "corem:")
 		if !b.Store.HasRouter(id) {

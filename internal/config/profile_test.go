@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func validProfile() Profile {
@@ -792,5 +793,23 @@ func TestRedacted(t *testing.T) {
 	b, _ := json.Marshal((&Config{}).Redacted())
 	if strings.Contains(string(b), "<redacted>") {
 		t.Error("empty config produced a <redacted> token")
+	}
+}
+
+func TestAdaptiveRouteConfig_EffectiveOKTTL(t *testing.T) {
+	cases := []struct {
+		hours int
+		want  time.Duration
+	}{
+		{0, DefaultOKTTLHours * time.Hour},
+		{-1, DefaultOKTTLHours * time.Hour},
+		{12, 12 * time.Hour},
+		{1, time.Hour},
+	}
+	for _, c := range cases {
+		a := AdaptiveRouteConfig{OKTTLHours: c.hours}
+		if got := a.EffectiveOKTTL(); got != c.want {
+			t.Errorf("EffectiveOKTTL with OKTTLHours=%d = %v, want %v", c.hours, got, c.want)
+		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/adaptiveroute"
@@ -78,7 +79,8 @@ func (h *RouterHandler) adaptiveRouteShow(ctx context.Context) (string, error) {
 		return "Адаптивная маршрутизация: выкл", nil
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "Адаптивная маршрутизация: вкл — xray :%d", a.EffectivePort())
+	fmt.Fprintf(&b, "Адаптивная маршрутизация: вкл — xray :%d, TTL подтверждённых адресов %s",
+		a.EffectivePort(), a.EffectiveOKTTL())
 
 	if !keenetic.Available() {
 		return b.String(), nil
@@ -190,4 +192,25 @@ func (h *RouterHandler) adaptiveRouteOff(ctx context.Context) (string, error) {
 		warn = "\n⚠️ живое применение не удалось (демон не ответил), но редирект уже снят — при желании нажмите ♻️ Рестарт демона, чтобы xray тоже обновил конфиг"
 	}
 	return "Адаптивная маршрутизация выключена" + warn, nil
+}
+
+// adaptiveRouteSetTTL sets how long a confirmed-good destination stays
+// redirected without a healthy re-check (AdaptiveRoute.OKTTLHours). No
+// rebindXray -- unlike Enabled/Port/LANSubnet, this never touches xray's
+// own config or the REDIRECT rule, only the classifier's own tuning, and
+// adaptiveRouteClassifyLoop already re-reads it from disk every tick
+// (see that loop's own comment), so the change is live within ~500ms.
+func (h *RouterHandler) adaptiveRouteSetTTL(args []string) (string, error) {
+	if len(args) == 0 {
+		return "", fmt.Errorf("usage: adrt_ttl <часы>")
+	}
+	hours, err := strconv.Atoi(args[0])
+	if err != nil || hours <= 0 {
+		return "", fmt.Errorf("часы должны быть положительным целым числом, получено %q", args[0])
+	}
+	h.Config.AdaptiveRoute.OKTTLHours = hours
+	if err := h.Config.Save(h.ConfigPath); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("TTL подтверждённых адресов: %dч", hours), nil
 }

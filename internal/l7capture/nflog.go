@@ -219,9 +219,16 @@ func (c *Capture) Read() (Packet, error) {
 	}
 }
 
-// Close unbinds the group and releases the socket. Best-effort on the
-// unbind -- a failure there shouldn't stop the fd from being released.
+// Close releases the socket. Does not attempt a graceful per-group
+// unbind first -- that would mean this fd's own sendAndAck racing an
+// in-flight Read on the very same fd from whatever goroutine is still
+// mid-capture-loop when Close is called to interrupt it (found live
+// 2026-09-16, see cmd/keenetic-xray/l7sni_linux.go's own doc comment on
+// the goroutine that does this), and it buys little anyway: Open's own
+// PF-level unbind/rebind dance is already explicitly designed to tolerate
+// "a previous, uncleanly-stopped instance [leaving] a stale PF binding"
+// -- see its own doc comment -- so a plain close leans on a path this
+// package already has to get right regardless.
 func (c *Capture) Close() error {
-	_ = c.sendAndAck(buildConfigCmd(c.nextSeq(), c.portID, c.group, syscall.AF_UNSPEC, nfulnlCfgCmdUnbind))
 	return syscall.Close(c.fd)
 }

@@ -168,6 +168,27 @@ func l7SNIClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 	}
 	defer capture.Close()
 
+	// capture.Read below is a raw blocking syscall with no context
+	// awareness at all -- ctx.Err() is only checked *between* reads, so
+	// on a quiet NFLOG group (nothing matching the capture rule right
+	// now) this loop can sit blocked in the kernel indefinitely, past
+	// the point the rest of the daemon has already been told to shut
+	// down. Found live (2026-09-16): this daemon's own SIGTERM handler
+	// only cancels ctx (cmd/keenetic-xray/main.go) -- Go doesn't wait for
+	// other goroutines when main returns, so this alone never blocked
+	// process exit, but it does mean capture.Close's own graceful NFLOG
+	// unbind (internal/l7capture's Open doc comment) never got a chance
+	// to run, leaving the *next* process to clean up an uncleanly-closed
+	// binding instead of a tidy one -- a real, if not fully measured,
+	// contributor to a self-update that took far longer than normal to
+	// come back online. Closing capture here the moment ctx is
+	// cancelled unblocks the read with an error, so the main loop below
+	// exits through its own ordinary error path instead.
+	go func() {
+		<-ctx.Done()
+		capture.Close()
+	}()
+
 	reasm := l7sni.NewReassembler(l7sniReassembleMaxAge, l7sniReassembleMaxSize)
 	expire := time.NewTicker(l7sniReassembleMaxAge)
 	defer expire.Stop()

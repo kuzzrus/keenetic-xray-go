@@ -251,15 +251,16 @@ func cmdDaemon(args []string) error {
 		handler := &botcontrol.RouterHandler{
 			Daemon: d, Config: cfg, ConfigPath: configPath(),
 			XrayBinary: xrayBinaryPath(), OptPath: optPath(),
-			InitScript:       initScript,
-			CronFile:         cronFilePath(),
-			WatchdogScript:   watchdogScriptPath(),
-			WatchdogLog:      watchdogLogPath(),
-			DaemonLog:        daemonLogPath(),
-			Logf:             logf,
-			QualityStatePath: qualityStatePath(),
-			SelfUpdateMarker: selfUpdateMarkerPath(),
-			SelfUpdateEvents: selfUpdateFail,
+			InitScript:             initScript,
+			CronFile:               cronFilePath(),
+			WatchdogScript:         watchdogScriptPath(),
+			WatchdogLog:            watchdogLogPath(),
+			DaemonLog:              daemonLogPath(),
+			Logf:                   logf,
+			QualityStatePath:       qualityStatePath(),
+			SelfUpdateMarker:       selfUpdateMarkerPath(),
+			SelfUpdateEvents:       selfUpdateFail,
+			AdaptiveRouteStatePath: adaptiveRouteStatePath(),
 		}
 		opts.StatusFunc = func(ctx context.Context) string {
 			out, _ := handler.Handle(ctx, botcontrol.Command{Action: botcontrol.ActionStatus})

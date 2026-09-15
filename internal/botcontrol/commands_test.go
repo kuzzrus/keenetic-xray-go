@@ -435,6 +435,11 @@ func TestRouterHandler_AdaptiveRoute_WithoutNdmc(t *testing.T) {
 	if saved, _ := config.Load(h.ConfigPath); saved.AdaptiveRoute.Enabled {
 		t.Error("adrt_off left AdaptiveRoute.Enabled true")
 	}
+
+	// flush also requires ndmc (it touches the same ipset on/off do).
+	if _, err := h.Handle(context.Background(), Command{Action: ActionAdaptiveRouteFlush}); err == nil {
+		t.Error("adrt_flush should error without ndmc")
+	}
 }
 
 func TestRouterHandler_AdaptiveRouteSetTTL(t *testing.T) {

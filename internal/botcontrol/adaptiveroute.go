@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 
@@ -180,21 +181,11 @@ func (h *RouterHandler) adaptiveRouteOn(ctx context.Context) (string, error) {
 // toggle silently undid nothing.
 //
 // Deliberately does NOT also clear the classifier's own persisted state
-// the way `transport adaptive flush` (cmd/keenetic-xray, SSH-only -- see
-// this screen's own cheat-sheet text) does: while AdaptiveRoute.Enabled
-// is false, adaptiveRouteClassifyLoop's ticker branch is a no-op, so a
-// stale in-memory belief just sits frozen and harmless until re-enabled
-// -- no redirecting happens either way while off. It only matters again
-// once switched back on, which is what the SSH-only flush command is
-// for. It also restarts the daemon (the only way to actually clear the
-// classifier's in-memory state -- see that command's own doc comment in
-// cmd/keenetic-xray/adaptiveroute.go) -- kept out of this bot handler
-// deliberately: a RouterHandler method runs inside the daemon process
-// itself, and a restart needs to kill and relaunch that exact process,
-// so triggering it from inside its own request handler is a
-// self-inflicted race (same reasoning offerDaemonRestart's own
-// detached-restart comment gives for the CLI side, in
-// cmd/keenetic-xray/daemonctl.go).
+// the way adaptiveRouteFlush does: while AdaptiveRoute.Enabled is false,
+// adaptiveRouteClassifyLoop's ticker branch is a no-op, so a stale
+// in-memory belief just sits frozen and harmless until re-enabled -- no
+// redirecting happens either way while off. It only matters again once
+// switched back on, which is what adaptiveRouteFlush is for.
 func (h *RouterHandler) adaptiveRouteOff(ctx context.Context) (string, error) {
 	var warn string
 	if keenetic.Available() {
@@ -218,6 +209,42 @@ func (h *RouterHandler) adaptiveRouteOff(ctx context.Context) (string, error) {
 		warn = "\n⚠️ живое применение не удалось (демон не ответил), но редирект уже снят — при желании нажмите ♻️ Рестарт демона, чтобы xray тоже обновил конфиг"
 	}
 	return "Адаптивная маршрутизация выключена" + warn, nil
+}
+
+// adaptiveRouteFlush mirrors cmd/keenetic-xray's own adaptiveRouteFlush
+// (SSH `transport adaptive flush`): clears the redirect ipset, deletes
+// the classifier's persisted state, and restarts the daemon -- all
+// three matter. A bare ipset flush alone left the *running* classifier's
+// in-memory state (loaded once, at daemon startup) still believing
+// every flushed address was confirmed, so it didn't hurry to re-add
+// anything -- confirmed live (2026-09-15) to leave previously-good
+// redirects silently unable to recover for as long as each entry's own
+// TTL allowed, which read as "nothing loads" even though fresh
+// individual addresses were visibly still being caught. Deleting the
+// state file without a restart doesn't help either: the daemon's own
+// periodic save (every 5 minutes) just writes the stale in-memory copy
+// straight back over it. Only a real restart clears that in-memory
+// state, via restartDaemonDetached -- the same safe fire-and-forget
+// pattern daemonRestart already uses, so this method's own return value
+// reaches the operator before the init script's restart actually kills
+// this process.
+func (h *RouterHandler) adaptiveRouteFlush(ctx context.Context) (string, error) {
+	if !keenetic.Available() {
+		return "", fmt.Errorf("ndmc не найден — адаптивная маршрутизация работает только на роутере Keenetic")
+	}
+	if err := adaptiveroute.Flush(ctx, adaptiveroute.RedirectSetName); err != nil {
+		return "", fmt.Errorf("очистка ipset: %w", err)
+	}
+	var warn string
+	if h.AdaptiveRouteStatePath != "" {
+		if err := os.Remove(h.AdaptiveRouteStatePath); err != nil && !os.IsNotExist(err) {
+			warn = fmt.Sprintf("\n⚠️ не удалось удалить сохранённое состояние классификатора: %v", err)
+		}
+	}
+	if err := h.restartDaemonDetached(); err != nil {
+		warn += fmt.Sprintf("\n⚠️ автоматический перезапуск не удался (%v) — перезапустите вручную: ♻️ Рестарт демона", err)
+	}
+	return "Список перенаправляемых адресов и состояние классификатора очищены, демон перезапускается…" + warn, nil
 }
 
 // adaptiveRouteSetTTL sets how long a confirmed-good destination stays

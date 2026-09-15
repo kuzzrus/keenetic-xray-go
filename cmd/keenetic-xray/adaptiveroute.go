@@ -259,6 +259,15 @@ func adaptiveRouteClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 			clsCfg = &c
 			logf("adaptive-route: classifier started (LAN subnet %s)", subnet)
 		}
+		// Re-applied every tick, unlike LANSubnets above (resolved once
+		// -- a real topology change is rare enough to just wait for the
+		// next restart, per that block's own comment): OKTTL is meant to
+		// be live-tunable from the bot's TTL buttons, and cfg itself is
+		// already reloaded from disk above on every tick anyway, so this
+		// is free and makes a changed setting apply within one tick
+		// instead of needing clsCfg rebuilt (which only happens on
+		// AdaptiveRoute.Enabled going false then true again).
+		clsCfg.OKTTL = cfg.AdaptiveRoute.EffectiveOKTTL()
 
 		now := time.Now()
 		flows, err := classifier.ScanConntrack("")

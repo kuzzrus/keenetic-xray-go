@@ -100,7 +100,8 @@ func printTransport(cfg *config.Config) {
 	}
 
 	if cfg.AdaptiveRoute.Enabled {
-		fmt.Printf("адаптивная маршрутизация: вкл — порт :%d\n", cfg.AdaptiveRoute.EffectivePort())
+		fmt.Printf("адаптивная маршрутизация: вкл — порт :%d, TTL подтверждённых адресов %s\n",
+			cfg.AdaptiveRoute.EffectivePort(), cfg.AdaptiveRoute.EffectiveOKTTL())
 	} else {
 		fmt.Println("адаптивная маршрутизация: выкл")
 	}

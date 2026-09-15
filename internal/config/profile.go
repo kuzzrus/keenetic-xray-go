@@ -434,6 +434,19 @@ type AdaptiveRouteConfig struct {
 	// not a guarantee; set this explicitly when it's wrong for a given
 	// router.
 	LANSubnet string `json:"lan_subnet,omitempty"`
+
+	// OKTTLHours overrides how long a destination the classifier has
+	// confirmed needs the tunnel (internal/classifier.Config.OKTTL)
+	// stays redirected without a healthy re-check, in whole hours. <= 0
+	// -> DefaultOKTTLHours. Bot-exposed as a handful of preset buttons
+	// (6/12/18/24h) on the adaptive-routing screen, not free-form, but
+	// the field itself takes any positive value (e.g. from the CLI).
+	// Read fresh every classify tick (cmd/keenetic-xray's
+	// adaptiveRouteClassifyLoop), so a change here applies live within
+	// one tick -- no daemon restart, no rebindXray, unlike Enabled/
+	// Port/LANSubnet, which reshape xray's own config or the REDIRECT
+	// rule and do need one.
+	OKTTLHours int `json:"ok_ttl_hours,omitempty"`
 }
 
 // DefaultAdaptiveRoutePort is the xray dokodemo-door inbound's port.
@@ -442,11 +455,26 @@ type AdaptiveRouteConfig struct {
 // `netstat`/`ss` listing.
 const DefaultAdaptiveRoutePort = 12080
 
+// DefaultOKTTLHours mirrors internal/classifier.DefaultConfig's own
+// OKTTL (6h) -- duplicated as a plain constant rather than importing
+// internal/classifier here (classifier stays a pure-logic leaf package
+// with no config dependency of its own) so the two are two independent
+// literals; if classifier's own default ever changes, update this one
+// to match, tests should catch a drift either way.
+const DefaultOKTTLHours = 6
+
 func (a AdaptiveRouteConfig) EffectivePort() int {
 	if a.Port > 0 {
 		return a.Port
 	}
 	return DefaultAdaptiveRoutePort
+}
+
+func (a AdaptiveRouteConfig) EffectiveOKTTL() time.Duration {
+	if a.OKTTLHours > 0 {
+		return time.Duration(a.OKTTLHours) * time.Hour
+	}
+	return DefaultOKTTLHours * time.Hour
 }
 
 // Defaults for WGTransportConfig. The address is a deliberately obscure

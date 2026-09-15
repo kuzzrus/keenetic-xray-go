@@ -94,7 +94,7 @@ const (
 // self-healing instead of stuck indefinitely on one bad call.
 const adaptiveRouteOpTimeout = 5 * time.Second
 
-// transportAdaptive is `keenetic-xray transport adaptive {show|on|off}`
+// transportAdaptive is `keenetic-xray transport adaptive {show|on|off|flush}`
 // -- Susanin Phase 2's native per-IP adaptive routing (see
 // docs/HANDOFF-susanin.md): a conntrack classifier (internal/classifier)
 // feeding an iptables REDIRECT rule (internal/adaptiveroute) into xray's
@@ -113,8 +113,10 @@ func transportAdaptive(cfg *config.Config, args []string) error {
 		return adaptiveRouteOn(cfg)
 	case "off":
 		return adaptiveRouteOff(cfg)
+	case "flush":
+		return adaptiveRouteFlush()
 	default:
-		return fmt.Errorf("usage: keenetic-xray transport adaptive {show|on|off}")
+		return fmt.Errorf("usage: keenetic-xray transport adaptive {show|on|off|flush}")
 	}
 }
 
@@ -162,12 +164,32 @@ func adaptiveRouteOn(cfg *config.Config) error {
 	return nil
 }
 
+// adaptiveRouteOff also flushes the ipset, not just the REDIRECT rule --
+// found live (2026-09-15) that without this, "off" left every already-
+// confirmed address (an individual entry carries up to
+// AdaptiveRoute.EffectiveOKTTL(), 6h by default -- see
+// adaptiveroute.AddIP's doc comment) sitting in the set, ready to start
+// redirecting again the instant "on" re-adds the REDIRECT rule, even
+// addresses that were false positives. A bare off/on toggle silently
+// undid nothing.
+//
+// Deliberately does NOT also clear the classifier's own persisted state
+// the way adaptiveRouteFlush does: while AdaptiveRoute.Enabled is false,
+// adaptiveRouteClassifyLoop's own ticker branch is a no-op (see its
+// `!cfg.AdaptiveRoute.Enabled` check), so a stale in-memory belief just
+// sits frozen and harmless until re-enabled -- no redirecting actually
+// happens either way while off, which is exactly what "off" promises.
+// It only matters again once switched back on, which is what
+// adaptiveRouteFlush is for.
 func adaptiveRouteOff(cfg *config.Config) error {
 	if keenetic.Available() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := adaptiveroute.ClearRedirect(ctx); err != nil {
 			fmt.Printf("предупреждение: не удалось убрать REDIRECT-правило: %v\n", err)
+		}
+		if err := adaptiveroute.Flush(ctx, adaptiveRouteIPSet); err != nil {
+			fmt.Printf("предупреждение: не удалось очистить список адресов: %v\n", err)
 		}
 	}
 	cfg.AdaptiveRoute.Enabled = false
@@ -176,6 +198,54 @@ func adaptiveRouteOff(cfg *config.Config) error {
 	}
 	fmt.Println("адаптивная маршрутизация выключена")
 	applyDaemonChange(bufio.NewReader(os.Stdin), true)
+	return nil
+}
+
+// adaptiveRouteFlush clears every address/subnet currently redirected,
+// without touching AdaptiveRoute.Enabled or the REDIRECT rule itself --
+// for when the feature should stay on, but accumulated state (stale
+// entries surviving a daemon restart or an off/on toggle; or an ordinary
+// false positive that got stuck in the OK tier, see docs/HANDOFF-
+// susanin.md) needs clearing right now instead of waiting out each
+// entry's own TTL.
+//
+// Also removes the classifier's own persisted state and restarts the
+// daemon -- found live (2026-09-15) that a bare ipset flush isn't
+// enough on its own: the *running* classifier's in-memory state (loaded
+// once, at daemon startup, into adaptiveRouteClassifyLoop's own local
+// variable -- see that function) still believes every flushed address
+// is confirmed, and JUDGE only re-adds a confirmed address to the ipset
+// once it's close to its own TTL expiry (up to AdaptiveRoute.
+// EffectiveOKTTL(), 6h by default, for an individual address; up to 30
+// minutes for a block). Left alone, that mismatch silently suppresses
+// re-promotion of exactly the ranges that were working fine before the
+// flush, for as long as each one's own TTL allows -- observed live as
+// "nothing loads" even though individual addresses were visibly being
+// caught fresh in the log. Deleting the file alone doesn't help either
+// while the daemon keeps running: its own periodic save (every 5
+// minutes, see adaptiveRouteClassifyLoop) just writes the same stale
+// in-memory state straight back. Only a real restart clears the
+// in-memory copy and makes classifier.LoadState fall back to a truly
+// empty classifier.NewState().
+func adaptiveRouteFlush() error {
+	if !keenetic.Available() {
+		return fmt.Errorf("ndmc не найден — адаптивная маршрутизация работает только на роутере Keenetic")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := adaptiveroute.Flush(ctx, adaptiveRouteIPSet); err != nil {
+		return fmt.Errorf("очистка ipset: %w", err)
+	}
+	if err := os.Remove(adaptiveRouteStatePath()); err != nil && !os.IsNotExist(err) {
+		fmt.Printf("предупреждение: не удалось удалить сохранённое состояние классификатора: %v\n", err)
+	}
+	fmt.Println("адаптивная маршрутизация: список перенаправляемых адресов и состояние классификатора очищены")
+	// Not applyDaemonChange: its first try (SIGHUP -> live xray/failover
+	// config reload) would report "applied, no restart needed" while
+	// leaving the classifier's in-memory state (the actual point of this
+	// command) completely untouched -- go straight to offering a real
+	// restart instead.
+	offerDaemonRestart(bufio.NewReader(os.Stdin))
 	return nil
 }
 

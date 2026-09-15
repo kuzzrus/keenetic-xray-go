@@ -67,7 +67,7 @@ func cmdTransport(args []string) error {
 	case "adaptive":
 		return transportAdaptive(cfg, args[1:])
 	default:
-		return fmt.Errorf("usage: keenetic-xray transport {show|mode <mode>|mode-clear|mss <1200..1452|auto|off>|wg {show|on|off}|adaptive {show|on|off}}")
+		return fmt.Errorf("usage: keenetic-xray transport {show|mode <mode>|mode-clear|mss <1200..1452|auto|off>|wg {show|on|off}|adaptive {show|on|off|flush}}")
 	}
 
 	if err := cfg.Save(configPath()); err != nil {

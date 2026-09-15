@@ -71,6 +71,17 @@ type TelegramBot struct {
 
 	flapMu sync.Mutex
 	flap   map[string]*flapWindow // per-router failover-notification rate state
+
+	selfUpdateMu   sync.Mutex
+	selfUpdateMsgs map[string]pendingMsg // per-router: where "self_update" was last shown, so the later confirmation event can edit it in place
+}
+
+// pendingMsg is one chat message a later event should edit in place
+// rather than post a separate new message about.
+type pendingMsg struct {
+	chatID int64
+	msgID  int
+	at     time.Time
 }
 
 // routeMenu is what the bot last showed on the 📍 Маршруты screen for one
@@ -263,9 +274,66 @@ func (b *TelegramBot) NotifyEvent(routerID string, ev Event) {
 		default:
 			b.notify(routerID, ev.Text)
 		}
+	case "self_update":
+		b.notifySelfUpdate(routerID, ev.Text)
 	default:
 		b.notify(routerID, ev.Text)
 	}
+}
+
+// selfUpdateMsgMaxAge bounds how long a "self_update" click is
+// remembered for editing. Generous over watchPostUpdate's own 2-minute
+// postUpdateWindow: fetch+opkg-install+daemon-restart+reconnect+the next
+// heartbeat all have to happen first, on a possibly slow uplink, before
+// the confirmation event this is waiting for can even be sent.
+const selfUpdateMsgMaxAge = 20 * time.Minute
+
+// rememberSelfUpdateMsg records where a self_update click's own
+// "обновление агента запущено…" result was shown, so notifySelfUpdate
+// can edit that same message in place once the real outcome arrives --
+// from a completely separate request, well after this one returned
+// (logSelfUpdateOutcome on a pre-restart failure, or watchPostUpdate /
+// watchAutoRollbackNotice on the *next* process's own startup).
+//
+// Found live (2026-09-16): without this, the operator has no way to
+// tell a genuinely still-running update apart from one that already
+// finished -- the click's own reply is, by design, never edited again
+// on its own, and the actual confirmation lands as a separate message
+// that's easy not to notice or not connect to the click at all. Two
+// live tests were both read as "the button hung" when the update had
+// in fact already completed successfully.
+func (b *TelegramBot) rememberSelfUpdateMsg(routerID string, chatID int64, msgID int) {
+	b.selfUpdateMu.Lock()
+	defer b.selfUpdateMu.Unlock()
+	if b.selfUpdateMsgs == nil {
+		b.selfUpdateMsgs = map[string]pendingMsg{}
+	}
+	b.selfUpdateMsgs[routerID] = pendingMsg{chatID: chatID, msgID: msgID, at: time.Now()}
+}
+
+// notifySelfUpdate edits routerID's remembered self-update message with
+// the real outcome when one is on record and still fresh enough to
+// plausibly be the update this event reports on, falling back to an
+// ordinary broadcast otherwise (no click on record at all -- triggered
+// over SSH/CLI instead -- a stale entry, or the edit itself failing,
+// e.g. because Telegram will no longer touch a message old enough).
+func (b *TelegramBot) notifySelfUpdate(routerID, text string) {
+	b.selfUpdateMu.Lock()
+	m, ok := b.selfUpdateMsgs[routerID]
+	if ok {
+		delete(b.selfUpdateMsgs, routerID)
+	}
+	b.selfUpdateMu.Unlock()
+
+	if ok && time.Since(m.at) <= selfUpdateMsgMaxAge {
+		b.initClient()
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if b.editMessageText(ctx, m.chatID, m.msgID, b.routerCardText(routerID)+"\n\n"+text, routerCardKB(routerID)) {
+			return
+		}
+	}
+	b.notify(routerID, text)
 }
 
 // flapMuted reports whether routerID's failover notifications are

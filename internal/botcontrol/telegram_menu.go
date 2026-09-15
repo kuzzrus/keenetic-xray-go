@@ -551,6 +551,12 @@ func (b *TelegramBot) enqueueCardArgs(ctx context.Context, cb tgCallbackQuery, i
 		return
 	}
 	chatID, msgID := cb.Message.Chat.ID, cb.Message.MessageID
+	if action == ActionSelfUpdate {
+		// The real outcome arrives later, from a separate request (see
+		// notifySelfUpdate's own doc comment) -- remember where to put
+		// it instead of leaving this message to sit unchanged forever.
+		b.rememberSelfUpdateMsg(id, chatID, msgID)
+	}
 	b.editMessageText(ctx, chatID, msgID, b.routerCardText(id)+"\n\n⏳ команда в очереди…", routerCardKB(id))
 	go b.awaitActionResult(ctx, chatID, msgID, id, cmdID)
 }

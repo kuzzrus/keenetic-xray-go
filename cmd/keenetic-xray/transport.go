@@ -66,8 +66,10 @@ func cmdTransport(args []string) error {
 		return transportWG(cfg, args[1:])
 	case "adaptive":
 		return transportAdaptive(cfg, args[1:])
+	case "l7sni":
+		return transportL7SNI(cfg, args[1:])
 	default:
-		return fmt.Errorf("usage: keenetic-xray transport {show|mode <mode>|mode-clear|mss <1200..1452|auto|off>|wg {show|on|off}|adaptive {show|on|off|flush}}")
+		return fmt.Errorf("usage: keenetic-xray transport {show|mode <mode>|mode-clear|mss <1200..1452|auto|off>|wg {show|on|off}|adaptive {show|on|off|flush}|l7sni {show|on|off}}")
 	}
 
 	if err := cfg.Save(configPath()); err != nil {
@@ -105,6 +107,12 @@ func printTransport(cfg *config.Config) {
 			cfg.AdaptiveRoute.EffectivePort(), cfg.AdaptiveRoute.EffectiveOKTTL(), knownranges.CurrentLen())
 	} else {
 		fmt.Println("адаптивная маршрутизация: выкл")
+	}
+
+	if cfg.L7SNI.Enabled {
+		fmt.Println("l7sni (определение домена по TLS SNI/HTTP Host): вкл")
+	} else {
+		fmt.Println("l7sni (определение домена по TLS SNI/HTTP Host): выкл")
 	}
 }
 

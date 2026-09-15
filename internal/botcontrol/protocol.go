@@ -100,11 +100,12 @@ const (
 	ActionL7SNIOff = "l7sni_off" // no args -- disables the config flag, clears the NFLOG iptables rules, restarts the daemon
 	// Keenetic dns-proxy secure upstreams (DoT/DoH). See
 	// internal/keenetic.ApplyDNS + internal/dnsupstream.
-	ActionDNSShow   = "dns_show"   // no args -> config + live upstreams (human text)
-	ActionDNSTest   = "dns_test"   // no args -> latency table for the whole provider catalogue
-	ActionDNSPreset = "dns_preset" // args[0]=provider id, args[1]="dot"|"doh"|"both"
-	ActionDNSSet    = "dns_set"    // args[0]="dot"|"doh", args[1]=newline/space list ("<ip> <sni>" pairs, or URLs)
-	ActionDNSOff    = "dns_off"    // no args -> remove every managed upstream
+	ActionDNSShow    = "dns_show"     // no args -> config + live upstreams (human text)
+	ActionDNSTest    = "dns_test"     // no args -> latency table for the whole provider catalogue
+	ActionDNSTestTop = "dns_test_top" // no args -> TSV "id\tname\tdotMs\tdohMs" (dash = unavailable), top 4 by latency, for the bot's own test-then-apply screen
+	ActionDNSPreset  = "dns_preset"   // args[0]=provider id, args[1]="dot"|"doh"|"both"
+	ActionDNSSet     = "dns_set"      // args[0]="dot"|"doh", args[1]=newline/space list ("<ip> <sni>" pairs, or URLs)
+	ActionDNSOff     = "dns_off"      // no args -> remove every managed upstream
 
 	// Optional router-side components (internal/addons): unbound, nfqws2,
 	// conntrack, cron. Surfaced on the bot's 🧩 Дополнения screen.

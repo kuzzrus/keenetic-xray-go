@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -87,6 +88,42 @@ func (h *RouterHandler) dnsTest(ctx context.Context, args []string) (string, err
 	}
 	b.WriteString("\nвыбрать: кнопкой в 🧭 DNS (или /dns <r> preset <id>)")
 	return b.String(), nil
+}
+
+// dnsTestTop is dnsTest's own probe, trimmed to the fastest few and
+// rendered as TSV (id\tname\tdotMs\tdohMs, "-" for an unreachable
+// protocol) instead of a human table -- ProbeAll already sorts by best
+// latency, so this is just a slice, not a second measurement. Built for
+// the bot's own "🧭 DNS" screen: showing the whole ~20-provider
+// catalogue after every test left the operator hunting the winner's
+// name back out of a wall of numbers and applying it through a separate
+// screen by hand; this gives the server side enough structure to put an
+// apply button directly under each of the top few results instead.
+func (h *RouterHandler) dnsTestTop(ctx context.Context) (string, error) {
+	const topN = 4
+	cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	res := dnsupstream.ProbeAll(cctx, dnsupstream.Providers())
+	if len(res) > topN {
+		res = res[:topN]
+	}
+	var b strings.Builder
+	for _, r := range res {
+		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\n", r.Provider.ID, r.Provider.Name, dashIfEmpty(msField(r.DoT)), dashIfEmpty(msField(r.DoH)))
+	}
+	return b.String(), nil
+}
+
+// msField renders a Timing as a bare millisecond number for a TSV field,
+// or "" (dashIfEmpty's own sentinel input) when the endpoint didn't
+// answer -- the human "45 мс"/"— (timeout)" form Timing.String() gives
+// is for terminal/chat text output, not something the server side
+// should have to re-parse to build a button.
+func msField(t dnsupstream.Timing) string {
+	if !t.OK {
+		return ""
+	}
+	return strconv.FormatInt(t.Latency.Milliseconds(), 10)
 }
 
 func (h *RouterHandler) dnsPreset(ctx context.Context, args []string) (string, error) {

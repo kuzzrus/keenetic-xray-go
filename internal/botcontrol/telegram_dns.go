@@ -36,7 +36,7 @@ const dnsScreenBlurb = "🧭 DNS %s\n\n" +
 	"в том числе для маршрутизации по спискам (роутер снупит ответы).\n\n" +
 	"Трогаем только апстримы из этого списка — твои свои (веб-интерфейс/CLI) не задеваются. " +
 	"DoH обычно живучее к DPI, чем DoT.\n\n" +
-	"«📊 Проверить» — замер задержки всех провайдеров прямо с роутера.\n\n%s"
+	"«📊 Проверить» — замер задержки всех провайдеров прямо с роутера, топ-4 с кнопкой применить под каждым.\n\n%s"
 
 func (b *TelegramBot) openDNSScreen(ctx context.Context, cb tgCallbackQuery, id string) {
 	if !b.Store.HasRouter(id) {
@@ -63,6 +63,90 @@ func (b *TelegramBot) openDNSScreen(ctx context.Context, cb tgCallbackQuery, id 
 		}
 		b.editMessageText(ctx, chatID, msgID, fmt.Sprintf(dnsScreenBlurb, id, state), dnsScreenKB(id))
 	}()
+}
+
+// openDNSTestTopScreen runs dnsTestTop (the fastest few, by latency) and
+// puts an apply button directly under each result -- replaces the old
+// "📊 Проверить" flow, which printed a ~20-row table and left applying
+// the winner to a separate trip through the full provider grid, matching
+// its name back to a button by hand.
+func (b *TelegramBot) openDNSTestTopScreen(ctx context.Context, cb tgCallbackQuery, id string) {
+	chatID, msgID := cb.Message.Chat.ID, cb.Message.MessageID
+	cmdID, err := b.Store.Enqueue(id, ActionDNSTestTop, nil)
+	if err != nil {
+		b.editCB(ctx, cb, "не поставлено в очередь: "+err.Error(), dnsScreenKB(id))
+		return
+	}
+	b.editMessageText(ctx, chatID, msgID, "🧭 DNS "+id+"\n\n⏳ замеряю задержку…", dnsScreenKB(id))
+	go func() {
+		res, ok := b.Store.AwaitResult(ctx, id, cmdID, b.resultTimeout())
+		if !ok {
+			b.editMessageText(ctx, chatID, msgID, "🧭 DNS "+id+"\n\n⌛ роутер не ответил", dnsScreenKB(id))
+			return
+		}
+		if res.Err != "" {
+			b.editMessageText(ctx, chatID, msgID, "🧭 DNS "+id+"\n\n⚠️ "+res.Err, dnsScreenKB(id))
+			return
+		}
+		rows := parseDNSTestTop(res.Output)
+		if len(rows) == 0 {
+			b.editMessageText(ctx, chatID, msgID, "🧭 DNS "+id+"\n\nничего не измерено", dnsScreenKB(id))
+			return
+		}
+		b.editMessageText(ctx, chatID, msgID, dnsTestTopText(id, rows), dnsTestTopKB(id, rows))
+	}()
+}
+
+type dnsTestTopRow struct {
+	ID, Name, DoTMs, DoHMs string // Ms fields are "" when that protocol didn't answer
+}
+
+// parseDNSTestTop reads dnsTestTop's own TSV (id\tname\tdotMs\tdohMs,
+// "-" for an unavailable protocol -- see dns.go's dashIfEmpty/msField).
+// A malformed line is dropped rather than erroring the whole screen: the
+// router side controls the format, so seeing one only means a version
+// mismatch, not bad input to guard against.
+func parseDNSTestTop(out string) []dnsTestTopRow {
+	var rows []dnsTestTopRow
+	for _, ln := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		if ln == "" {
+			continue
+		}
+		f := strings.Split(ln, "\t")
+		if len(f) != 4 {
+			continue
+		}
+		rows = append(rows, dnsTestTopRow{ID: f[0], Name: f[1], DoTMs: undash(f[2]), DoHMs: undash(f[3])})
+	}
+	return rows
+}
+
+func dnsTestTopText(id string, rows []dnsTestTopRow) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "🧭 DNS %s — топ по задержке\n\n", id)
+	for i, r := range rows {
+		fmt.Fprintf(&b, "%d. %s — DoT %s, DoH %s\n", i+1, r.Name, msLabel(r.DoTMs), msLabel(r.DoHMs))
+	}
+	b.WriteString("\nПрименить — кнопкой ниже (DoT+DoH сразу, что есть у провайдера). Полный список и раздельный выбор DoT/DoH — «⬅️ Назад».")
+	return b.String()
+}
+
+func msLabel(ms string) string {
+	if ms == "" {
+		return "—"
+	}
+	return ms + " мс"
+}
+
+func dnsTestTopKB(id string, rows []dnsTestTopRow) inlineKeyboard {
+	var kbRows [][]inlineButton
+	for _, r := range rows {
+		kbRows = append(kbRows, []inlineButton{
+			{Text: "✅ " + r.Name, CallbackData: fmt.Sprintf("dna:%s:%s:both", id, r.ID)},
+		})
+	}
+	kbRows = append(kbRows, []inlineButton{{Text: "⬅️ Назад", CallbackData: "dnsm:" + id}})
+	return inlineKeyboard{InlineKeyboard: kbRows}
 }
 
 func (b *TelegramBot) openDNSProviderScreen(ctx context.Context, cb tgCallbackQuery, id, provID string) {
@@ -210,7 +294,7 @@ func (b *TelegramBot) handleDNSCallback(ctx context.Context, cb tgCallbackQuery,
 		}
 		b.enqueueDNSAction(ctx, cb, f[0], ActionDNSPreset, []string{f[1], f[2]})
 	case strings.HasPrefix(data, "dntest:"):
-		b.enqueueDNSAction(ctx, cb, strings.TrimPrefix(data, "dntest:"), ActionDNSTest, nil)
+		b.openDNSTestTopScreen(ctx, cb, strings.TrimPrefix(data, "dntest:"))
 	case strings.HasPrefix(data, "dnoff:"):
 		b.enqueueDNSAction(ctx, cb, strings.TrimPrefix(data, "dnoff:"), ActionDNSOff, nil)
 	case strings.HasPrefix(data, "dncust:"):

@@ -76,12 +76,17 @@ func adaptiveRouteLAN(ctx context.Context, cfg *config.Config) (iface string, su
 // aren't reachable.
 func (h *RouterHandler) adaptiveRouteShow(ctx context.Context) (string, error) {
 	a := h.Config.AdaptiveRoute
+	l7sniLine := "\n🔍 L7 SNI: выкл"
+	if h.Config.L7SNI.Enabled {
+		l7sniLine = "\n🔍 L7 SNI: вкл"
+	}
 	if !a.Enabled {
-		return "Адаптивная маршрутизация: выкл", nil
+		return "Адаптивная маршрутизация: выкл" + l7sniLine, nil
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Адаптивная маршрутизация: вкл — xray :%d, TTL подтверждённых адресов %s",
 		a.EffectivePort(), a.EffectiveOKTTL())
+	b.WriteString(l7sniLine)
 
 	if !keenetic.Available() {
 		return b.String(), nil

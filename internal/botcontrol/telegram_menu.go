@@ -190,6 +190,10 @@ func adaptiveRouteScreenText(id string) string {
 		"классификатор в памяти всё ещё будет думать, что старое подтверждено, и не станет спешить " +
 		"переподтверждать заново) — коротко мигнёт соединение, это ожидаемо.\n\n" +
 		"TTL подтверждённых адресов (сколько держать адрес перенаправленным без переповторной проверки) — кнопки ниже.\n\n" +
+		"🔍 L7 SNI — отдельная, независимо включаемая надстройка: читает TLS SNI/HTTP Host " +
+		"прямо с провода (NFLOG) и досылает в тот же список адресов совпадения с твоими routes, " +
+		"даже если DNS-запрос сам роутер не видел (DoH/DoT-клиенты, приложения с зашитым IP). " +
+		"Переключение всегда перезапускает демон — живого применения тут нет.\n\n" +
 		"Состояние — 📊 Показать."
 }
 
@@ -198,6 +202,7 @@ func adaptiveRouteScreenKB(id string) inlineKeyboard {
 		{{Text: "✅ Включить", CallbackData: "act:adrt_on:" + id}, {Text: "⛔ Выключить", CallbackData: "act:adrt_off:" + id}},
 		{{Text: "TTL: 6ч", CallbackData: "adttl:" + id + ":6"}, {Text: "12ч", CallbackData: "adttl:" + id + ":12"},
 			{Text: "18ч", CallbackData: "adttl:" + id + ":18"}, {Text: "24ч", CallbackData: "adttl:" + id + ":24"}},
+		{{Text: "🔍 L7 SNI вкл", CallbackData: "act:l7sni_on:" + id}, {Text: "🔍 L7 SNI выкл", CallbackData: "act:l7sni_off:" + id}},
 		{{Text: "🧹 Очистить список", CallbackData: "act:adrt_flush:" + id}},
 		{{Text: "📊 Показать", CallbackData: "act:adrt_show:" + id}, {Text: "⬅️ Назад", CallbackData: "ptm:" + id}},
 	}}
@@ -288,6 +293,10 @@ func callbackAction(name string) string {
 		return ActionAdaptiveRouteOff
 	case "adrt_flush":
 		return ActionAdaptiveRouteFlush
+	case "l7sni_on":
+		return ActionL7SNIOn
+	case "l7sni_off":
+		return ActionL7SNIOff
 	case "wd_show":
 		return ActionWatchdogShow
 	case "wd_enable":

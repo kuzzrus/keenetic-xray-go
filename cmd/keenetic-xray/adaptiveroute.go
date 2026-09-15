@@ -30,7 +30,21 @@ const adaptiveRouteIPSet = adaptiveroute.RedirectSetName
 // and runs FAST/SOFT/JUDGE. Upstream uses three separate knobs (fast/
 // soft/judge_interval, defaulting to 1-2s each); one shared interval is
 // simpler and the difference isn't meaningful for what this catches.
-const classifyInterval = 2 * time.Second
+//
+// 500ms, not upstream's 1-2s: found live on hardware (2026-09-15) that
+// the original 2s made a first, cold app launch (Speedtest especially)
+// visibly fail before the classifier ever got a chance to react -- a
+// SYN's own first retransmit is already ~1s in, so a 2s tick could add
+// another full second-plus on top before FAST even looks, well past
+// what an impatient app waits for on its first attempt. A relaunch
+// then "worked" only because the destination was already promoted by
+// then, not because anything was actually fixed. Ticking 4x faster
+// directly cuts that reaction latency without changing any detection
+// threshold -- nothing becomes a more trigger-happy false positive,
+// the same conditions just get checked for sooner. Affordable: a
+// conntrack scan measured at 0.01s for 435 entries, nowhere near
+// expensive enough to need a slower cadence for its own sake.
+const classifyInterval = 500 * time.Millisecond
 
 // transportAdaptive is `keenetic-xray transport adaptive {show|on|off}`
 // -- Susanin Phase 2's native per-IP adaptive routing (see

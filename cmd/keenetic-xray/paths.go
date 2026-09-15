@@ -57,6 +57,16 @@ func selfUpdateMarkerPath() string {
 	return envOr("KEENETIC_XRAY_SELFUPDATE_MARKER", logDir()+"/self-update.json")
 }
 
+// autoRollbackNoticePath is where cmdWatchdogRestartHook leaves a small
+// note after a successful auto-rollback, for watchAutoRollbackNotice (a
+// goroutine on the next successful boot, mirroring watchPostUpdate) to
+// turn into a chat event. Needed because the rollback itself runs as a
+// one-shot CLI invocation from the watchdog's own cron script -- it has
+// no Events channel of its own to push a notification through directly.
+func autoRollbackNoticePath() string {
+	return envOr("KEENETIC_XRAY_AUTOROLLBACK_NOTICE", logDir()+"/auto-rollback-notice.json")
+}
+
 // adaptiveRouteStatePath is where Susanin Phase 2's classifier persists
 // its test/ok/cooldown state (internal/classifier.SaveState/LoadState)
 // across restarts.

@@ -235,12 +235,15 @@ func cmdDaemon(args []string) error {
 		}
 		postUpd := make(chan botcontrol.Event, 1)
 		go watchPostUpdate(ctx, d.State, selfUpdateMarkerPath(), postUpd, logf)
+		autoRollback := make(chan botcontrol.Event, 1)
+		go watchAutoRollbackNotice(ctx, autoRollback)
 		selfUpdateFail := make(chan botcontrol.Event, 1)
 		opts.Events = botcontrol.Merge(ctx,
 			botcontrol.WatchStuckPrimary(ctx, d.Snapshot,
 				cfg.Failover.PrimaryStuckWarnAfter(),
 				botcontrol.FailoverEvents(ctx, d.Events())),
 			postUpd,
+			autoRollback,
 			presetDrift,
 			selfUpdateFail,
 		)

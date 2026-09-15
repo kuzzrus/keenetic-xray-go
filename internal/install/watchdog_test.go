@@ -47,8 +47,8 @@ func TestSetWatchdogCron_EnableOnFreshFile(t *testing.T) {
 		t.Fatalf("reading the watchdog script: %v", err)
 	}
 	s := string(script)
-	if !strings.Contains(s, testInitScript+" status") || !strings.Contains(s, testInitScript+" start") {
-		t.Errorf("script = %q, want both a status check and a start fallback", s)
+	if !strings.Contains(s, testInitScript+" status") || !strings.Contains(s, "internal watchdog-restart-hook") {
+		t.Errorf("script = %q, want both a status check and the restart-hook call", s)
 	}
 	if !strings.Contains(s, testWatchdogLog) {
 		t.Errorf("script = %q, want it to log restarts to %s", s, testWatchdogLog)

@@ -854,6 +854,42 @@ func TestRouterHandler_RebindRestartsIdleDaemon(t *testing.T) {
 	h.rebindXray(ctx) // must return promptly (spawns detached restart), not hang
 }
 
+// TestRouterHandler_RebindRestartsIdleDaemon_SingleProfile is the
+// regression test for a real bug (2026-09-15): rebindXray's idle-daemon
+// fallback required Primary()&&Backup(), so a single-profile router (no
+// backup -- a normal, supported setup, see Daemon.Run's own "no backup
+// -- supervising primary" branch) whose Daemon hadn't yet reached its
+// command-serving loop (the narrow window right at daemon startup) got
+// neither a live reload nor a fallback restart: rebindXray did nothing
+// at all, silently. A bot-triggered adaptiveRouteOn racing that window
+// looked like it worked ("адаптивная маршрутизация включена") while
+// xray itself never actually picked up the change -- fixed until the
+// user happened to restart the daemon some other way. Same lesson as
+// #167's ReloadConfig fix, different call site.
+func TestRouterHandler_RebindRestartsIdleDaemon_SingleProfile(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh on PATH")
+	}
+	cfg := config.Default()
+	cfg.Profiles = []config.Profile{testProfile("p", "a")}
+	cfg.PrimaryIndex, cfg.BackupIndex = 0, -1 // single profile, no backup
+	d := failover.NewDaemon(failover.Paths{}, cfg)
+	h := &RouterHandler{Daemon: d, Config: cfg, InitScript: "/bin/true"}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	if !h.rebindXray(ctx) {
+		t.Error("rebindXray should fall back to a detached restart for a single-profile router too, not just primary+backup")
+	}
+}
+
+func TestRouterHandler_Rebind_NoDaemonReportsFalse(t *testing.T) {
+	h := &RouterHandler{Config: config.Default()}
+	if h.rebindXray(context.Background()) {
+		t.Error("rebindXray with no Daemon should report false, not claim success")
+	}
+}
+
 func TestRouterHandler_ScrubsSlotSourceURLs(t *testing.T) {
 	cfg := config.Default()
 	cfg.PrimarySource = &config.SlotSource{URL: "https://p.example/sub/PRIMTOKEN"}

@@ -422,22 +422,22 @@ func TestClrBlockPromote_KnownRangeLookupWidensPromotedBlock(t *testing.T) {
 	addOK(state, 0, now, cfg.OKTTL, "1.2.3.1", "1.2.3.2", "1.2.3.3", "1.2.3.4")
 	cfg.KnownRangeLookup = func(ip string) (string, bool) {
 		if ip == "1.2.3.4" { // one of the sample addrs -- exact address doesn't matter, any in the group works
-			return "1.2.0.0/16", true
+			return "1.2.0.0/20", true
 		}
-		return "1.2.0.0/16", true
+		return "1.2.0.0/20", true
 	}
 
 	actions := ClrBlockPromote(cfg, state, now)
 	if len(actions) != 1 {
 		t.Fatalf("actions = %+v, want exactly one block promotion", actions)
 	}
-	if a := actions[0]; a.IP != "1.2.0.0/16" {
-		t.Errorf("action IP = %q, want the known range 1.2.0.0/16, not the naive /24", a.IP)
+	if a := actions[0]; a.IP != "1.2.0.0/20" {
+		t.Errorf("action IP = %q, want the known range 1.2.0.0/20, not the naive /24", a.IP)
 	}
 	if state.Blocks[0].has("1.2.3.0/24", now) {
 		t.Error("naive /24 should not be recorded in state.Blocks once a known range matched")
 	}
-	if !state.Blocks[0].has("1.2.0.0/16", now) {
+	if !state.Blocks[0].has("1.2.0.0/20", now) {
 		t.Error("the known range should be recorded in state.Blocks")
 	}
 }
@@ -470,14 +470,72 @@ func TestClrBlockPromote_TwoNaiveBlocksConvergeOnSameKnownRange(t *testing.T) {
 	cfg, state, now := testConfig(), NewState(), time.Now()
 	addOK(state, 0, now, cfg.OKTTL, "1.2.3.1", "1.2.3.2", "1.2.3.3", "1.2.3.4")
 	addOK(state, 0, now, cfg.OKTTL, "1.2.4.1", "1.2.4.2", "1.2.4.3", "1.2.4.4")
-	cfg.KnownRangeLookup = func(ip string) (string, bool) { return "1.2.0.0/16", true }
+	cfg.KnownRangeLookup = func(ip string) (string, bool) { return "1.2.0.0/20", true }
 
 	actions := ClrBlockPromote(cfg, state, now)
 	if len(actions) != 1 {
 		t.Fatalf("actions = %+v, want exactly one promotion -- both naive blocks resolve to the same known range", actions)
 	}
-	if actions[0].IP != "1.2.0.0/16" {
-		t.Errorf("action IP = %q, want 1.2.0.0/16", actions[0].IP)
+	if actions[0].IP != "1.2.0.0/20" {
+		t.Errorf("action IP = %q, want 1.2.0.0/20", actions[0].IP)
+	}
+}
+
+func TestClrBlockPromote_KnownRangeTooWideIsRejected(t *testing.T) {
+	cfg, state, now := testConfig(), NewState(), time.Now()
+	addOK(state, 0, now, cfg.OKTTL, "1.2.3.1", "1.2.3.2", "1.2.3.3", "1.2.3.4")
+	cfg.KnownRangeLookup = func(ip string) (string, bool) { return "1.0.0.0/15", true } // way wider than KnownRangeMinPrefixBits
+
+	actions := ClrBlockPromote(cfg, state, now)
+	if len(actions) != 1 || actions[0].IP != "1.2.3.0/24" {
+		t.Fatalf("actions = %+v, want the naive /24 -- known match is too wide, treated as no match", actions)
+	}
+	if state.Blocks[0].has("1.0.0.0/15", now) {
+		t.Error("the too-wide known range should never be recorded")
+	}
+}
+
+func TestClrBlockPromote_KnownRangeExactlyAtMinPrefixBitsIsAccepted(t *testing.T) {
+	cfg, state, now := testConfig(), NewState(), time.Now()
+	cfg.KnownRangeMinPrefixBits = 18
+	addOK(state, 0, now, cfg.OKTTL, "1.2.3.1", "1.2.3.2", "1.2.3.3", "1.2.3.4")
+	cfg.KnownRangeLookup = func(ip string) (string, bool) { return "1.2.0.0/18", true } // exactly at the floor
+
+	actions := ClrBlockPromote(cfg, state, now)
+	if len(actions) != 1 || actions[0].IP != "1.2.0.0/18" {
+		t.Fatalf("actions = %+v, want the known /18 -- exactly at the floor, should be accepted", actions)
+	}
+}
+
+func TestClrBlockPromote_KnownRangeMinPrefixBitsZeroDisablesCap(t *testing.T) {
+	cfg, state, now := testConfig(), NewState(), time.Now()
+	cfg.KnownRangeMinPrefixBits = 0
+	addOK(state, 0, now, cfg.OKTTL, "1.2.3.1", "1.2.3.2", "1.2.3.3", "1.2.3.4")
+	cfg.KnownRangeLookup = func(ip string) (string, bool) { return "1.0.0.0/8", true } // absurdly wide, cap disabled so still accepted
+
+	actions := ClrBlockPromote(cfg, state, now)
+	if len(actions) != 1 || actions[0].IP != "1.0.0.0/8" {
+		t.Fatalf("actions = %+v, want the known /8 -- cap disabled (MinPrefixBits<=0)", actions)
+	}
+}
+
+func TestKnownRangeAcceptable(t *testing.T) {
+	cases := []struct {
+		cidr    string
+		minBits int
+		want    bool
+	}{
+		{"1.2.0.0/20", 18, true},
+		{"1.2.0.0/18", 18, true},  // exactly at the floor
+		{"1.2.0.0/17", 18, false}, // one bit too wide
+		{"1.0.0.0/8", 18, false},
+		{"1.0.0.0/8", 0, true},    // cap disabled
+		{"not-a-cidr", 18, false}, // defensive: unparseable input is rejected, not accepted
+	}
+	for _, c := range cases {
+		if got := knownRangeAcceptable(c.cidr, c.minBits); got != c.want {
+			t.Errorf("knownRangeAcceptable(%q, %d) = %v, want %v", c.cidr, c.minBits, got, c.want)
+		}
 	}
 }
 

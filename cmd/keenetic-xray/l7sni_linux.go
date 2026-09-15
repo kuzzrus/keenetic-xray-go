@@ -82,7 +82,25 @@ const (
 // feed a directly-detected IP into.
 func l7SNIClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 	cfg, err := config.Load(configPath())
-	if err != nil || !cfg.L7SNI.Enabled || !keenetic.Available() {
+	if err != nil {
+		logf("l7sni: config load failed, not starting: %v", err)
+		return
+	}
+	if !cfg.L7SNI.Enabled {
+		// Deliberately quiet: this is the ordinary "feature is off"
+		// case, checked on every daemon start regardless of whether the
+		// operator has ever touched l7sni at all -- see
+		// adaptiveRouteClassifyLoop's own equivalent check for the same
+		// reasoning. Found live (2026-09-15) that going all the way
+		// silent here made "did it actually turn on" indistinguishable
+		// from every real failure mode below during hardware testing --
+		// worth this one line even though it fires on most daemon
+		// starts.
+		logf("l7sni: disabled (transport l7sni on to enable)")
+		return
+	}
+	if !keenetic.Available() {
+		logf("l7sni: ndmc not found, not starting")
 		return
 	}
 

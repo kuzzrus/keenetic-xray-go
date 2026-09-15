@@ -76,6 +76,24 @@ const (
 	healthFailThreshold = 2
 )
 
+// adaptiveRouteOpTimeout bounds every individual ipset/iptables/conntrack
+// call adaptiveRouteClassifyLoop's own goroutine makes directly
+// (applyAdaptiveRouteActions; adaptiveRouteHealthCheck's recovery path
+// uses a longer budget of its own, see there) -- that same goroutine
+// also drives the classify ticker and the health-check ticker
+// (everything in its select loop runs sequentially), so an unbounded
+// external call hanging here doesn't just fail one action, it silently
+// freezes classification, health-checking, and logging for as long as
+// the hang lasts, with nothing to notice or recover. Found live on
+// hardware (2026-09-15): right after a wide known-range promotion swept
+// a burst of previously-untracked traffic into the redirect, both the
+// daemon's own live log and actual routing appeared to hang -- a
+// restart was the only way to recover. 5s is generous for what should
+// normally be a single-digit-millisecond ipset/conntrack call, while
+// still keeping the loop's own 500ms classifyInterval meaningfully
+// self-healing instead of stuck indefinitely on one bad call.
+const adaptiveRouteOpTimeout = 5 * time.Second
+
 // transportAdaptive is `keenetic-xray transport adaptive {show|on|off}`
 // -- Susanin Phase 2's native per-IP adaptive routing (see
 // docs/HANDOFF-susanin.md): a conntrack classifier (internal/classifier)
@@ -374,7 +392,15 @@ func adaptiveRouteHealthCheck(ctx context.Context, healthFails *int, failedOpen 
 			return
 		}
 		*failedOpen = true
-		if err := adaptiveroute.ClearRedirect(ctx); err != nil {
+		// 30s, not adaptiveRouteOpTimeout -- same budget as the recovery
+		// sequence below and applyAdaptiveRouteAtStartup/
+		// reconcileAdaptiveRoute's own equivalent calls, all of which run
+		// on this same classify-loop goroutine and must not be able to
+		// block it indefinitely (see adaptiveRouteOpTimeout's doc comment
+		// for the incident that found this gap).
+		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		if err := adaptiveroute.ClearRedirect(cctx); err != nil {
 			logf("adaptive-route: fail-open to DIRECT: clearing REDIRECT failed: %v", err)
 			return
 		}
@@ -388,16 +414,18 @@ func adaptiveRouteHealthCheck(ctx context.Context, healthFails *int, failedOpen 
 	}
 	*failedOpen = false
 
-	iface, _, err := adaptiveRouteLAN(ctx, cfg)
+	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	iface, _, err := adaptiveRouteLAN(cctx, cfg)
 	if err != nil {
 		logf("adaptive-route: egress healthy again, but re-asserting REDIRECT failed: %v", err)
 		return
 	}
-	if err := adaptiveroute.EnsureIPSet(ctx, adaptiveRouteIPSet); err != nil {
+	if err := adaptiveroute.EnsureIPSet(cctx, adaptiveRouteIPSet); err != nil {
 		logf("adaptive-route: egress healthy again, but ipset recreate failed: %v", err)
 		return
 	}
-	if err := adaptiveroute.EnsureRedirect(ctx, adaptiveroute.RedirectOptions{
+	if err := adaptiveroute.EnsureRedirect(cctx, adaptiveroute.RedirectOptions{
 		SetName:       adaptiveRouteIPSet,
 		Port:          cfg.AdaptiveRoute.EffectivePort(),
 		LANInterfaces: []string{iface},
@@ -420,20 +448,22 @@ func adaptiveRouteHealthCheck(ctx context.Context, healthFails *int, failedOpen 
 // event.
 func applyAdaptiveRouteActions(ctx context.Context, actions []classifier.Action, logf func(string, ...any)) {
 	for _, a := range actions {
+		actx, cancel := context.WithTimeout(ctx, adaptiveRouteOpTimeout)
 		switch a.Kind {
 		case classifier.ActionAddIP:
-			_ = adaptiveroute.AddIP(ctx, adaptiveRouteIPSet, a.IP, a.TTL)
+			_ = adaptiveroute.AddIP(actx, adaptiveRouteIPSet, a.IP, a.TTL)
 			if strings.Contains(a.IP, "/") {
 				logf("adaptive-route: redirecting subnet %s (block-promoted)", a.IP)
 			} else {
 				logf("adaptive-route: redirecting %s", a.IP)
 			}
 		case classifier.ActionRemoveIP:
-			_ = adaptiveroute.RemoveIP(ctx, adaptiveRouteIPSet, a.IP)
+			_ = adaptiveroute.RemoveIP(actx, adaptiveRouteIPSet, a.IP)
 			logf("adaptive-route: no longer redirecting %s", a.IP)
 		case classifier.ActionDeleteConntrack:
-			keenetic.DeleteConntrackFlow(ctx, a.Flow.Proto, a.Flow.Src, a.Flow.Dst, a.Flow.SPort, a.Flow.DPort)
+			keenetic.DeleteConntrackFlow(actx, a.Flow.Proto, a.Flow.Src, a.Flow.Dst, a.Flow.SPort, a.Flow.DPort)
 		}
+		cancel()
 	}
 }
 

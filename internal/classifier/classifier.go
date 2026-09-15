@@ -360,7 +360,10 @@ func judgeOK(cfg *Config, state *State, udp bool, f Flow, now time.Time) []Actio
 // the threshold on their own later. Two independently-crossing naive
 // blocks that resolve to the same known range simply converge on one
 // promotion: the second one's state.Blocks[i].has check (keyed by the
-// resolved range, not the naive block) finds it already current.
+// resolved range, not the naive block) finds it already current. A
+// match wider than cfg.KnownRangeMinPrefixBits is treated as no match
+// at all -- see that field's own doc comment for why a "known" range
+// isn't automatically a safe one to redirect wholesale.
 //
 // cfg.BlockThreshold <= 0 disables this pass outright -- the zero Config
 // would otherwise "promote" every OK address into its own /24 block
@@ -392,7 +395,7 @@ func ClrBlockPromote(cfg *Config, state *State, now time.Time) []Action {
 			}
 			promoted := block
 			if cfg.KnownRangeLookup != nil {
-				if known, ok := cfg.KnownRangeLookup(sample[block]); ok {
+				if known, ok := cfg.KnownRangeLookup(sample[block]); ok && knownRangeAcceptable(known, cfg.KnownRangeMinPrefixBits) {
 					promoted = known
 				}
 			}
@@ -404,6 +407,26 @@ func ClrBlockPromote(cfg *Config, state *State, now time.Time) []Action {
 		}
 	}
 	return actions
+}
+
+// knownRangeAcceptable reports whether cidr (a KnownRangeLookup match)
+// is narrow enough for ClrBlockPromote to actually use: its prefix must
+// be at least minBits long (i.e. the network no wider than a /minBits),
+// or minBits <= 0 (the cap disabled). See KnownRangeMinPrefixBits' own
+// doc comment for why this cap exists at all. An unparseable cidr is
+// rejected outright -- shouldn't happen for a well-formed
+// KnownRangeLookup, but this package treats external input defensively
+// throughout (see containingBlock).
+func knownRangeAcceptable(cidr string, minBits int) bool {
+	if minBits <= 0 {
+		return true
+	}
+	_, n, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return false
+	}
+	ones, _ := n.Mask.Size()
+	return ones >= minBits
 }
 
 // containingBlock returns addr's containing IPv4 network at bits prefix

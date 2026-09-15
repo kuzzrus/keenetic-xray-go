@@ -58,6 +58,29 @@ type Config struct {
 	// and just hands over its Lookup method. nil -> always use the
 	// blind guess, the original behavior every existing test exercises.
 	KnownRangeLookup func(ip string) (cidr string, ok bool)
+
+	// KnownRangeMinPrefixBits caps how wide a KnownRangeLookup match is
+	// allowed to widen a promotion: a match whose prefix is *shorter*
+	// than this (a wider network) is ignored, same as no match at all --
+	// falls back to the naive BlockCIDRBits guess. <= 0 disables the cap
+	// (any match, however wide, is accepted).
+	//
+	// Exists because "a known range" and "entirely dedicated to the one
+	// service that tripped the promotion" are not the same claim. A
+	// huge, multi-service provider publishes CIDR blocks covering its
+	// *entire* edge network -- search, mail, ads embedded on every other
+	// site, countless unrelated APIs -- not just the one CDN edge that
+	// was actually blocked. Confirmed live on hardware (2026-09-15):
+	// Google's own /15-/16 ranges got swept in by one promoted block,
+	// and multiple unrelated services (YouTube *and* Instagram) broke
+	// within the same minute -- the tunnel saturated with previously-
+	// fine-going-DIRECT traffic that this feature was never meant to
+	// touch. A single-purpose service's own published range (Telegram's
+	// /20, Meta's specific edge /18) doesn't carry that risk -- the
+	// whole thing really is the one thing that tripped the promotion --
+	// so the default here is deliberately narrow enough to keep those
+	// while rejecting a sprawling generic provider's own /15s and /16s.
+	KnownRangeMinPrefixBits int
 }
 
 // DefaultConfig mirrors config_set_defaults' thresholds (src/config.c)
@@ -77,6 +100,14 @@ func DefaultConfig() Config {
 		BlockCIDRBits:  24,
 		BlockThreshold: 4,
 		BlockTTL:       30 * time.Minute,
+
+		// 18: comfortably narrower than BlockCIDRBits (24) so a genuine
+		// widening still happens (Telegram's /20, Meta's specific edge
+		// /18 both pass), but excludes the /15s and /16s a sprawling
+		// generic provider (Google, confirmed live) publishes for its
+		// entire edge network -- see KnownRangeMinPrefixBits' own doc
+		// comment for the incident that set this default.
+		KnownRangeMinPrefixBits: 18,
 	}
 }
 

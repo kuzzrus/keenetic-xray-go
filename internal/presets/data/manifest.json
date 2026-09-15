@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated": "2026-09-10",
+  "generated": "2026-09-15",
   "categories": [
     "Мессенджеры",
     "Видео",
@@ -1064,8 +1064,8 @@
       "title": "Stripe",
       "category": "Финансы и крипта",
       "kind": "domains",
-      "count": 5,
-      "rev": "245e69b41050",
+      "count": 8,
+      "rev": "ef0b85bc36ca",
       "sources": [
         "Geo-Aggregator: stripe"
       ]
@@ -1149,8 +1149,8 @@
       "title": "TikTok",
       "category": "Видео",
       "kind": "domains",
-      "count": 36,
-      "rev": "b1960de67980",
+      "count": 37,
+      "rev": "60a16fdc57e0",
       "sources": [
         "Geo-Aggregator: tiktok"
       ]

@@ -31,32 +31,46 @@ var (
 	}
 )
 
-// EnsureNFLOGModule loads the kernel modules NFLOG needs if they aren't
-// already active: nfnetlink_log (the core netlink logging subsystem
-// Capture's own socket talks to) and xt_NFLOG (the iptables target
-// EnsureRules' own rules reference). Mirrors HydraRoute Neo's own
-// l7_firewall_load_nflog_modules/module_already_loaded, in the same
-// order.
+// requiredKmods is loaded, in order, by EnsureNFLOGModule: nfnetlink_log
+// (the core netlink logging subsystem Capture's own socket talks to),
+// then every iptables extension the rules EnsureRules installs actually
+// reference -- xt_NFLOG (the NFLOG target itself) and xt_connbytes/
+// xt_length (the `-m connbytes`/`-m length` matches ruleSpecs' own doc
+// comment explains are what keep this cheap enough to run on embedded
+// hardware in the first place).
 //
-// Found live (2026-09-15): EnsureRules failed outright with "iptables:
-// No chain/target/match by that name" on a real router until this was
-// done -- xt_NFLOG's .ko file was already present on disk
-// (/lib/modules/<release>/xt_NFLOG.ko) but never loaded. Unlike ipset/
+// Found live (2026-09-15): loading only nfnetlink_log+xt_NFLOG wasn't
+// enough -- EnsureRules still failed with the same generic "iptables:
+// No chain/target/match by that name" iptables gives for ANY missing
+// match or target, not only a missing NFLOG target specifically. The
+// manual test that first confirmed xt_NFLOG.ko loads and works
+// (`iptables -A FORWARD -j NFLOG --nflog-group N`, no other flags) had
+// no `-m connbytes`/`-m length` in it, so it never actually exercised
+// those two modules at all -- both turned out to have the exact same
+// "present on disk, never loaded, no opkg package for it" situation
+// already confirmed for xt_NFLOG.
+var requiredKmods = []string{"nfnetlink_log", "xt_NFLOG", "xt_connbytes", "xt_length"}
+
+// EnsureNFLOGModule loads every kernel module in requiredKmods that
+// isn't already active. Mirrors HydraRoute Neo's own
+// l7_firewall_load_nflog_modules/module_already_loaded. Unlike ipset/
 // conntrack (see internal/adaptiveroute's EnsureIPSetTool, internal/
 // keenetic's EnsureConntrackTool, both opkg-install their tool on
 // demand), this project's opkg feed doesn't carry a separate
-// installable package for either NFLOG module at all -- confirmed live,
-// `opkg list | grep -iE "kmod-ipt|kmod-nf|iptables-mod"` came back
-// empty. There is nothing to install here, only something to load.
+// installable package for any of these -- confirmed live, `opkg list |
+// grep -iE "kmod-ipt|kmod-nf|iptables-mod"` came back empty. There is
+// nothing to install here, only something to load.
 func EnsureNFLOGModule(ctx context.Context) error {
 	return ensureNFLOGModule(ctx, "/proc/modules")
 }
 
 func ensureNFLOGModule(ctx context.Context, procModulesPath string) error {
-	if err := loadKmodIfPresent(ctx, "nfnetlink_log", procModulesPath); err != nil {
-		return err
+	for _, name := range requiredKmods {
+		if err := loadKmodIfPresent(ctx, name, procModulesPath); err != nil {
+			return err
+		}
 	}
-	return loadKmodIfPresent(ctx, "xt_NFLOG", procModulesPath)
+	return nil
 }
 
 // loadKmodIfPresent insmods name.ko for the running kernel unless it's

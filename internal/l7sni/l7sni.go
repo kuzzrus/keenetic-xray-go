@@ -28,24 +28,25 @@ package l7sni
 
 import "encoding/binary"
 
-// ParseIPv4 extracts the L4 protocol, addresses, ports, and payload from
-// a raw IPv4 packet -- the shape NFLOG delivers (see nflog_capture in
-// Ground-Zerro/HydraRoute Neo for the netlink side this project doesn't
-// implement yet). IPv6 is out of scope, same as the rest of this
-// project's adaptive-routing stack (internal/classifier, internal/
-// adaptiveroute, internal/knownranges are all IPv4-only today).
+// ParseIPv4 extracts the L4 protocol, addresses, ports, TCP sequence
+// number, and payload from a raw IPv4 packet -- the shape NFLOG
+// delivers (see internal/l7capture). IPv6 is out of scope, same as the
+// rest of this project's adaptive-routing stack (internal/classifier,
+// internal/adaptiveroute, internal/knownranges are all IPv4-only
+// today). seq is only meaningful for TCP (proto 6) -- a caller feeding
+// Reassembler needs it to place a segment; it's always 0 for UDP.
 //
 // ok is false for anything this package has no use for: not IPv4, a
 // truncated header, IP options present (rare for the TCP/UDP traffic
 // this cares about, and correctly handling them isn't worth the extra
 // surface), or a protocol other than TCP/UDP.
-func ParseIPv4(pkt []byte) (proto uint8, src, dst [4]byte, sport, dport uint16, payload []byte, ok bool) {
+func ParseIPv4(pkt []byte) (proto uint8, src, dst [4]byte, sport, dport uint16, seq uint32, payload []byte, ok bool) {
 	if len(pkt) < 20 || pkt[0]>>4 != 4 {
-		return 0, src, dst, 0, 0, nil, false
+		return 0, src, dst, 0, 0, 0, nil, false
 	}
 	ihl := int(pkt[0]&0x0f) * 4
 	if ihl < 20 || len(pkt) < ihl {
-		return 0, src, dst, 0, 0, nil, false
+		return 0, src, dst, 0, 0, 0, nil, false
 	}
 	proto = pkt[9]
 	copy(src[:], pkt[12:16])
@@ -55,23 +56,24 @@ func ParseIPv4(pkt []byte) (proto uint8, src, dst [4]byte, sport, dport uint16, 
 	switch proto {
 	case 6: // TCP
 		if len(l4) < 20 {
-			return 0, src, dst, 0, 0, nil, false
+			return 0, src, dst, 0, 0, 0, nil, false
 		}
 		sport = binary.BigEndian.Uint16(l4[0:2])
 		dport = binary.BigEndian.Uint16(l4[2:4])
+		seq = binary.BigEndian.Uint32(l4[4:8])
 		dataOff := int(l4[12]>>4) * 4
 		if dataOff < 20 || len(l4) < dataOff {
-			return 0, src, dst, 0, 0, nil, false
+			return 0, src, dst, 0, 0, 0, nil, false
 		}
-		return proto, src, dst, sport, dport, l4[dataOff:], true
+		return proto, src, dst, sport, dport, seq, l4[dataOff:], true
 	case 17: // UDP
 		if len(l4) < 8 {
-			return 0, src, dst, 0, 0, nil, false
+			return 0, src, dst, 0, 0, 0, nil, false
 		}
 		sport = binary.BigEndian.Uint16(l4[0:2])
 		dport = binary.BigEndian.Uint16(l4[2:4])
-		return proto, src, dst, sport, dport, l4[8:], true
+		return proto, src, dst, sport, dport, 0, l4[8:], true
 	default:
-		return 0, src, dst, 0, 0, nil, false
+		return 0, src, dst, 0, 0, 0, nil, false
 	}
 }

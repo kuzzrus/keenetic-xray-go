@@ -63,6 +63,7 @@ func reconcileOnce(ctx context.Context, logf func(string, ...any)) {
 	reconcileDNS(ctx, cfg, logf)
 	reconcileSusanin(ctx, logf)
 	reconcileAdaptiveRoute(ctx, cfg, logf)
+	reconcileL7SNI(ctx, cfg, logf)
 	reconcileWatchdog(logf)
 }
 

@@ -470,6 +470,24 @@ func (a AdaptiveRouteConfig) EffectivePort() int {
 	return DefaultAdaptiveRoutePort
 }
 
+// L7SNIConfig is L7 hostname detection: an NFLOG capture reading the
+// TLS ClientHello SNI / plaintext HTTP Host straight off the wire
+// (internal/l7sni, internal/l7capture), so a domain from the operator's
+// own Routing lists gets caught and redirected even when this router's
+// own DNS never sees the resolution at all -- DoH/DoT clients, apps
+// with a hardcoded destination IP. A match feeds the same adaptive-
+// routing ipset internal/classifier's conntrack-based detector uses
+// (internal/adaptiveroute), not Routing's own NDM `object-group fqdn`
+// dataplane -- that one is populated by the router's own DNS proxy
+// seeing a resolution happen, which is exactly what this feature exists
+// to route around, so it isn't a mechanism a manually-detected IP can
+// feed into directly. QUIC is deliberately out of scope -- see the
+// l7sni-build-plan memory for why (real per-version AEAD decrypt, and a
+// hard blind spot from Encrypted Client Hello).
+type L7SNIConfig struct {
+	Enabled bool `json:"enabled"`
+}
+
 func (a AdaptiveRouteConfig) EffectiveOKTTL() time.Duration {
 	if a.OKTTLHours > 0 {
 		return time.Duration(a.OKTTLHours) * time.Hour
@@ -624,6 +642,10 @@ type Config struct {
 	// is opkg-managed, outside this package's reach) but documented at
 	// both surfaces.
 	AdaptiveRoute AdaptiveRouteConfig `json:"adaptive_route,omitempty"`
+
+	// L7SNI is L7 hostname detection -- see L7SNIConfig's own doc
+	// comment. Off by default.
+	L7SNI L7SNIConfig `json:"l7_sni,omitempty"`
 
 	// XrayCoreTag pins which vendored Xray-core release this router
 	// tracks. Empty -> xraycore.DefaultTag (the stable pin). Set to an

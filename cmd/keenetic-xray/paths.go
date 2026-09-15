@@ -74,6 +74,15 @@ func adaptiveRouteStatePath() string {
 	return envOr("KEENETIC_XRAY_ADAPTIVE_ROUTE_STATE", logDir()+"/adaptive-route-state.json")
 }
 
+// knownRangesCachePath is where knownRangesRefreshLoop keeps its daily-
+// refreshed copy of internal/knownranges' source list (lord-alfred/
+// ipranges), so ClrBlockPromote's KnownRangeLookup has something to
+// consult from the first classify tick after a restart, before the
+// first background refresh of a given run has had a chance to complete.
+func knownRangesCachePath() string {
+	return envOr("KEENETIC_XRAY_KNOWN_RANGES_CACHE", logDir()+"/known-ranges.txt")
+}
+
 const defaultOptPath = "/opt"
 
 func optPath() string {

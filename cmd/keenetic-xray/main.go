@@ -225,6 +225,7 @@ func cmdDaemon(args []string) error {
 	}
 	go routerReconcileLoop(ctx, logf)
 	go presetRefreshLoop(ctx, logf, presetDrift)
+	go knownRangesRefreshLoop(ctx, logf)
 	startQualitySweep(ctx, cfg, logf)
 	watchReconcileSignal(ctx, func() { reconcileOnce(ctx, logf) }) // SIGUSR1 from the netfilter.d hook
 

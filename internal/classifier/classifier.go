@@ -349,6 +349,19 @@ func judgeOK(cfg *Config, state *State, udp bool, f Flow, now time.Time) []Actio
 // an already-current block from producing a new Action (and a new log
 // line) on every single tick.
 //
+// cfg.BlockCIDRBits is a blind guess -- a fixed width applied everywhere
+// with no idea whether a given provider's real allocation is wider or
+// narrower. Before finalizing a threshold-crossing block, this pass
+// gives cfg.KnownRangeLookup (if set) one confirmed address from it: a
+// match there is a real, known boundary rather than a guess, and that
+// wider range is what actually gets promoted and recorded -- one large
+// provider's whole allocation redirected from a single /24's worth of
+// confirmed evidence, instead of leaving its other /24s to each cross
+// the threshold on their own later. Two independently-crossing naive
+// blocks that resolve to the same known range simply converge on one
+// promotion: the second one's state.Blocks[i].has check (keyed by the
+// resolved range, not the naive block) finds it already current.
+//
 // cfg.BlockThreshold <= 0 disables this pass outright -- the zero Config
 // would otherwise "promote" every OK address into its own /24 block
 // immediately, which is never what an unconfigured Config should do.
@@ -359,20 +372,35 @@ func ClrBlockPromote(cfg *Config, state *State, now time.Time) []Action {
 	var actions []Action
 	for i := 0; i < 2; i++ {
 		counts := map[string]int{}
+		sample := map[string]string{} // naive block -> one confirmed address inside it, for KnownRangeLookup
 		for addr, exp := range state.OK[i] {
 			if !exp.After(now) {
 				continue
 			}
-			if block, ok := containingBlock(addr, cfg.BlockCIDRBits); ok {
-				counts[block]++
+			block, ok := containingBlock(addr, cfg.BlockCIDRBits)
+			if !ok {
+				continue
+			}
+			counts[block]++
+			if _, seen := sample[block]; !seen {
+				sample[block] = addr
 			}
 		}
 		for block, n := range counts {
-			if n < cfg.BlockThreshold || state.Blocks[i].has(block, now) {
+			if n < cfg.BlockThreshold {
 				continue
 			}
-			state.Blocks[i].add(block, now, cfg.BlockTTL)
-			actions = append(actions, Action{Kind: ActionAddIP, IP: block, TTL: cfg.BlockTTL})
+			promoted := block
+			if cfg.KnownRangeLookup != nil {
+				if known, ok := cfg.KnownRangeLookup(sample[block]); ok {
+					promoted = known
+				}
+			}
+			if state.Blocks[i].has(promoted, now) {
+				continue
+			}
+			state.Blocks[i].add(promoted, now, cfg.BlockTTL)
+			actions = append(actions, Action{Kind: ActionAddIP, IP: promoted, TTL: cfg.BlockTTL})
 		}
 	}
 	return actions

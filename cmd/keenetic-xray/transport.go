@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
+	"github.com/kuzzrus/keenetic-xray-go/internal/knownranges"
 )
 
 // cmdTransport tweaks how the VLESS tunnel's transport behaves.
@@ -100,8 +101,8 @@ func printTransport(cfg *config.Config) {
 	}
 
 	if cfg.AdaptiveRoute.Enabled {
-		fmt.Printf("адаптивная маршрутизация: вкл — порт :%d, TTL подтверждённых адресов %s\n",
-			cfg.AdaptiveRoute.EffectivePort(), cfg.AdaptiveRoute.EffectiveOKTTL())
+		fmt.Printf("адаптивная маршрутизация: вкл — порт :%d, TTL подтверждённых адресов %s, известных диапазонов %d\n",
+			cfg.AdaptiveRoute.EffectivePort(), cfg.AdaptiveRoute.EffectiveOKTTL(), knownranges.CurrentLen())
 	} else {
 		fmt.Println("адаптивная маршрутизация: выкл")
 	}

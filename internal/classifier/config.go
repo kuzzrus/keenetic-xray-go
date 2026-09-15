@@ -44,6 +44,20 @@ type Config struct {
 	BlockCIDRBits  int
 	BlockThreshold int
 	BlockTTL       time.Duration
+
+	// KnownRangeLookup, when set, lets ClrBlockPromote check a
+	// newly-threshold-crossing block against a table of publicly known
+	// infrastructure ranges (internal/knownranges, sourced from lord-
+	// alfred/ipranges) before falling back to the blind BlockCIDRBits
+	// guess. A large provider's real allocation is often much wider than
+	// one /24 -- when the lookup finds a match, that wider, real
+	// boundary is what gets promoted and recorded instead. Kept as an
+	// injected pure function rather than a direct dependency so this
+	// package stays free of any I/O of its own (see the package doc
+	// comment): the caller owns fetching/caching/refreshing the table
+	// and just hands over its Lookup method. nil -> always use the
+	// blind guess, the original behavior every existing test exercises.
+	KnownRangeLookup func(ip string) (cidr string, ok bool)
 }
 
 // DefaultConfig mirrors config_set_defaults' thresholds (src/config.c)

@@ -16,6 +16,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"syscall"
+	"time"
 )
 
 // nflogCopyRange/nflogBufSize are the per-packet copy size and the
@@ -62,6 +63,25 @@ type Capture struct {
 	recvBuf []byte
 }
 
+// handshakeTimeout bounds Open's blocking config-command reads (see
+// sendAndAck). Found live (2026-09-15): with no bound at all, a kernel
+// that never sends back the ack one of these requests expects would
+// hang l7SNIClassifyLoop's entire startup goroutine forever -- no
+// error, nothing to log, indistinguishable in the log from every other
+// startup step. Cleared again once every handshake call in Open has
+// gone through (see the end of Open): Read's own main packet loop must
+// keep blocking indefinitely on this same fd, that's the entire point
+// of NFLOG's queue, and this timeout must not leak into that.
+const handshakeTimeout = 5 * time.Second
+
+// setRecvTimeout sets (d > 0) or clears (d == 0, meaning block forever
+// -- standard Linux socket semantics for SO_RCVTIMEO) fd's receive
+// timeout.
+func setRecvTimeout(fd int, d time.Duration) error {
+	tv := syscall.NsecToTimeval(d.Nanoseconds())
+	return syscall.SetsockoptTimeval(fd, syscall.SOL_SOCKET, syscall.SO_RCVTIMEO, &tv)
+}
+
 // Open binds to nflogGroup and configures it for packet capture.
 // Mirrors HydraRoute Neo's own nflog_capture_init step for step:
 // unbind then rebind the AF_INET and AF_INET6 protocol families first
@@ -74,6 +94,10 @@ func Open(nflogGroup uint16) (*Capture, error) {
 	fd, err := syscall.Socket(syscall.AF_NETLINK, syscall.SOCK_RAW|syscall.SOCK_CLOEXEC, syscall.NETLINK_NETFILTER)
 	if err != nil {
 		return nil, fmt.Errorf("l7capture: socket: %w", err)
+	}
+	if err := setRecvTimeout(fd, handshakeTimeout); err != nil {
+		syscall.Close(fd)
+		return nil, fmt.Errorf("l7capture: setting handshake timeout: %w", err)
 	}
 	if err := syscall.Bind(fd, &syscall.SockaddrNetlink{Family: syscall.AF_NETLINK}); err != nil {
 		syscall.Close(fd)
@@ -103,6 +127,10 @@ func Open(nflogGroup uint16) (*Capture, error) {
 	if err := c.sendAndAck(buildConfigMode(c.nextSeq(), c.portID, nflogGroup, nflogCopyRange, nflogBufSize)); err != nil {
 		syscall.Close(fd)
 		return nil, fmt.Errorf("l7capture: set mode on group %d: %w", nflogGroup, err)
+	}
+	if err := setRecvTimeout(fd, 0); err != nil {
+		syscall.Close(fd)
+		return nil, fmt.Errorf("l7capture: clearing handshake timeout: %w", err)
 	}
 	return c, nil
 }

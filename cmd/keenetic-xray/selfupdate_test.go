@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -72,6 +73,69 @@ func TestWatchPostUpdate_Unhealthy_KeepsMarkerAndWarns(t *testing.T) {
 	}
 	if _, present := selfupdate.ReadMarker(path); !present {
 		t.Error("marker must be kept so `internal self-rollback` can use it")
+	}
+}
+
+func TestMarkerIsFreshForRollback(t *testing.T) {
+	fresh := selfupdate.Marker{PrevVersion: "0.26.6", StartedAt: time.Now()}
+	if !markerIsFreshForRollback(fresh, true, "0.31.7") {
+		t.Error("a fresh marker for a different version should count as fresh")
+	}
+	if markerIsFreshForRollback(selfupdate.Marker{}, false, "0.31.7") {
+		t.Error("no marker at all should never count as fresh")
+	}
+	stale := selfupdate.Marker{PrevVersion: "0.26.6", StartedAt: time.Now().Add(-30 * time.Minute)}
+	if markerIsFreshForRollback(stale, true, "0.31.7") {
+		t.Error("a marker older than autoRollbackMarkerWindow should not count as fresh")
+	}
+	alreadyBack := selfupdate.Marker{PrevVersion: "0.31.7", StartedAt: time.Now()}
+	if markerIsFreshForRollback(alreadyBack, true, "0.31.7") {
+		t.Error("a marker whose PrevVersion already matches the running version should not count as fresh")
+	}
+}
+
+func TestWatchAutoRollbackNotice_NoNotice(t *testing.T) {
+	t.Setenv("KEENETIC_XRAY_AUTOROLLBACK_NOTICE", filepath.Join(t.TempDir(), "none.json"))
+	out := make(chan botcontrol.Event, 1)
+	watchAutoRollbackNotice(context.Background(), out)
+	if _, ok := <-out; ok {
+		t.Error("no notice file -> no event, channel just closes")
+	}
+}
+
+func TestWatchAutoRollbackNotice_SendsEventAndClearsFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "auto-rollback-notice.json")
+	t.Setenv("KEENETIC_XRAY_AUTOROLLBACK_NOTICE", path)
+	if err := writeAutoRollbackNotice("0.32.0", "0.31.7"); err != nil {
+		t.Fatal(err)
+	}
+
+	out := make(chan botcontrol.Event, 1)
+	watchAutoRollbackNotice(context.Background(), out)
+
+	ev, ok := drainOne(t, out)
+	if !ok || !strings.Contains(ev.Text, "0.32.0") || !strings.Contains(ev.Text, "0.31.7") {
+		t.Errorf("want an event naming both versions, got %+v ok=%v", ev, ok)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("notice file should be removed once consumed")
+	}
+}
+
+func TestWatchAutoRollbackNotice_MalformedFileIsSilentlyDropped(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "auto-rollback-notice.json")
+	t.Setenv("KEENETIC_XRAY_AUTOROLLBACK_NOTICE", path)
+	if err := os.WriteFile(path, []byte("not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := make(chan botcontrol.Event, 1)
+	watchAutoRollbackNotice(context.Background(), out)
+	if _, ok := <-out; ok {
+		t.Error("malformed notice -> no event")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("malformed notice file should still be removed, not reprocessed forever")
 	}
 }
 

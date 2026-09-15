@@ -2,7 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/botcontrol"
@@ -98,5 +102,121 @@ func cmdSelfRollback(args []string) error {
 	defer cancel()
 	return selfupdate.Rollback(ctx, selfUpdateMarkerPath(), selfupdate.RollbackOptions{
 		Log: func(format string, a ...any) { fmt.Printf(format+"\n", a...) },
+	})
+}
+
+// autoRollbackMarkerWindow mirrors watchPostUpdate's own 15-minute
+// staleness check: a marker older than this (or already matching the
+// currently-running version) isn't evidence of a live, still-unresolved
+// update -- it's a leftover from something else, and a watchdog restart
+// while it happens to still exist isn't this update's fault.
+const autoRollbackMarkerWindow = 15 * time.Minute
+
+// markerIsFreshForRollback decides whether a daemon restart happening
+// right now, with marker m on disk, counts as evidence this specific
+// update broke startup -- factored out of cmdWatchdogRestartHook so the
+// decision itself (no I/O, no rollback attempt) is unit-testable on its
+// own, mirroring watchPostUpdate's identical staleness reasoning: ok
+// must be true (a marker exists at all), it must be no older than
+// autoRollbackMarkerWindow, and its PrevVersion must actually differ
+// from currentVersion -- if they already match, either a rollback (or
+// the update itself) already landed and this marker is just stale
+// leftover from a stage that's already resolved.
+func markerIsFreshForRollback(m selfupdate.Marker, ok bool, currentVersion string) bool {
+	return ok && time.Since(m.StartedAt) <= autoRollbackMarkerWindow && m.PrevVersion != currentVersion
+}
+
+// cmdWatchdogRestartHook is what the watchdog's cron script calls
+// instead of a bare `<initScript> start` whenever it finds the daemon
+// not running (see internal/install.writeWatchdogScript). If a
+// self-update marker is present and fresh, the daemon being down right
+// now is treated as evidence *this specific update* broke startup --
+// rather than blindly restart the same broken build every 2 minutes
+// forever, this rolls back to the version the marker recorded instead
+// (Rollback's own postinst restarts the daemon, so nothing else is
+// needed on success). Any other case -- no marker, a stale one, or the
+// rollback attempt itself failing -- falls through to an ordinary
+// `<initScript> start`, so a plain crash unrelated to any update is
+// still just a plain restart, never a rollback.
+//
+// Runs as its own one-shot process spawned by cron, deliberately not as
+// code inside the long-running daemon: if the new build is broken badly
+// enough that it can never even start, there is no running daemon
+// process left to notice or react -- the logic has to live somewhere
+// that keeps working regardless of whether that specific binary can run
+// at all, which a freshly separately-invoked `internal` subcommand is.
+func cmdWatchdogRestartHook(args []string) error {
+	if len(args) != 0 {
+		return fmt.Errorf("usage: keenetic-xray internal watchdog-restart-hook")
+	}
+	markerPath := selfUpdateMarkerPath()
+	m, ok := selfupdate.ReadMarker(markerPath)
+	fresh := markerIsFreshForRollback(m, ok, trimV(version.Version))
+
+	if fresh {
+		fmt.Printf("watchdog: daemon down with an unresolved update marker (%s -> %s, started %s ago) -- rolling back instead of restarting\n",
+			m.PrevVersion, trimV(version.Version), time.Since(m.StartedAt).Round(time.Second))
+		rctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		err := selfupdate.Rollback(rctx, markerPath, selfupdate.RollbackOptions{
+			Log: func(format string, a ...any) { fmt.Printf(format+"\n", a...) },
+		})
+		cancel()
+		if err == nil {
+			if nerr := writeAutoRollbackNotice(trimV(version.Version), m.PrevVersion); nerr != nil {
+				fmt.Printf("watchdog: rollback succeeded but couldn't record a notice for the next boot: %v\n", nerr)
+			}
+			return nil // Rollback's own postinst already restarts the daemon
+		}
+		fmt.Printf("watchdog: auto-rollback failed (%v) -- falling back to a normal restart of the current build\n", err)
+	}
+
+	out, err := exec.Command(initScript, "start").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s start: %w: %s", initScript, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// autoRollbackNotice is what cmdWatchdogRestartHook leaves behind after a
+// successful auto-rollback -- Rollback itself already clears the
+// self-update marker on success, so by the time the rolled-back build's
+// own watchAutoRollbackNotice goroutine runs (next boot), the marker is
+// long gone and can't be what carries this news forward.
+type autoRollbackNotice struct {
+	BadVersion   string    `json:"bad_version"`    // the update that broke startup and got rolled back
+	RolledBackTo string    `json:"rolled_back_to"` // the version now running again
+	At           time.Time `json:"at"`
+}
+
+func writeAutoRollbackNotice(badVersion, rolledBackTo string) error {
+	b, err := json.Marshal(autoRollbackNotice{BadVersion: badVersion, RolledBackTo: rolledBackTo, At: time.Now()})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(autoRollbackNoticePath(), b, 0o644)
+}
+
+// watchAutoRollbackNotice runs once at daemon startup, the same shape as
+// watchPostUpdate: if the watchdog had to auto-rollback a bad update
+// before this process ever got a chance to run, tell the operator now
+// instead of leaving it to be found by chance in the log. A missing or
+// unreadable notice file is the common case (no rollback happened) and
+// not an error -- just nothing to report.
+func watchAutoRollbackNotice(ctx context.Context, out chan<- botcontrol.Event) {
+	defer close(out)
+	path := autoRollbackNoticePath()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	_ = os.Remove(path)
+	var n autoRollbackNotice
+	if json.Unmarshal(b, &n) != nil {
+		return
+	}
+	send(ctx, out, botcontrol.Event{
+		Kind: "self_update",
+		Text: fmt.Sprintf("♻️ автоматический откат: обновление до %s не смогло запуститься, watchdog откатил обратно на %s", n.BadVersion, n.RolledBackTo),
+		Time: time.Now(),
 	})
 }

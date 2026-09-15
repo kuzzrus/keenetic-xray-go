@@ -59,7 +59,7 @@ func SetWatchdogCron(cronFile, scriptPath, initScript, logFile string, enabled b
 	}
 
 	if enabled {
-		if err := writeWatchdogScript(scriptPath, initScript, logFile); err != nil {
+		if err := writeWatchdogScript(scriptPath, initScript, logFile, selfBinaryPath()); err != nil {
 			return err
 		}
 	} else if err := os.Remove(scriptPath); err != nil && !os.IsNotExist(err) {
@@ -92,24 +92,47 @@ func SetWatchdogCron(cronFile, scriptPath, initScript, logFile string, enabled b
 	return nil
 }
 
+// selfBinaryPath resolves the currently-running keenetic-xray binary's
+// own path via os.Executable, falling back to the install layout's
+// fixed path (the same literal packaging/ipk/postinst already uses) if
+// that somehow fails. SetWatchdogCron always runs *as* the keenetic-xray
+// binary itself (postinst, `watchdog enable`, or the bot's own process),
+// so this reliably finds the right thing for the watchdog script to
+// invoke -- no need to thread a binary path through every caller.
+func selfBinaryPath() string {
+	if p, err := os.Executable(); err == nil {
+		return p
+	}
+	return "/opt/sbin/keenetic-xray"
+}
+
 // writeWatchdogScript (re)generates the tiny shell script the cron entry
 // invokes. Kept deliberately dumb -- one status check, one conditional
-// log line, one start -- so the interesting part (when it runs, what a
-// non-empty log means) stays documented on SetWatchdogCron rather than
+// log line, one hook call -- so the interesting part (when it runs, what
+// a non-empty log means) stays documented on SetWatchdogCron rather than
 // spread across a shell file nobody reads.
-func writeWatchdogScript(scriptPath, initScript, logFile string) error {
+//
+// Calls `<binaryPath> internal watchdog-restart-hook` rather than a bare
+// `<initScript> start`: that hook is what actually decides between an
+// ordinary restart and rolling back a self-update that never managed to
+// come up (see cmd/keenetic-xray's cmdWatchdogRestartHook) -- keeping
+// that decision in Go, not shell, is what keeps it unit-testable, the
+// same reasoning SetWatchdogCron's own doc comment already gives for
+// EnsureCron/SetWatchdogCron themselves.
+func writeWatchdogScript(scriptPath, initScript, logFile, binaryPath string) error {
 	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o755); err != nil {
 		return fmt.Errorf("creating script directory: %w", err)
 	}
 	body := fmt.Sprintf(`#!/bin/sh
 # %s -- managed by keenetic-xray; regenerated on every install and on
 # `+"`watchdog enable`"+`, so local edits here do not stick. Restarts the
-# failover daemon if its init script reports it stopped; appends to the
-# log only on an actual restart, never on a healthy tick.
+# failover daemon if its init script reports it stopped (or rolls back a
+# bad self-update instead -- see internal watchdog-restart-hook); appends
+# to the log only on an actual restart, never on a healthy tick.
 %s status >/dev/null 2>&1 && exit 0
 echo "$(date '+%%Y-%%m-%%d %%H:%%M:%%S') restarting -- status check failed" >> %s
-%s start >/dev/null 2>&1
-`, WatchdogMarker, initScript, logFile, initScript)
+%s internal watchdog-restart-hook >/dev/null 2>&1
+`, WatchdogMarker, initScript, logFile, binaryPath)
 	if err := os.WriteFile(scriptPath, []byte(body), 0o755); err != nil {
 		return fmt.Errorf("writing %s: %w", scriptPath, err)
 	}

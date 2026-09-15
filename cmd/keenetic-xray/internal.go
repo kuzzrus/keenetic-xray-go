@@ -19,7 +19,7 @@ import (
 // scripts call -- not meant for interactive use.
 func cmdInternal(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: keenetic-xray internal {postinst-setup|prerm-cleanup|ensure-xray-core|ensure-naive-core|self-rollback} [args]")
+		return fmt.Errorf("usage: keenetic-xray internal {postinst-setup|prerm-cleanup|ensure-xray-core|ensure-naive-core|self-rollback|watchdog-restart-hook} [args]")
 	}
 	switch args[0] {
 	case "postinst-setup":
@@ -32,6 +32,8 @@ func cmdInternal(args []string) error {
 		return cmdEnsureNaiveCore(args[1:])
 	case "self-rollback":
 		return cmdSelfRollback(args[1:])
+	case "watchdog-restart-hook":
+		return cmdWatchdogRestartHook(args[1:])
 	default:
 		return fmt.Errorf("unknown internal subcommand %q", args[0])
 	}

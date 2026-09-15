@@ -6,6 +6,7 @@ import (
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/addons"
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
+	"github.com/kuzzrus/keenetic-xray-go/internal/install"
 	"github.com/kuzzrus/keenetic-xray-go/internal/keenetic"
 )
 
@@ -62,6 +63,43 @@ func reconcileOnce(ctx context.Context, logf func(string, ...any)) {
 	reconcileDNS(ctx, cfg, logf)
 	reconcileSusanin(ctx, logf)
 	reconcileAdaptiveRoute(ctx, cfg, logf)
+	reconcileWatchdog(logf)
+}
+
+// reconcileWatchdog re-establishes cron when the watchdog's own crontab
+// entry exists but nothing is actually running to fire it. Found live
+// (2026-09-15): a router whose very first cron install silently failed
+// at postinst time (best-effort, only ever printed a warning to a
+// terminal nobody was watching -- and during a self-update specifically,
+// printed from a process that's already been killed by the old
+// package's own prerm by the time postinst runs, so there was never
+// anyone to see it even in principle) kept the watchdog's crontab
+// *entry* forever regardless -- SetWatchdogCron just writes a text file,
+// it doesn't need a cron daemon to do that part. Completely inert:
+// `keenetic-xray watchdog show` reported the entry as present the whole
+// time, and the operator's only safety net for "the daemon didn't come
+// back after a self-update" silently did nothing, discovered only when
+// it was actually needed and didn't fire.
+//
+// Unlike the other reconcile steps here, cron has nothing to do with
+// ndmc -- this only rides reconcileOnce's existing keenetic.Available()
+// gate rather than running on its own schedule because this project
+// only ever runs on Keenetic hardware anyway, not because it's Keenetic-
+// specific in any real sense.
+func reconcileWatchdog(logf func(string, ...any)) {
+	enabled, err := install.WatchdogEnabled(cronFilePath())
+	if err != nil || !enabled {
+		return // never turned on -- an explicit choice, not drift to fix
+	}
+	if install.CronRunning() {
+		return
+	}
+	logf("watchdog: cron daemon not running, entry is inert -- reinstalling cron")
+	if _, err := watchdogEnable(); err != nil {
+		logf("watchdog: could not re-establish cron: %v", err)
+		return
+	}
+	logf("watchdog: cron reinstalled and running again")
 }
 
 // reconcileSusanin gets susanin running again if the operator has it

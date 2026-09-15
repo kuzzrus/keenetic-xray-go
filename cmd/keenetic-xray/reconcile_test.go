@@ -36,6 +36,27 @@ func TestReconcileSteps_NoRouterIsNoop(t *testing.T) {
 	reconcileMSSClamp(ctx, cfg, logf)
 	reconcileSusanin(ctx, logf)
 	reconcileAdaptiveRoute(ctx, cfg, logf)
+	reconcileWatchdog(logf)
+}
+
+// TestReconcileWatchdog_NotEnabledIsNoop is the regression test for a
+// real incident (2026-09-15): a router whose very first cron install
+// silently failed kept the watchdog's crontab *entry* forever (writing
+// it doesn't need a cron daemon), completely inert -- `watchdog show`
+// reported it present the whole time, but nothing was ever running to
+// fire it. reconcileWatchdog's fix path only matters once the entry
+// actually exists; this proves the "never turned on at all" case (a
+// deliberate choice, not drift) stays a true no-op regardless -- it
+// must never try to install cron on a router that never asked for the
+// watchdog in the first place.
+func TestReconcileWatchdog_NotEnabledIsNoop(t *testing.T) {
+	t.Setenv("KEENETIC_XRAY_CRON_FILE", filepath.Join(t.TempDir(), "crontabs-root")) // deliberately absent
+
+	var logged []string
+	reconcileWatchdog(func(format string, args ...any) { logged = append(logged, format) })
+	if len(logged) != 0 {
+		t.Errorf("logged %v, want no action when the watchdog entry was never enabled", logged)
+	}
 }
 
 // Same as above for the classifier's own loop: without ndmc it must sit

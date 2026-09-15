@@ -45,6 +45,19 @@ func reconcileL7SNI(ctx context.Context, cfg *config.Config, logf func(string, .
 	if l7capture.RulesInPlace(cctx, opts) {
 		return
 	}
+	// Found live (2026-09-15): without this, a router where the NFLOG
+	// kernel modules never got loaded (l7SNIClassifyLoop's own startup
+	// hung before reaching that point -- see l7sniStartupTimeout's doc
+	// comment) left reconcile retrying EnsureRules and failing with the
+	// same "No chain/target/match by that name" error every
+	// reconcileInterval tick forever, never once addressing the actual
+	// cause. Same ensure-before-add sequence as l7SNIClassifyLoop's own
+	// startup; cheap once the modules are actually loaded (EnsureNFLOGModule
+	// is a no-op check against /proc/modules in that case).
+	if err := l7capture.EnsureNFLOGModule(cctx); err != nil {
+		logf("l7sni: reconcile: loading NFLOG kernel modules failed: %v", err)
+		return
+	}
 	if err := l7capture.EnsureRules(cctx, opts); err != nil {
 		logf("l7sni: reconcile failed: %v", err)
 		return
@@ -68,6 +81,20 @@ const (
 	l7sniReassembleMaxAge  = 5 * time.Second
 	l7sniReassembleMaxSize = 16384
 )
+
+// l7sniStartupTimeout bounds each individual step of l7SNIClassifyLoop's
+// startup sequence below. Found live (2026-09-15): none of these calls
+// had a bound before this -- EnsureNFLOGModule and EnsureRules were
+// given the raw, never-cancelled daemon context, so a kernel-module
+// load or an iptables call that didn't return promptly would hang this
+// entire goroutine forever with nothing logged (not even a failure),
+// while the independent reconcileL7SNI kept retrying and failing with
+// "No chain/target/match by that name" every reconcileInterval tick
+// since the goroutine that was supposed to load the module never got
+// that far. Each step now gets its own bounded context and its own
+// "about to do X" log line, so a future hang is at least immediately
+// localized to one step instead of producing total silence again.
+const l7sniStartupTimeout = 15 * time.Second
 
 // l7SNIClassifyLoop runs L7 hostname detection end to end: brings up
 // the NFLOG capture and its iptables rules once (only if
@@ -109,7 +136,11 @@ func l7SNIClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 	// modules NFLOG needs are actually loaded -- this project's opkg
 	// feed doesn't carry a separate installable package for either one,
 	// see EnsureNFLOGModule's own doc comment for the full story.
-	if err := l7capture.EnsureNFLOGModule(ctx); err != nil {
+	logf("l7sni: loading NFLOG kernel modules")
+	mctx, mcancel := context.WithTimeout(ctx, l7sniStartupTimeout)
+	err = l7capture.EnsureNFLOGModule(mctx)
+	mcancel()
+	if err != nil {
 		logf("l7sni: loading NFLOG kernel modules failed: %v", err)
 		return
 	}
@@ -119,10 +150,17 @@ func l7SNIClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 		logf("l7sni: WAN interface detection failed: %v", err)
 		return
 	}
-	if err := l7capture.EnsureRules(ctx, l7capture.RuleOptions{WANInterface: wan, Group: l7sniNflogGroup}); err != nil {
+
+	logf("l7sni: installing NFLOG rules on %s", wan)
+	rctx, rcancel := context.WithTimeout(ctx, l7sniStartupTimeout)
+	err = l7capture.EnsureRules(rctx, l7capture.RuleOptions{WANInterface: wan, Group: l7sniNflogGroup})
+	rcancel()
+	if err != nil {
 		logf("l7sni: installing NFLOG rules failed: %v", err)
 		return
 	}
+
+	logf("l7sni: opening NFLOG capture socket (group %d)", l7sniNflogGroup)
 	capture, err := l7capture.Open(l7sniNflogGroup)
 	if err != nil {
 		logf("l7sni: NFLOG capture unavailable: %v", err)

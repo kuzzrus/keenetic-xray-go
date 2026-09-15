@@ -362,3 +362,83 @@ func recvEvent(t *testing.T, ch <-chan Event) Event {
 		return Event{}
 	}
 }
+
+func TestTelegramBot_NotifyEvent_SelfUpdate_EditsRememberedMessage(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	mustRegister(t, store, "r1")
+	b := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL}
+
+	b.rememberSelfUpdateMsg("r1", 1, 42)
+	b.NotifyEvent("r1", Event{Kind: "self_update", Text: "✅ обновление 0.32.16 → 0.32.17: демон в эфире"})
+
+	edit := fake.lastEdit(t)
+	if edit.ChatID != 1 || edit.MessageID != 42 {
+		t.Errorf("edit = %+v, want chat 1 / message 42", edit)
+	}
+	if !strings.Contains(edit.Text, "демон в эфире") {
+		t.Errorf("edit text = %q, want it to contain the confirmation", edit.Text)
+	}
+	if len(fake.sent) != 0 {
+		t.Errorf("also sent %d new message(s), want none -- should only edit in place", len(fake.sent))
+	}
+}
+
+func TestTelegramBot_NotifyEvent_SelfUpdate_NoClickOnRecordFallsBackToBroadcast(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	mustRegister(t, store, "r1")
+	b := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL}
+
+	// No rememberSelfUpdateMsg call -- e.g. the update was triggered over
+	// SSH/CLI, not the bot button.
+	b.NotifyEvent("r1", Event{Kind: "self_update", Text: "✅ обновление ..."})
+
+	if len(fake.edits) != 0 {
+		t.Errorf("edited %d message(s), want none -- nothing was on record to edit", len(fake.edits))
+	}
+	if len(fake.sent) != 1 {
+		t.Fatalf("sent %d message(s), want exactly 1 broadcast", len(fake.sent))
+	}
+}
+
+func TestTelegramBot_NotifyEvent_SelfUpdate_StaleClickFallsBackToBroadcast(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	mustRegister(t, store, "r1")
+	b := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL}
+
+	b.rememberSelfUpdateMsg("r1", 1, 42)
+	b.selfUpdateMu.Lock()
+	m := b.selfUpdateMsgs["r1"]
+	m.at = time.Now().Add(-selfUpdateMsgMaxAge - time.Minute)
+	b.selfUpdateMsgs["r1"] = m
+	b.selfUpdateMu.Unlock()
+
+	b.NotifyEvent("r1", Event{Kind: "self_update", Text: "✅ обновление ..."})
+
+	if len(fake.edits) != 0 {
+		t.Errorf("edited %d message(s), want none -- the remembered click is older than selfUpdateMsgMaxAge", len(fake.edits))
+	}
+	if len(fake.sent) != 1 {
+		t.Errorf("sent %d message(s), want 1 broadcast", len(fake.sent))
+	}
+}
+
+func TestTelegramBot_NotifyEvent_SelfUpdate_ConsumesTheEntry(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	mustRegister(t, store, "r1")
+	b := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL}
+
+	b.rememberSelfUpdateMsg("r1", 1, 42)
+	b.NotifyEvent("r1", Event{Kind: "self_update", Text: "✅ первое"})
+	b.NotifyEvent("r1", Event{Kind: "self_update", Text: "✅ второе"})
+
+	if len(fake.edits) != 1 {
+		t.Fatalf("edited %d message(s), want exactly 1 -- the entry is consumed after the first event", len(fake.edits))
+	}
+	if len(fake.sent) != 1 {
+		t.Errorf("sent %d broadcast(s), want 1 -- the second event, with nothing left on record to edit", len(fake.sent))
+	}
+}

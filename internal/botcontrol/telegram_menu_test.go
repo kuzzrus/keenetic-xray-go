@@ -228,3 +228,34 @@ func TestTelegramBot_WizardAbortedBySlashCommand(t *testing.T) {
 		t.Fatal("/routers did not run after aborting the wizard")
 	}
 }
+
+func TestTelegramBot_SelfUpdateClick_RemembersItsOwnMessage(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	mustRegister(t, store, "home")
+	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL, ResultTimeout: 3 * time.Second}
+	runBotInBackground(t, bot)
+
+	fake.push(1, "/menu")
+	fake.waitForReply(t, 3*time.Second)
+	msgID := fake.lastSent(t).MessageID
+
+	// "upd:" -> confirm dialog -> "updyes:" is the real card button's own
+	// path (telegram_menu.go), not a direct "act:self_update:" tap.
+	fake.pushCallback(1, msgID, "router:home")
+	fake.waitForEditContaining(t, 3*time.Second, "снимок состояния")
+	fake.pushCallback(1, msgID, "upd:home")
+	fake.waitForEditContaining(t, 3*time.Second, "Переустановит .ipk")
+	fake.pushCallback(1, msgID, "updyes:home")
+	fake.waitForEditContaining(t, 3*time.Second, "команда в очереди")
+
+	bot.selfUpdateMu.Lock()
+	got, ok := bot.selfUpdateMsgs["home"]
+	bot.selfUpdateMu.Unlock()
+	if !ok {
+		t.Fatal("clicking Обновить агент did not record a pending self-update message")
+	}
+	if got.chatID != 1 || got.msgID != msgID {
+		t.Errorf("remembered = %+v, want chat 1 / message %d", got, msgID)
+	}
+}

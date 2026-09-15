@@ -1153,7 +1153,18 @@ func (h *RouterHandler) selfUpdate() (string, error) {
 		return "", fmt.Errorf("запуск обновления: %w", err)
 	}
 	go h.logSelfUpdateOutcome(c, &out)
-	return "обновление агента запущено — переустановка .ipk и рестарт демона через ~2с" + rollbackNote, nil
+	// "~2с" used to describe the whole update here -- it's actually only
+	// the pause before the download even starts (c's own leading `sleep
+	// 2`), not the full cycle (fetch, opkg install/postinst, daemon
+	// restart, reconnect). Confirmed live (2026-09-16) that reading "~2с"
+	// as the total duration led straight to "it's stuck" before a
+	// healthy update had any chance to finish. Deliberately not
+	// replacing it with a specific promise like "1-2 минуты" either --
+	// that's watchPostUpdate's own outer timeout, not the typical
+	// duration, and one live run that genuinely took close to that full
+	// window (still unexplained) makes either a short or a long number
+	// equally likely to read as wrong.
+	return "обновление агента запущено — результат появится в этом же сообщении" + rollbackNote, nil
 }
 
 // logSelfUpdateOutcome waits for the detached install.sh run and logs

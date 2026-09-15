@@ -171,12 +171,38 @@ func (h *RouterHandler) adaptiveRouteOn(ctx context.Context) (string, error) {
 // adaptiveRouteOff mirrors cmd/keenetic-xray's own adaptiveRouteOff:
 // clearing the REDIRECT rule is best-effort (a failure there shouldn't
 // block turning the feature off in config), everything else always
-// applies.
+// applies. Also flushes the ipset itself, not just the REDIRECT rule --
+// found live (2026-09-15) that without this, "off" left every already-
+// confirmed address (individual entries carry up to AdaptiveRoute's own
+// OKTTL, 6h by default -- see adaptiveroute.AddIP's doc comment) sitting
+// in the set, ready to start redirecting again the instant "on" re-adds
+// the rule, even addresses that were false positives. A bare off/on
+// toggle silently undid nothing.
+//
+// Deliberately does NOT also clear the classifier's own persisted state
+// the way `transport adaptive flush` (cmd/keenetic-xray, SSH-only -- see
+// this screen's own cheat-sheet text) does: while AdaptiveRoute.Enabled
+// is false, adaptiveRouteClassifyLoop's ticker branch is a no-op, so a
+// stale in-memory belief just sits frozen and harmless until re-enabled
+// -- no redirecting happens either way while off. It only matters again
+// once switched back on, which is what the SSH-only flush command is
+// for. It also restarts the daemon (the only way to actually clear the
+// classifier's in-memory state -- see that command's own doc comment in
+// cmd/keenetic-xray/adaptiveroute.go) -- kept out of this bot handler
+// deliberately: a RouterHandler method runs inside the daemon process
+// itself, and a restart needs to kill and relaunch that exact process,
+// so triggering it from inside its own request handler is a
+// self-inflicted race (same reasoning offerDaemonRestart's own
+// detached-restart comment gives for the CLI side, in
+// cmd/keenetic-xray/daemonctl.go).
 func (h *RouterHandler) adaptiveRouteOff(ctx context.Context) (string, error) {
 	var warn string
 	if keenetic.Available() {
 		if err := adaptiveroute.ClearRedirect(ctx); err != nil {
 			warn = fmt.Sprintf("\n⚠️ не удалось убрать REDIRECT-правило: %v", err)
+		}
+		if err := adaptiveroute.Flush(ctx, adaptiveroute.RedirectSetName); err != nil {
+			warn += fmt.Sprintf("\n⚠️ не удалось очистить список адресов: %v", err)
 		}
 	}
 	h.Config.AdaptiveRoute.Enabled = false

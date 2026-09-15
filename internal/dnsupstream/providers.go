@@ -78,8 +78,9 @@ var providers = []Provider{
 		DoT: []TLS{{"77.88.8.88", "safe.dot.dns.yandex.net"}, {"77.88.8.2", "safe.dot.dns.yandex.net"}},
 	},
 	{
-		ID: "mullvad", Name: "Mullvad", Note: "без логов, Швеция (DoT)",
+		ID: "mullvad", Name: "Mullvad", Note: "без логов, Швеция",
 		DoT: []TLS{{"194.242.2.2", "dns.mullvad.net"}},
+		DoH: []HTTPS{{"https://dns.mullvad.net/dns-query"}},
 	},
 	{
 		ID: "controld-uncensored", Name: "ControlD Uncensored", Note: "разблокирует geo-контент (DoH)",
@@ -168,14 +169,16 @@ var candidates = []Provider{
 	{ID: "switch", Name: "SWITCH", Note: "академ. сеть Швейцарии",
 		DoT: []TLS{{"130.59.31.248", "dns.switch.ch"}, {"130.59.31.251", "dns.switch.ch"}}, DoH: []HTTPS{{"https://dns.switch.ch/dns-query"}}},
 	{ID: "restena", Name: "Restena", Note: "исследовательская сеть Люксембурга",
-		DoT: []TLS{{"158.64.1.29", "kaitain.restena.lu"}}, DoH: []HTTPS{{"https://kaitain.restena.lu/dns-query"}}},
+		DoT: []TLS{{"158.64.1.29", "kaitain.restena.lu"}},
+		DoH: []HTTPS{{"https://kaitain.restena.lu/dns-query"}, {"https://dnspub.restena.lu/dns-query"}}},
 	{ID: "canadianshield", Name: "CIRA Canadian Shield", Note: "Канада, приватный профиль",
 		DoT: []TLS{{"149.112.121.10", "private.canadianshield.cira.ca"}, {"149.112.122.10", "private.canadianshield.cira.ca"}},
 		DoH: []HTTPS{{"https://private.canadianshield.cira.ca/dns-query"}}},
 	{ID: "alidns", Name: "AliDNS", Note: "Alibaba, Китай — anycast",
 		DoT: []TLS{{"223.5.5.5", "dns.alidns.com"}, {"223.6.6.6", "dns.alidns.com"}}, DoH: []HTTPS{{"https://dns.alidns.com/dns-query"}}},
 	{ID: "dnspod", Name: "DNSPod", Note: "Tencent, Китай",
-		DoT: []TLS{{"1.12.12.12", "dot.pub"}, {"120.53.53.53", "dot.pub"}}, DoH: []HTTPS{{"https://doh.pub/dns-query"}}},
+		DoT: []TLS{{"1.12.12.12", "dot.pub"}, {"120.53.53.53", "dot.pub"}},
+		DoH: []HTTPS{{"https://doh.pub/dns-query"}, {"https://dns.pub/dns-query"}}},
 	{ID: "iij", Name: "IIJ", Note: "Япония",
 		DoT: []TLS{{"103.2.57.5", "public.dns.iij.jp"}, {"103.2.57.6", "public.dns.iij.jp"}}, DoH: []HTTPS{{"https://public.dns.iij.jp/dns-query"}}},
 	{ID: "tiarap", Name: "Tiarap", Note: "Сингапур, режет рекламу/трекеры",
@@ -184,6 +187,31 @@ var candidates = []Provider{
 		DoT: []TLS{{"45.90.28.0", "dns.nextdns.io"}, {"45.90.30.0", "dns.nextdns.io"}}, DoH: []HTTPS{{"https://dns.nextdns.io/"}}},
 	{ID: "controld-block-ads", Name: "ControlD Ads/Tracking", Note: "реклама + трекеры (DoH)",
 		DoH: []HTTPS{{"https://freedns.controld.com/p3"}}},
+	// Widened 2026-09-15 from a browser-shipped DoH provider list the user
+	// pasted -- everything from that list already covered by an existing
+	// entry (by URL, not just by name -- several use a different display
+	// name for the same endpoint) was skipped rather than duplicated.
+	// Also deliberately skipped: Google's own /resolve path (JSON API, not
+	// RFC 8484 wire format -- Keenetic's dns-proxy https upstream ... dnsm
+	// needs wire format, which our existing "google" entry's /dns-query
+	// already is -- switching to /resolve would just break it), FlashStart
+	// (its URL embeds a personal registration token, not a generic public
+	// endpoint), and Comcast Xfinity (an ISP resolver scoped to Comcast's
+	// own residential network, not generally reachable).
+	{ID: "mullvad-base", Name: "Mullvad Base", Note: "без логов, без блокировок, Швеция (DoH)",
+		DoH: []HTTPS{{"https://base.dns.mullvad.net/dns-query"}}},
+	{ID: "cleanbrowsing-family", Name: "CleanBrowsing Family", Note: "малварь + взрослый контент",
+		DoH: []HTTPS{{"https://doh.cleanbrowsing.org/doh/family-filter/"}}},
+	{ID: "openbld", Name: "OpenBLD", Note: "Казахстан",
+		DoH: []HTTPS{{"https://ada.openbld.net/dns-query"}}},
+	{ID: "360", Name: "360", Note: "Qihoo, Китай",
+		DoH: []HTTPS{{"https://doh.360.cn/dns-query"}}},
+	{ID: "dnsforfamily", Name: "DNS for Family", Note: "Германия, детский фильтр",
+		DoH: []HTTPS{{"https://dns-doh.dnsforfamily.com/dns-query"}}},
+	{ID: "applied-privacy", Name: "Applied Privacy", Note: "Австрия, без логов",
+		DoH: []HTTPS{{"https://doh.applied-privacy.net/query"}}},
+	{ID: "rethinkdns", Name: "RethinkDNS", Note: "открытый исходный код",
+		DoH: []HTTPS{{"https://sky.rethinkdns.com/dns-query"}}},
 }
 
 // Providers returns the shown catalogue in display order.

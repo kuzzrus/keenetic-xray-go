@@ -37,6 +37,8 @@ func TestWriteDiag_SectionsAndRedaction(t *testing.T) {
 		"---- addons ----",
 		"---- rci ----",
 		"---- keenetic ----",
+		"---- listening ports ----",
+		"---- watchdog ----",
 		"---- daemon log",
 		"==== end ====",
 	} {
@@ -55,5 +57,11 @@ func TestWriteDiag_SectionsAndRedaction(t *testing.T) {
 	}
 	if !strings.Contains(out, "vpn.example.com") {
 		t.Error("diag dropped the (non-secret) server address")
+	}
+	if !strings.Contains(out, ":1080") || !strings.Contains(out, ":1081") {
+		t.Errorf("diag should list the configured SOCKS/HTTP ports, got:\n%s", out)
+	}
+	if strings.Contains(out, "adaptive-route dataplane") {
+		t.Error("diag should skip the adaptive-route section when the feature is disabled")
 	}
 }

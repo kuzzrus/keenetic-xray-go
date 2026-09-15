@@ -53,6 +53,8 @@ func TestEnsureNFLOGModule_SkipsAlreadyLoaded(t *testing.T) {
 	procModules := writeProcModules(t,
 		"nfnetlink_log 12288 0 - Live 0x00000000",
 		"xt_NFLOG 4096 1 - Live 0x00000000",
+		"xt_connbytes 4096 1 - Live 0x00000000",
+		"xt_length 4096 1 - Live 0x00000000",
 	)
 	env := &fakeKmodEnv{}
 	installFakeKmodEnv(t, env)
@@ -76,6 +78,8 @@ func TestEnsureNFLOGModule_LoadsWhenPresentOnDisk(t *testing.T) {
 	want := []string{
 		"/lib/modules/5.15.0-keenetic/nfnetlink_log.ko",
 		"/lib/modules/5.15.0-keenetic/xt_NFLOG.ko",
+		"/lib/modules/5.15.0-keenetic/xt_connbytes.ko",
+		"/lib/modules/5.15.0-keenetic/xt_length.ko",
 	}
 	if len(env.insmodCalls) != len(want) {
 		t.Fatalf("insmod called %v, want %v", env.insmodCalls, want)

@@ -185,10 +185,10 @@ func adaptiveRouteScreenText(id string) string {
 		"⚠️ Если в тоннель улетает то, что и так прекрасно работает напрямую — обычно свой же " +
 		"ложноположительный улов классификатора, залипший в подтверждённых на несколько часов " +
 		"(подтверждённый адрес держится в ipset до своего TTL независимо от рестарта демона и от " +
-		"выкл/вкл — сам по себе не отпускает). `transport adaptive flush` чистит и список адресов, " +
-		"и сохранённое состояние классификатора, и сам перезапускает демон (иначе классификатор " +
-		"в памяти всё ещё будет думать, что старое подтверждено, и не станет спешить переподтверждать " +
-		"заново) — коротко мигнёт соединение, это ожидаемо.\n\n" +
+		"выкл/вкл — сам по себе не отпускает). Кнопка 🧹 Очистить список ниже чистит и список " +
+		"адресов, и сохранённое состояние классификатора, и сама перезапускает демон (иначе " +
+		"классификатор в памяти всё ещё будет думать, что старое подтверждено, и не станет спешить " +
+		"переподтверждать заново) — коротко мигнёт соединение, это ожидаемо.\n\n" +
 		"TTL подтверждённых адресов (сколько держать адрес перенаправленным без переповторной проверки) — кнопки ниже.\n\n" +
 		"Состояние — 📊 Показать."
 }
@@ -198,6 +198,7 @@ func adaptiveRouteScreenKB(id string) inlineKeyboard {
 		{{Text: "✅ Включить", CallbackData: "act:adrt_on:" + id}, {Text: "⛔ Выключить", CallbackData: "act:adrt_off:" + id}},
 		{{Text: "TTL: 6ч", CallbackData: "adttl:" + id + ":6"}, {Text: "12ч", CallbackData: "adttl:" + id + ":12"},
 			{Text: "18ч", CallbackData: "adttl:" + id + ":18"}, {Text: "24ч", CallbackData: "adttl:" + id + ":24"}},
+		{{Text: "🧹 Очистить список", CallbackData: "act:adrt_flush:" + id}},
 		{{Text: "📊 Показать", CallbackData: "act:adrt_show:" + id}, {Text: "⬅️ Назад", CallbackData: "ptm:" + id}},
 	}}
 }
@@ -285,6 +286,8 @@ func callbackAction(name string) string {
 		return ActionAdaptiveRouteOn
 	case "adrt_off":
 		return ActionAdaptiveRouteOff
+	case "adrt_flush":
+		return ActionAdaptiveRouteFlush
 	case "wd_show":
 		return ActionWatchdogShow
 	case "wd_enable":

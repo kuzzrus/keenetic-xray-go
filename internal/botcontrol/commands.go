@@ -87,6 +87,13 @@ type RouterHandler struct {
 	// rollback point is recorded (the update still runs).
 	SelfUpdateMarker string
 
+	// AdaptiveRouteStatePath is where adaptiveRouteClassifyLoop persists
+	// its classifier state (cmd/keenetic-xray's adaptiveRouteStatePath) --
+	// adaptiveRouteFlush deletes it as part of clearing adaptive
+	// routing's learned state. Empty -> flush skips that step (nothing
+	// to delete, or the path genuinely isn't configured).
+	AdaptiveRouteStatePath string
+
 	// SelfUpdateEvents, if set, receives one Event when the detached
 	// install.sh run started by selfUpdate fails outright (before ever
 	// reaching a daemon restart). Logf already records the same failure
@@ -192,6 +199,8 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 		return h.adaptiveRouteOn(ctx)
 	case ActionAdaptiveRouteOff:
 		return h.adaptiveRouteOff(ctx)
+	case ActionAdaptiveRouteFlush:
+		return h.adaptiveRouteFlush(ctx)
 	case ActionAdaptiveRouteSetTTL:
 		return h.adaptiveRouteSetTTL(cmd.Args)
 	case ActionDaemonRestart:

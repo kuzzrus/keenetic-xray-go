@@ -595,17 +595,33 @@ func (h *RouterHandler) switchTo(ctx context.Context, role failover.Role) (strin
 	return fmt.Sprintf("switched to %s", role), nil
 }
 
-// rebindXray makes a config change take effect. If the daemon is in its
-// Run loop it re-applies the current live role (xray regenerates its
-// production config and restarts -- no full daemon restart, Proxy0 left
-// alone). If the daemon is idling (it starts idle until primary AND
-// backup are set) and the config now has both slots, it kicks a detached
-// init.d restart so the daemon actually starts serving -- otherwise a
-// setup done entirely from the bot would leave the daemon idle until a
-// manual restart.
-func (h *RouterHandler) rebindXray(ctx context.Context) {
+// rebindXray makes a config change take effect, and reports whether it
+// actually managed to: true if either path below fired, false if
+// neither could (the caller should tell the user a manual restart is
+// needed -- silently claiming success here is exactly what made a real
+// bug hard to spot live: a bot-triggered adaptiveRouteOn racing the
+// daemon's own first-ever Run() startup hit Snapshot's ok=false window,
+// fell through to the old Primary()&&Backup() guard below (which this
+// single-profile router could never satisfy), did nothing at all, and
+// still told the user "адаптивная маршрутизация включена" -- looked
+// broken until an unrelated manual restart happened to apply it).
+//
+// If the daemon is in its Run loop, re-applies the current live role
+// (xray regenerates its production config and restarts -- no full
+// daemon restart, Proxy0 left alone). If the daemon isn't answering
+// right now -- Run hasn't reached its command-serving loop yet (a
+// narrow window right at daemon startup: Run's own first SwitchLiveTo,
+// spawning xray-core, is still in flight) or hasn't been started at
+// all -- and there's at least a primary profile configured, kicks a
+// detached init.d restart so the daemon actually comes up serving.
+// Primary alone is the right bar here, not Primary&&Backup: Run()
+// itself only truly idles (serves nothing) with no primary at all --
+// see Run's own "no backup -- supervising primary, no automatic
+// switching" branch -- a single-profile router is fully able to run,
+// same lesson as #167's ReloadConfig fix.
+func (h *RouterHandler) rebindXray(ctx context.Context) bool {
 	if h.Daemon == nil {
-		return
+		return false
 	}
 	// h.Config is the exact *config.Config the Daemon already holds
 	// (wired once in cmd/keenetic-xray's cmdDaemon), so this reloads the
@@ -618,12 +634,12 @@ func (h *RouterHandler) rebindXray(ctx context.Context) {
 	// daemon instead) -- either would otherwise leave realActions.socks
 	// stale, so future health-check probes would dial the *old* port.
 	if _, ok := h.Daemon.Snapshot(ctx); ok {
-		_ = h.Daemon.ReloadConfig(ctx, h.Config)
-		return
+		return h.Daemon.ReloadConfig(ctx, h.Config)
 	}
-	if h.Config.Primary() != nil && h.Config.Backup() != nil {
-		_ = h.restartDaemonDetached()
+	if h.Config.Primary() != nil {
+		return h.restartDaemonDetached() == nil
 	}
+	return false
 }
 
 // restartDaemonDetached spawns a detached "sleep 2; <InitScript> restart"

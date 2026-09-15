@@ -152,7 +152,16 @@ func (h *RouterHandler) adaptiveRouteOn(ctx context.Context) (string, error) {
 	if err := h.Config.Save(h.ConfigPath); err != nil {
 		return "", err
 	}
-	h.rebindXray(ctx)
+	if !h.rebindXray(ctx) {
+		// The REDIRECT rule above is already live and will keep sending
+		// matched traffic to xray's dokodemo-door port -- but if xray
+		// itself hasn't regenerated its config to actually listen there
+		// yet, that traffic is silently dropped until it does. Say so
+		// plainly instead of claiming success: this exact silent gap is
+		// what made rebindXray's old bug (see its own doc comment) look
+		// like "works after a manual restart, not before" from the bot.
+		warn += "\n⚠️ не удалось применить живьём (демон не ответил) — нажмите ♻️ Рестарт демона на карточке роутера, иначе редирект уже активен, а xray его пока не слушает"
+	}
 	return fmt.Sprintf("Адаптивная маршрутизация включена: %s (LAN %s), xray :%d%s",
 		iface, subnet, h.Config.AdaptiveRoute.EffectivePort(), warn), nil
 }
@@ -172,6 +181,13 @@ func (h *RouterHandler) adaptiveRouteOff(ctx context.Context) (string, error) {
 	if err := h.Config.Save(h.ConfigPath); err != nil {
 		return "", err
 	}
-	h.rebindXray(ctx)
+	if !h.rebindXray(ctx) && warn == "" {
+		// Lower stakes than adaptiveRouteOn's own warning: the REDIRECT
+		// rule (what actually diverts traffic) is already cleared above,
+		// so nothing reaches xray's dokodemo-door inbound regardless of
+		// whether xray itself re-applied. Still worth a note -- xray's
+		// own config keeps the now-pointless inbound until it does.
+		warn = "\n⚠️ живое применение не удалось (демон не ответил), но редирект уже снят — при желании нажмите ♻️ Рестарт демона, чтобы xray тоже обновил конфиг"
+	}
 	return "Адаптивная маршрутизация выключена" + warn, nil
 }

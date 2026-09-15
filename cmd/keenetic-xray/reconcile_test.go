@@ -85,6 +85,30 @@ func TestAdaptiveRouteClassifyLoop_NoRouterStopsOnContextCancel(t *testing.T) {
 	}
 }
 
+// TestAdaptiveRouteHealthCheck_NoRouterIsNoop mirrors
+// TestReconcileSteps_NoRouterIsNoop: without ndmc, the fail-open health
+// check must return immediately and touch neither counter, the same as
+// every other keenetic.Available()-gated step in this file. The "trips
+// fail-open" / "recovers" branches need a real probe + real iptables,
+// so they're not exercisable here -- hardware verification, not a unit
+// test, covers those.
+func TestAdaptiveRouteHealthCheck_NoRouterIsNoop(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "c.json")
+	t.Setenv("KEENETIC_XRAY_CONFIG", cfgPath)
+
+	cfg := config.Default()
+	cfg.AdaptiveRoute = config.AdaptiveRouteConfig{Enabled: true}
+	if err := cfg.Save(cfgPath); err != nil {
+		t.Fatal(err)
+	}
+
+	fails, failedOpen := 0, false
+	adaptiveRouteHealthCheck(context.Background(), &fails, &failedOpen, func(string, ...any) {})
+	if fails != 0 || failedOpen {
+		t.Errorf("healthFails=%d failedOpen=%v, want both untouched without ndmc", fails, failedOpen)
+	}
+}
+
 // The loop returns promptly on a cancelled context and never ticks
 // without ndmc.
 func TestRouterReconcileLoop_StopsOnContextCancel(t *testing.T) {

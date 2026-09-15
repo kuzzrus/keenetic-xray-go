@@ -13,6 +13,7 @@ import (
 	"github.com/kuzzrus/keenetic-xray-go/internal/classifier"
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 	"github.com/kuzzrus/keenetic-xray-go/internal/keenetic"
+	"github.com/kuzzrus/keenetic-xray-go/internal/xrayctl"
 )
 
 // adaptiveRouteIPSet is the one ipset internal/adaptiveroute's REDIRECT
@@ -45,6 +46,34 @@ const adaptiveRouteIPSet = adaptiveroute.RedirectSetName
 // conntrack scan measured at 0.01s for 435 entries, nowhere near
 // expensive enough to need a slower cadence for its own sake.
 const classifyInterval = 500 * time.Millisecond
+
+// healthCheckInterval/healthFailThreshold gate adaptive routing's own
+// fail-open to DIRECT: no upstream Susanin equivalent, added 2026-09-15
+// after comparing against Fiark/susanin (a sibling project for MikroTik
+// RouterOS -- see docs/HANDOFF-susanin.md), which fails open exactly
+// this way rather than keep sending already-confirmed-good traffic into
+// a dead tunnel. Without this, a single-profile router (no backup to
+// fail over to -- see PRs #167/#171-#174's whole theme today) whose
+// live egress goes down would leave every redirected destination
+// hanging against dead outbound indefinitely, worse than DIRECT would
+// have been. Dual-profile routers are naturally covered by failover
+// switching to backup already (the dokodemo-door inbound's single
+// default outbound rides whatever's newly live) -- this specifically
+// closes the no-backup gap, though it applies either way.
+//
+// 15s / 2 consecutive failures before tripping: frequent enough that an
+// outage is caught quickly, not so frequent it hammers the live proxy
+// with synthetic requests; 2 rather than 1 so a single slow/rate-limited
+// probe doesn't trip it on its own (same reasoning ProbeOptions.Retries
+// already applies within one probe attempt). Recovery only needs a
+// single successful probe -- staying failed-open a little too long
+// after the tunnel is back just delays redirects resuming, whereas
+// staying "still redirecting" too long during a real outage means more
+// hung connections, so the asymmetry is deliberate.
+const (
+	healthCheckInterval = 15 * time.Second
+	healthFailThreshold = 2
+)
 
 // transportAdaptive is `keenetic-xray transport adaptive {show|on|off}`
 // -- Susanin Phase 2's native per-IP adaptive routing (see
@@ -224,17 +253,24 @@ func adaptiveRouteClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 	}
 	cache := classifier.NewRateCache()
 	var clsCfg *classifier.Config
+	healthFails := 0
+	failedOpen := false
 
 	t := time.NewTicker(classifyInterval)
 	defer t.Stop()
 	save := time.NewTicker(5 * time.Minute)
 	defer save.Stop()
+	health := time.NewTicker(healthCheckInterval)
+	defer health.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			_ = classifier.SaveState(statePath, state)
 			return
+		case <-health.C:
+			adaptiveRouteHealthCheck(ctx, &healthFails, &failedOpen, logf)
+			continue
 		case <-save.C:
 			_ = classifier.SaveState(statePath, state)
 			continue
@@ -243,6 +279,14 @@ func adaptiveRouteClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 
 		cfg, err := config.Load(configPath())
 		if err != nil || !cfg.AdaptiveRoute.Enabled || !keenetic.Available() {
+			continue
+		}
+		if failedOpen {
+			// The live egress is unhealthy (see adaptiveRouteHealthCheck)
+			// -- REDIRECT is already cleared, so there's nothing to catch
+			// new destinations *into* right now. Keep classifying nothing
+			// rather than accumulating Actions that would just be redone
+			// once the health check re-asserts the dataplane.
 			continue
 		}
 
@@ -285,6 +329,77 @@ func adaptiveRouteClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 
 		applyAdaptiveRouteActions(ctx, actions, logf)
 	}
+}
+
+// adaptiveRouteHealthCheck is adaptive routing's own fail-open check --
+// see healthCheckInterval/healthFailThreshold's doc comment for why this
+// exists at all. Probes the live egress through the same local SOCKS
+// inbound and the same HealthCheckURL/FallbackURLs/Retries/RetryDelay
+// config the failover daemon's own health check already uses (see
+// internal/failover's realActions.probeOptions) -- deliberately its own
+// independent probe rather than reading failover.Daemon's state,
+// because adaptiveRouteClassifyLoop has no reference to the live Daemon
+// (it's constructed and run standalone from cmd/keenetic-xray's main),
+// and re-probing directly is simpler than threading one through.
+//
+// failedFails and failedOpen are the caller's own loop-scoped state,
+// passed by pointer so this stays a plain function instead of a method
+// on some new receiver type just for two counters.
+func adaptiveRouteHealthCheck(ctx context.Context, healthFails *int, failedOpen *bool, logf func(string, ...any)) {
+	cfg, err := config.Load(configPath())
+	if err != nil || !cfg.AdaptiveRoute.Enabled || !keenetic.Available() {
+		return
+	}
+
+	pctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	perr := xrayctl.Probe(pctx, xrayctl.ProbeOptions{
+		SOCKSAddr:    fmt.Sprintf("127.0.0.1:%d", cfg.Failover.SOCKSPort),
+		URL:          cfg.Failover.HealthCheckURL,
+		FallbackURLs: cfg.Failover.HealthCheckFallbackURLs,
+		Retries:      cfg.Failover.CheckRetries,
+		RetryDelay:   time.Duration(cfg.Failover.CheckRetryDelaySeconds) * time.Second,
+		Timeout:      8 * time.Second,
+	})
+	cancel()
+
+	if perr != nil {
+		*healthFails++
+		if *healthFails < healthFailThreshold || *failedOpen {
+			return
+		}
+		*failedOpen = true
+		if err := adaptiveroute.ClearRedirect(ctx); err != nil {
+			logf("adaptive-route: fail-open to DIRECT: clearing REDIRECT failed: %v", err)
+			return
+		}
+		logf("adaptive-route: live egress unhealthy (%d probe failures) -- failed open to DIRECT", *healthFails)
+		return
+	}
+
+	*healthFails = 0
+	if !*failedOpen {
+		return
+	}
+	*failedOpen = false
+
+	iface, _, err := adaptiveRouteLAN(ctx, cfg)
+	if err != nil {
+		logf("adaptive-route: egress healthy again, but re-asserting REDIRECT failed: %v", err)
+		return
+	}
+	if err := adaptiveroute.EnsureIPSet(ctx, adaptiveRouteIPSet); err != nil {
+		logf("adaptive-route: egress healthy again, but ipset recreate failed: %v", err)
+		return
+	}
+	if err := adaptiveroute.EnsureRedirect(ctx, adaptiveroute.RedirectOptions{
+		SetName:       adaptiveRouteIPSet,
+		Port:          cfg.AdaptiveRoute.EffectivePort(),
+		LANInterfaces: []string{iface},
+	}); err != nil {
+		logf("adaptive-route: egress healthy again, but REDIRECT re-assert failed: %v", err)
+		return
+	}
+	logf("adaptive-route: live egress healthy again -- re-enabled REDIRECT on %s", iface)
 }
 
 // applyAdaptiveRouteActions carries out one classification pass's

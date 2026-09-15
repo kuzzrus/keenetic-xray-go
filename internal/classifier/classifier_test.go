@@ -417,6 +417,70 @@ func TestClrBlockPromote_TCPAndUDPTrackedSeparately(t *testing.T) {
 	}
 }
 
+func TestClrBlockPromote_KnownRangeLookupWidensPromotedBlock(t *testing.T) {
+	cfg, state, now := testConfig(), NewState(), time.Now()
+	addOK(state, 0, now, cfg.OKTTL, "1.2.3.1", "1.2.3.2", "1.2.3.3", "1.2.3.4")
+	cfg.KnownRangeLookup = func(ip string) (string, bool) {
+		if ip == "1.2.3.4" { // one of the sample addrs -- exact address doesn't matter, any in the group works
+			return "1.2.0.0/16", true
+		}
+		return "1.2.0.0/16", true
+	}
+
+	actions := ClrBlockPromote(cfg, state, now)
+	if len(actions) != 1 {
+		t.Fatalf("actions = %+v, want exactly one block promotion", actions)
+	}
+	if a := actions[0]; a.IP != "1.2.0.0/16" {
+		t.Errorf("action IP = %q, want the known range 1.2.0.0/16, not the naive /24", a.IP)
+	}
+	if state.Blocks[0].has("1.2.3.0/24", now) {
+		t.Error("naive /24 should not be recorded in state.Blocks once a known range matched")
+	}
+	if !state.Blocks[0].has("1.2.0.0/16", now) {
+		t.Error("the known range should be recorded in state.Blocks")
+	}
+}
+
+func TestClrBlockPromote_KnownRangeLookupNoMatchFallsBackToNaiveBlock(t *testing.T) {
+	cfg, state, now := testConfig(), NewState(), time.Now()
+	addOK(state, 0, now, cfg.OKTTL, "1.2.3.1", "1.2.3.2", "1.2.3.3", "1.2.3.4")
+	cfg.KnownRangeLookup = func(ip string) (string, bool) { return "", false }
+
+	actions := ClrBlockPromote(cfg, state, now)
+	if len(actions) != 1 || actions[0].IP != "1.2.3.0/24" {
+		t.Fatalf("actions = %+v, want the naive /24 -- lookup found no known range", actions)
+	}
+}
+
+func TestClrBlockPromote_KnownRangeLookupNotConsultedWhenNil(t *testing.T) {
+	cfg, state, now := testConfig(), NewState(), time.Now()
+	if cfg.KnownRangeLookup != nil {
+		t.Fatal("testConfig()/DefaultConfig() should leave KnownRangeLookup nil")
+	}
+	addOK(state, 0, now, cfg.OKTTL, "1.2.3.1", "1.2.3.2", "1.2.3.3", "1.2.3.4")
+
+	actions := ClrBlockPromote(cfg, state, now)
+	if len(actions) != 1 || actions[0].IP != "1.2.3.0/24" {
+		t.Fatalf("actions = %+v, want the naive /24 -- nil lookup means the original behavior", actions)
+	}
+}
+
+func TestClrBlockPromote_TwoNaiveBlocksConvergeOnSameKnownRange(t *testing.T) {
+	cfg, state, now := testConfig(), NewState(), time.Now()
+	addOK(state, 0, now, cfg.OKTTL, "1.2.3.1", "1.2.3.2", "1.2.3.3", "1.2.3.4")
+	addOK(state, 0, now, cfg.OKTTL, "1.2.4.1", "1.2.4.2", "1.2.4.3", "1.2.4.4")
+	cfg.KnownRangeLookup = func(ip string) (string, bool) { return "1.2.0.0/16", true }
+
+	actions := ClrBlockPromote(cfg, state, now)
+	if len(actions) != 1 {
+		t.Fatalf("actions = %+v, want exactly one promotion -- both naive blocks resolve to the same known range", actions)
+	}
+	if actions[0].IP != "1.2.0.0/16" {
+		t.Errorf("action IP = %q, want 1.2.0.0/16", actions[0].IP)
+	}
+}
+
 func TestContainingBlock(t *testing.T) {
 	if b, ok := containingBlock("31.13.72.5", 24); !ok || b != "31.13.72.0/24" {
 		t.Errorf("containingBlock(...,24) = %q,%v, want 31.13.72.0/24,true", b, ok)

@@ -13,6 +13,7 @@ import (
 	"github.com/kuzzrus/keenetic-xray-go/internal/classifier"
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 	"github.com/kuzzrus/keenetic-xray-go/internal/keenetic"
+	"github.com/kuzzrus/keenetic-xray-go/internal/knownranges"
 	"github.com/kuzzrus/keenetic-xray-go/internal/xrayctl"
 )
 
@@ -300,6 +301,11 @@ func adaptiveRouteClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 			}
 			c := classifier.DefaultConfig()
 			c.LANSubnets = []*net.IPNet{subnet}
+			// knownranges.Lookup reads whatever table knownRangesRefreshLoop
+			// currently has loaded (cmd/keenetic-xray/knownranges.go) --
+			// wiring the function reference once here is enough, no need
+			// to re-set it as the table itself refreshes in the background.
+			c.KnownRangeLookup = knownranges.Lookup
 			clsCfg = &c
 			logf("adaptive-route: classifier started (LAN subnet %s)", subnet)
 		}

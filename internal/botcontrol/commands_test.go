@@ -474,6 +474,56 @@ func TestRouterHandler_AdaptiveRouteSetTTL_RejectsGarbage(t *testing.T) {
 	}
 }
 
+func TestRouterHandler_AdaptiveRouteSetBlockThreshold(t *testing.T) {
+	h := &RouterHandler{Config: config.Default(), ConfigPath: filepath.Join(t.TempDir(), "c.json")}
+
+	out, err := h.Handle(context.Background(), Command{Action: ActionAdaptiveRouteSetBlockThreshold, Args: []string{"8"}})
+	if err != nil {
+		t.Fatalf("adrt_blockthr: %v", err)
+	}
+	if !strings.Contains(out, "8") {
+		t.Errorf("out = %q, want it to mention the new threshold", out)
+	}
+	if h.Config.AdaptiveRoute.BlockThreshold != 8 {
+		t.Errorf("BlockThreshold = %d, want 8", h.Config.AdaptiveRoute.BlockThreshold)
+	}
+	saved, err := config.Load(h.ConfigPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if saved.AdaptiveRoute.BlockThreshold != 8 {
+		t.Errorf("saved BlockThreshold = %d, want 8", saved.AdaptiveRoute.BlockThreshold)
+	}
+}
+
+// TestRouterHandler_AdaptiveRouteSetBlockThreshold_NegativeDisables covers
+// the one real difference from adrt_ttl: a non-positive value is valid
+// input here (it disables block-widening), not rejected.
+func TestRouterHandler_AdaptiveRouteSetBlockThreshold_NegativeDisables(t *testing.T) {
+	h := &RouterHandler{Config: config.Default(), ConfigPath: filepath.Join(t.TempDir(), "c.json")}
+
+	out, err := h.Handle(context.Background(), Command{Action: ActionAdaptiveRouteSetBlockThreshold, Args: []string{"-1"}})
+	if err != nil {
+		t.Fatalf("adrt_blockthr -1: %v", err)
+	}
+	if !strings.Contains(out, "отключено") {
+		t.Errorf("out = %q, want it to say block-widening is disabled", out)
+	}
+	if h.Config.AdaptiveRoute.BlockThreshold != -1 {
+		t.Errorf("BlockThreshold = %d, want -1", h.Config.AdaptiveRoute.BlockThreshold)
+	}
+}
+
+func TestRouterHandler_AdaptiveRouteSetBlockThreshold_RejectsGarbage(t *testing.T) {
+	h := &RouterHandler{Config: config.Default(), ConfigPath: filepath.Join(t.TempDir(), "c.json")}
+
+	for _, args := range [][]string{nil, {"not-a-number"}} {
+		if _, err := h.Handle(context.Background(), Command{Action: ActionAdaptiveRouteSetBlockThreshold, Args: args}); err == nil {
+			t.Errorf("adrt_blockthr with args=%v should have errored", args)
+		}
+	}
+}
+
 func TestRouterHandler_AdaptiveRouteOn_RefusesWhenSusaninConfigured(t *testing.T) {
 	orig := susaninConfiguredFn
 	t.Cleanup(func() { susaninConfiguredFn = orig })

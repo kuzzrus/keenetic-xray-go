@@ -90,6 +90,11 @@ const (
 	ActionAdaptiveRouteOff    = "adrt_off"   // no args -- clears the REDIRECT rule and the redirect ipset
 	ActionAdaptiveRouteFlush  = "adrt_flush" // no args -- clears the ipset + classifier's persisted state, restarts the daemon (see that method's own doc comment for why a bare ipset flush alone made things worse, not better)
 	ActionAdaptiveRouteSetTTL = "adrt_ttl"   // args[0] = whole hours (e.g. "12") -- applies live within one classify tick, no restart
+	// ActionAdaptiveRouteSetBlockThreshold: args[0] = threshold (e.g.
+	// "8"); a value <= 0 disables ClrBlockPromote's block-widening
+	// entirely, not rejected as invalid the way SetTTL's <= 0 is --
+	// applies live within one classify tick, no restart.
+	ActionAdaptiveRouteSetBlockThreshold = "adrt_blockthr"
 	// L7 SNI hostname detection, a companion to adaptive routing above --
 	// feeds the same redirect ipset from a direct NFLOG read of TLS SNI/
 	// HTTP Host instead of conntrack timing. See internal/l7capture and

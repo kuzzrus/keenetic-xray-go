@@ -272,3 +272,30 @@ func (h *RouterHandler) adaptiveRouteSetTTL(args []string) (string, error) {
 	}
 	return fmt.Sprintf("TTL подтверждённых адресов: %dч", hours), nil
 }
+
+// adaptiveRouteSetBlockThreshold sets how many confirmed addresses in
+// the same /24 must accumulate before ClrBlockPromote widens the whole
+// network into the tunnel at once (AdaptiveRoute.BlockThreshold). Unlike
+// adaptiveRouteSetTTL, a non-positive value is valid input, not
+// rejected: it disables block-widening entirely, so only the exact
+// confirmed address is ever redirected -- see BlockThreshold's own doc
+// comment for why a large multi-service provider sharing address space
+// makes that a real, useful setting to reach for. Same live-apply and
+// no-rebindXray reasoning as adaptiveRouteSetTTL.
+func (h *RouterHandler) adaptiveRouteSetBlockThreshold(args []string) (string, error) {
+	if len(args) == 0 {
+		return "", fmt.Errorf("usage: adrt_blockthr <порог>")
+	}
+	n, err := strconv.Atoi(args[0])
+	if err != nil {
+		return "", fmt.Errorf("порог должен быть целым числом, получено %q", args[0])
+	}
+	h.Config.AdaptiveRoute.BlockThreshold = n
+	if err := h.Config.Save(h.ConfigPath); err != nil {
+		return "", err
+	}
+	if n <= 0 {
+		return "укрупнение блоков отключено — в туннель будут попадать только точные подтверждённые адреса", nil
+	}
+	return fmt.Sprintf("порог укрупнения блока: %d адресов", n), nil
+}

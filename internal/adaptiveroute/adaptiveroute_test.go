@@ -3,6 +3,7 @@ package adaptiveroute
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -193,27 +194,52 @@ func TestMembers(t *testing.T) {
 	}
 }
 
-func TestEnsureRedirect_AddsOneRulePerInterfaceAndProtocol(t *testing.T) {
+func TestEnsureRedirect_AddsOneRulePerInterfaceProtocolAndPort(t *testing.T) {
 	sent, _ := fakeSystem(t, "-P PREROUTING ACCEPT\n", true, nil)
 	opts := RedirectOptions{SetName: "susanin_ok", Port: 12345, LANInterfaces: []string{"br0"}}
 	if err := EnsureRedirect(context.Background(), opts); err != nil {
 		t.Fatal(err)
 	}
-	if len(*sent) != 2 {
-		t.Fatalf("calls = %v, want 2 (tcp + udp)", *sent)
+	if len(*sent) != len(redirectPorts) {
+		t.Fatalf("calls = %v, want one per redirectPorts entry (%d)", *sent, len(redirectPorts))
 	}
-	for i, proto := range []string{"tcp", "udp"} {
+	for i, p := range redirectPorts {
 		got := (*sent)[i]
-		if !strings.HasPrefix(got, "-t nat -A PREROUTING -i br0 -p "+proto+" ") {
-			t.Errorf("call %d = %q, wrong lead-in for %s", i, got, proto)
+		if !strings.HasPrefix(got, "-t nat -A PREROUTING -i br0 -p "+p.proto+" ") {
+			t.Errorf("call %d = %q, wrong lead-in for %s", i, got, p.proto)
 		}
 		for _, want := range []string{
-			"--match-set susanin_ok dst", "--comment " + redirectComment,
-			"-j REDIRECT --to-ports 12345",
+			"--match-set susanin_ok dst", "--dport " + strconv.Itoa(p.port),
+			"--comment " + redirectComment, "-j REDIRECT --to-ports 12345",
 		} {
 			if !strings.Contains(got, want) {
 				t.Errorf("call %d = %q, missing %q", i, got, want)
 			}
+		}
+	}
+}
+
+// TestEnsureRedirect_CoversOnlyWebPorts pins the actual policy, not just
+// the rule count: anything outside web traffic must not be redirected at
+// all, since a wrongly-promoted address used to have its entire
+// non-web traffic (a torrent transfer, in the incident that prompted
+// this) pulled through the tunnel. See redirectPorts' doc comment.
+func TestEnsureRedirect_CoversOnlyWebPorts(t *testing.T) {
+	sent, _ := fakeSystem(t, "-P PREROUTING ACCEPT\n", true, nil)
+	opts := RedirectOptions{SetName: "susanin_ok", Port: 12345, LANInterfaces: []string{"br0"}}
+	if err := EnsureRedirect(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(*sent, "\n")
+	for _, want := range []string{"-p tcp", "--dport 80", "--dport 443", "-p udp"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("rules = %q, missing %q", joined, want)
+		}
+	}
+	// Every rule must carry a --dport; a port-blind one is the bug.
+	for i, got := range *sent {
+		if !strings.Contains(got, "--dport ") {
+			t.Errorf("call %d = %q, has no --dport -- would redirect every port", i, got)
 		}
 	}
 }
@@ -224,11 +250,11 @@ func TestEnsureRedirect_MultipleInterfaces(t *testing.T) {
 	if err := EnsureRedirect(context.Background(), opts); err != nil {
 		t.Fatal(err)
 	}
-	if len(*sent) != 4 {
-		t.Fatalf("calls = %v, want 4 (2 interfaces x 2 protocols)", *sent)
+	if len(*sent) != 2*len(redirectPorts) {
+		t.Fatalf("calls = %v, want 2 interfaces x %d rules", *sent, len(redirectPorts))
 	}
-	if !strings.Contains((*sent)[0], "-i br0 ") || !strings.Contains((*sent)[2], "-i br1 ") {
-		t.Errorf("calls = %v, want br0's pair before br1's", *sent)
+	if !strings.Contains((*sent)[0], "-i br0 ") || !strings.Contains((*sent)[len(redirectPorts)], "-i br1 ") {
+		t.Errorf("calls = %v, want br0's rules before br1's", *sent)
 	}
 }
 
@@ -243,8 +269,8 @@ func TestEnsureRedirect_ReplacesStaleRule(t *testing.T) {
 	if err := EnsureRedirect(context.Background(), opts); err != nil {
 		t.Fatal(err)
 	}
-	if len(*sent) != 3 {
-		t.Fatalf("calls = %v, want a -D of the stale rule then 2 -A calls", *sent)
+	if len(*sent) != 1+len(redirectPorts) {
+		t.Fatalf("calls = %v, want a -D of the stale rule then %d -A calls", *sent, len(redirectPorts))
 	}
 	if !strings.HasPrefix((*sent)[0], "-t nat -D PREROUTING ") || !strings.Contains((*sent)[0], "--to-ports 9999") {
 		t.Errorf("first call = %q, want -D of the stale 9999 rule", (*sent)[0])
@@ -269,11 +295,11 @@ func TestEnsureRedirect_FallsBackWithoutCommentMatch(t *testing.T) {
 	if err := EnsureRedirect(context.Background(), opts); err != nil {
 		t.Fatalf("EnsureRedirect = %v, want nil after the no-comment retry", err)
 	}
-	// First attempt: one commented -A that fails immediately, no second
-	// rule attempted (add() returns on first error). Retry: two plain
-	// -A calls that both succeed.
-	if len(sent) != 3 {
-		t.Fatalf("calls = %v, want [failed commented -A, plain -A, plain -A]", sent)
+	// First attempt: one commented -A that fails immediately, no further
+	// rule attempted (add() returns on first error). Retry: one plain -A
+	// per redirectPorts entry, all succeeding.
+	if len(sent) != 1+len(redirectPorts) {
+		t.Fatalf("calls = %v, want [failed commented -A, then %d plain -A]", sent, len(redirectPorts))
 	}
 	if !strings.Contains(sent[0], "-m comment") {
 		t.Errorf("first call = %q, want the commented attempt", sent[0])
@@ -302,13 +328,30 @@ func TestEnsureRedirect_Validation(t *testing.T) {
 }
 
 func TestRedirectInPlace(t *testing.T) {
+	dump := "-P PREROUTING ACCEPT\n"
+	for _, p := range redirectPorts {
+		dump += "-A PREROUTING -i br0 -p " + p.proto + " -m set --match-set susanin_ok dst --dport " +
+			strconv.Itoa(p.port) + " -j REDIRECT --to-ports 12345\n"
+	}
+	fakeSystem(t, dump, true, nil)
+	opts := RedirectOptions{SetName: "susanin_ok", Port: 12345, LANInterfaces: []string{"br0"}}
+	if !RedirectInPlace(context.Background(), opts) {
+		t.Error("want true: every rule is live")
+	}
+}
+
+// TestRedirectInPlace_PortBlindRuleIsDrift covers the upgrade path off a
+// pre-2026-09-16 install: a surviving rule with no --dport at all
+// redirects every port and must be treated as drift so reconcile
+// replaces it, not accepted as "close enough".
+func TestRedirectInPlace_PortBlindRuleIsDrift(t *testing.T) {
 	dump := "-P PREROUTING ACCEPT\n" +
 		"-A PREROUTING -i br0 -p tcp -m set --match-set susanin_ok dst -j REDIRECT --to-ports 12345\n" +
 		"-A PREROUTING -i br0 -p udp -m set --match-set susanin_ok dst -j REDIRECT --to-ports 12345\n"
 	fakeSystem(t, dump, true, nil)
 	opts := RedirectOptions{SetName: "susanin_ok", Port: 12345, LANInterfaces: []string{"br0"}}
-	if !RedirectInPlace(context.Background(), opts) {
-		t.Error("want true: both rules are live")
+	if RedirectInPlace(context.Background(), opts) {
+		t.Error("want false: the old port-blind rules are not what we want now")
 	}
 }
 

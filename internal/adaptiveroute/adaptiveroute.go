@@ -224,14 +224,44 @@ func (o RedirectOptions) validate() error {
 	return nil
 }
 
+// redirectPorts are the (protocol, destination port) pairs the REDIRECT
+// rule covers: web traffic only.
+//
+// Until 2026-09-16 there was no port match at all -- one rule per
+// protocol, redirecting *everything* addressed to a member of the set.
+// That turned every classifier mistake into a much larger one: a
+// BitTorrent peer wrongly promoted (see internal/classifier's own
+// promotableDst doc comment for how that happened by the batch) had not
+// just its handshake but the entire torrent transfer pulled through the
+// operator's VPN egress, on whatever high port the swarm used.
+//
+// Keeping the match here as well as in the classifier is deliberate
+// defense in depth, and this file's own history is the argument for it:
+// several separate paths write into this ipset, and today alone four
+// separate bugs came from one of them forgetting a check the others
+// made. A port-scoped REDIRECT bounds the blast radius of *any* wrong
+// entry, whoever added it and whatever check they skipped.
+var redirectPorts = []struct {
+	proto string
+	port  int
+}{
+	{"tcp", 80},
+	{"tcp", 443},
+	{"udp", 443}, // QUIC
+}
+
 // redirectSpecs renders the match+target half of every rule opts wants --
 // everything after `-t nat -A PREROUTING` -- one entry per (interface,
-// protocol) pair, tcp then udp per interface, in a stable order.
+// protocol, port) triple, in a stable order.
 func redirectSpecs(o RedirectOptions, withComment bool) [][]string {
 	var specs [][]string
 	for _, iface := range o.LANInterfaces {
-		for _, proto := range []string{"tcp", "udp"} {
-			spec := []string{"-i", iface, "-p", proto, "-m", "set", "--match-set", o.SetName, "dst"}
+		for _, p := range redirectPorts {
+			spec := []string{
+				"-i", iface, "-p", p.proto,
+				"-m", "set", "--match-set", o.SetName, "dst",
+				"--dport", strconv.Itoa(p.port),
+			}
 			if withComment {
 				spec = append(spec, "-m", "comment", "--comment", redirectComment)
 			}
@@ -291,8 +321,9 @@ func RedirectInPlace(ctx context.Context, opts RedirectOptions) bool {
 	matchSet := "--match-set " + opts.SetName + " dst"
 	toPorts := "--to-ports " + strconv.Itoa(opts.Port)
 	for _, iface := range opts.LANInterfaces {
-		for _, proto := range []string{"tcp", "udp"} {
-			if !anyLineHasAll(lines, "-i "+iface+" ", "-p "+proto+" ", matchSet, "-j REDIRECT", toPorts) {
+		for _, p := range redirectPorts {
+			if !anyLineHasAll(lines, "-i "+iface+" ", "-p "+p.proto+" ", matchSet,
+				"--dport "+strconv.Itoa(p.port), "-j REDIRECT", toPorts) {
 				return false
 			}
 		}

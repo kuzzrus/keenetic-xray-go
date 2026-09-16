@@ -170,6 +170,36 @@ func isPrivateDst(dst string) bool {
 	return false
 }
 
+// promotableDst reports whether a flow's destination port is one this
+// feature can actually do anything useful about. TCP 80/443 and UDP 443
+// (QUIC) only -- the same ports internal/adaptiveroute's own REDIRECT
+// rule covers, so promoting anything else could never have had an
+// effect beyond pulling unrelated traffic into the tunnel.
+//
+// Found live (2026-09-16), and it is the single worst false-positive
+// source this feature has had: neither ClrFast's TCP cases nor ClrSoft's
+// silent-UDP case restricted the port at all, and "SYN sent, no reply"
+// is the textbook signature of a *dead BitTorrent peer* -- of which any
+// swarm has dozens. A single torrenting LAN client promoted whole
+// batches of unrelated residential addresses (nine Latvian consumer-ISP
+// hosts confirmed within one 500ms tick, in the dump that surfaced
+// this), and because the REDIRECT rule was likewise port-blind, the
+// actual torrent transfer to each of them then went out through the
+// operator's VPN egress. Self-sustaining, too: a swarm keeps dialling
+// fresh peers, so every hour of downloading minted new promotions.
+//
+// The deliberate trade: a genuinely blocked non-web service (a game
+// server, IMAP, a WireGuard endpoint) can no longer be detected. That
+// capability was mostly theoretical -- this project's dataplane is a
+// VLESS tunnel aimed at web traffic -- and the above is what was being
+// paid for it.
+func promotableDst(udp bool, dport uint) bool {
+	if udp {
+		return dport == 443 // QUIC; plain UDP has no equivalent worth redirecting
+	}
+	return dport == 80 || dport == 443
+}
+
 // isExcludedDst reports whether cfg.ExcludedRangeLookup (when set) flags
 // dst as never-classify. Mirrors isPrivateDst's own boolean-gate shape;
 // see ExcludedRangeLookup's doc comment for why this is a separate field

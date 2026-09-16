@@ -1112,6 +1112,27 @@ func (h *RouterHandler) setPorts(ctx context.Context, args []string) (string, er
 // .ipk URL to get back to it) so the restarted daemon can watch itself
 // come up and, if it doesn't, hand the operator a one-line
 // `keenetic-xray internal self-rollback`.
+// selfUpdateOverallTimeout bounds the detached self-update chain as a
+// WHOLE (curl, install.sh's own fetches, opkg install, postinst --
+// ensure-xray-core, postinst-setup's cron check, S99 start) -- found
+// live (2026-09-16): every individual step already had its own timeout
+// (including this project's own curl calls, #159) except postinst-
+// setup's conditional cronOpkgInstall (bounded separately, see
+// internal/install/watchdog.go), but nothing bounded the child AS A
+// WHOLE. A future unbounded step anywhere in that chain, or several
+// slow-but-individually-bounded steps compounding (a stalled TCP
+// connection an embedded router's busybox curl doesn't always time out
+// as cleanly as a desktop build, a genuine xray-core reinstall, opkg's
+// own dependency resolution), could still hang logSelfUpdateOutcome's
+// c.Wait() forever with nothing ever logged or reported -- exactly the
+// "запущено, then silence" symptom that kept recurring even after
+// #159/#193/#196/#197 each closed one specific cause of it. 15 minutes
+// comfortably covers the slowest legitimate path (roughly 8 minutes of
+// this project's own curl timeouts plus up to 6 more for a genuine
+// xray-core reinstall) with margin, while guaranteeing this eventually
+// gets logged instead of hanging indefinitely.
+const selfUpdateOverallTimeout = 15 * time.Minute
+
 func (h *RouterHandler) selfUpdate() (string, error) {
 	url := h.InstallURL
 	if url == "" {
@@ -1148,13 +1169,19 @@ func (h *RouterHandler) selfUpdate() (string, error) {
 	const tmpScript = "/tmp/keenetic-xray-selfupdate.$$.sh"
 	cmd := "sleep 2; curl -fsSL --connect-timeout 10 --max-time 60 " + url + " -o " + tmpScript +
 		" && sh " + tmpScript + "; rc=$?; rm -f " + tmpScript + "; exit $rc"
-	c := exec.Command("sh", "-c", cmd)
+	// See selfUpdateOverallTimeout's own doc comment for why this needs
+	// its own fresh, independent deadline rather than reusing whatever
+	// ctx Handle was called with (this detached child is meant to
+	// outlive the request that started it).
+	octx, cancel := context.WithTimeout(context.Background(), selfUpdateOverallTimeout)
+	c := exec.CommandContext(octx, "sh", "-c", cmd)
 	var out bytes.Buffer
 	c.Stdout, c.Stderr = &out, &out
 	if err := c.Start(); err != nil {
+		cancel()
 		return "", fmt.Errorf("запуск обновления: %w", err)
 	}
-	go h.logSelfUpdateOutcome(c, &out)
+	go h.logSelfUpdateOutcome(c, &out, cancel)
 	// "~2с" used to describe the whole update here -- it's actually only
 	// the pause before the download even starts (c's own leading `sleep
 	// 2`), not the full cycle (fetch, opkg install/postinst, daemon
@@ -1179,7 +1206,8 @@ func (h *RouterHandler) selfUpdate() (string, error) {
 // watchPostUpdate's own "post-update:" lines on the next process's
 // startup -- this only covers the run itself, most usefully the failures
 // that never get that far.
-func (h *RouterHandler) logSelfUpdateOutcome(c *exec.Cmd, out *bytes.Buffer) {
+func (h *RouterHandler) logSelfUpdateOutcome(c *exec.Cmd, out *bytes.Buffer, cancel context.CancelFunc) {
+	defer cancel() // releases selfUpdateOverallTimeout's context once c.Wait() returns, one way or another
 	err := c.Wait()
 	if h.Logf == nil {
 		return

@@ -1,11 +1,13 @@
 package install
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // WatchdogMarker tags the cron line this package manages, so it can be
@@ -167,6 +169,10 @@ func WatchdogEnabled(cronFile string) (bool, error) {
 // cron entry above relies on to check the keenetic-xray daemon itself.
 const CronInitScript = "/opt/etc/init.d/S10cron"
 
+// cronOpkgTimeout bounds cronOpkgInstall's own opkg calls -- see that
+// var's doc comment for why this needs one at all.
+const cronOpkgTimeout = 2 * time.Minute
+
 // The four points below are the only places CronRunning/EnsureCron
 // actually touch the system -- injectable vars (same convention as
 // internal/keenetic's lookNdmc/ndmcRun) so the *decision logic* here
@@ -186,10 +192,21 @@ var (
 		return exec.Command("sh", "-c", "ps | grep -v grep | grep -q crond").Run() == nil
 	}
 	cronOpkgInstall = func() error {
+		// Bounded: this is the one network-touching step in EnsureCron's
+		// whole chain (the other three vars above are local status/init-
+		// script checks) -- reached from postinst-setup on every self-
+		// update whenever cron isn't already detected running, so an
+		// unbounded stall here can hang the *entire* self-update chain
+		// just as badly as the since-fixed lack of a timeout on this
+		// project's own curl calls once did (#159). See
+		// RouterHandler.selfUpdateOverallTimeout's own doc comment
+		// (internal/botcontrol/commands.go) for the fuller incident.
+		ctx, cancel := context.WithTimeout(context.Background(), cronOpkgTimeout)
+		defer cancel()
 		// `opkg update` first, best-effort -- same reasoning as
 		// internal/addons' own opkgInstall helper.
-		_ = exec.Command("opkg", "update").Run()
-		return exec.Command("opkg", "install", "cron").Run()
+		_ = exec.CommandContext(ctx, "opkg", "update").Run()
+		return exec.CommandContext(ctx, "opkg", "install", "cron").Run()
 	}
 )
 

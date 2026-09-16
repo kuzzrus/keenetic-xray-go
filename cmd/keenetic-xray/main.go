@@ -215,6 +215,10 @@ func cmdDaemon(args []string) error {
 	applyMSSClamp(cfg, logf)
 	applyDNSAtStartup(cfg, logf)
 	applyAdaptiveRouteAtStartup(cfg, logf)
+	// Synchronous, bounded: see georangesBootstrap's own doc comment for
+	// why ClrFast/ClrSoft's ExcludedRangeLookup veto must never race its
+	// own data source the way it used to.
+	georangesBootstrap(ctx, logf)
 	go adaptiveRouteClassifyLoop(ctx, logf)
 	go l7SNIClassifyLoop(ctx, logf)
 	// Only built when the agent can actually deliver it -- presetRefreshLoop

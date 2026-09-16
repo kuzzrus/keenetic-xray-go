@@ -416,6 +416,7 @@ func adaptiveRouteClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 		// instead of needing clsCfg rebuilt (which only happens on
 		// AdaptiveRoute.Enabled going false then true again).
 		clsCfg.OKTTL = cfg.AdaptiveRoute.EffectiveOKTTL()
+		clsCfg.BlockThreshold = cfg.AdaptiveRoute.EffectiveBlockThreshold()
 
 		now := time.Now()
 		flows, err := classifier.ScanConntrack("")

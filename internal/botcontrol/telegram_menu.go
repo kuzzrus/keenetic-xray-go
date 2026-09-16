@@ -190,6 +190,12 @@ func adaptiveRouteScreenText(id string) string {
 		"классификатор в памяти всё ещё будет думать, что старое подтверждено, и не станет спешить " +
 		"переподтверждать заново) — коротко мигнёт соединение, это ожидаемо.\n\n" +
 		"TTL подтверждённых адресов (сколько держать адрес перенаправленным без переповторной проверки) — кнопки ниже.\n\n" +
+		"Порог укрупнения блока — если несколько подтверждённых адресов оказались в одной /24, " +
+		"классификатор забирает в туннель всю сеть целиком, а не только их (нужно для CDN с " +
+		"быстрой ротацией адресов вроде Instagram). Обратная сторона: у крупного " +
+		"мультисервисного провайдера (Яндекс, Ozon, ...) так может задеть и никогда не " +
+		"блокировавшиеся соседние сервисы. Откл — только точные адреса, без укрупнения вообще; " +
+		"чем выше порог, тем менее охотно срабатывает укрупнение — кнопки ниже.\n\n" +
 		"🔍 L7 SNI — отдельная, независимо включаемая надстройка: читает TLS SNI/HTTP Host " +
 		"прямо с провода (NFLOG) и досылает в тот же список адресов совпадения с твоими routes, " +
 		"даже если DNS-запрос сам роутер не видел (DoH/DoT-клиенты, приложения с зашитым IP). " +
@@ -202,6 +208,8 @@ func adaptiveRouteScreenKB(id string) inlineKeyboard {
 		{{Text: "✅ Включить", CallbackData: "act:adrt_on:" + id}, {Text: "⛔ Выключить", CallbackData: "act:adrt_off:" + id}},
 		{{Text: "TTL: 6ч", CallbackData: "adttl:" + id + ":6"}, {Text: "12ч", CallbackData: "adttl:" + id + ":12"},
 			{Text: "18ч", CallbackData: "adttl:" + id + ":18"}, {Text: "24ч", CallbackData: "adttl:" + id + ":24"}},
+		{{Text: "Блок: Откл", CallbackData: "adblk:" + id + ":-1"}, {Text: "4", CallbackData: "adblk:" + id + ":4"},
+			{Text: "8", CallbackData: "adblk:" + id + ":8"}, {Text: "16", CallbackData: "adblk:" + id + ":16"}},
 		{{Text: "🔍 L7 SNI вкл", CallbackData: "act:l7sni_on:" + id}, {Text: "🔍 L7 SNI выкл", CallbackData: "act:l7sni_off:" + id}},
 		{{Text: "🧹 Очистить список", CallbackData: "act:adrt_flush:" + id}},
 		{{Text: "📊 Показать", CallbackData: "act:adrt_show:" + id}, {Text: "⬅️ Назад", CallbackData: "ptm:" + id}},
@@ -447,6 +455,14 @@ func (b *TelegramBot) handleCallback(ctx context.Context, cb tgCallbackQuery) {
 			return
 		}
 		b.enqueueCardArgs(ctx, cb, id, ActionAdaptiveRouteSetTTL, []string{hours})
+	case strings.HasPrefix(data, "adblk:"):
+		rest := strings.TrimPrefix(data, "adblk:")
+		id, n, ok := strings.Cut(rest, ":")
+		if !ok {
+			b.editCB(ctx, cb, "плохая кнопка", mainMenuKB())
+			return
+		}
+		b.enqueueCardArgs(ctx, cb, id, ActionAdaptiveRouteSetBlockThreshold, []string{n})
 	case strings.HasPrefix(data, "corem:"):
 		id := strings.TrimPrefix(data, "corem:")
 		if !b.Store.HasRouter(id) {

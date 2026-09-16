@@ -813,3 +813,21 @@ func TestAdaptiveRouteConfig_EffectiveOKTTL(t *testing.T) {
 		}
 	}
 }
+
+func TestAdaptiveRouteConfig_EffectiveBlockThreshold(t *testing.T) {
+	cases := []struct {
+		threshold int
+		want      int
+	}{
+		{0, DefaultBlockThreshold}, // unset -> default
+		{8, 8},
+		{1, 1},
+		{-1, -1}, // negative is returned as-is -- a real "disabled" state, not garbage
+	}
+	for _, c := range cases {
+		a := AdaptiveRouteConfig{BlockThreshold: c.threshold}
+		if got := a.EffectiveBlockThreshold(); got != c.want {
+			t.Errorf("EffectiveBlockThreshold with BlockThreshold=%d = %d, want %d", c.threshold, got, c.want)
+		}
+	}
+}

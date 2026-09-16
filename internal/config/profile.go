@@ -460,6 +460,30 @@ type AdaptiveRouteConfig struct {
 	// also stop being eligible for auto-detection while this is on. See
 	// the russia-ip-exclusion-plan memory for the incident this closes.
 	DisableRussianExclusion bool `json:"disable_russian_ip_exclusion,omitempty"`
+
+	// BlockThreshold overrides internal/classifier.Config.BlockThreshold:
+	// how many individually-confirmed addresses inside the same network
+	// (BlockCIDRBits, a /24) must accumulate before ClrBlockPromote
+	// widens the whole network into the tunnel at once, instead of every
+	// address in it earning its own promotion individually. 0 (the zero
+	// value, unset) -> DefaultBlockThreshold; a positive value is used
+	// as-is; a *negative* value is also used as-is and disables block-
+	// widening entirely (classifier.Config.BlockThreshold <= 0 skips
+	// that whole pass) -- deliberately not folded into "0 means
+	// disabled" the way OKTTLHours' zero value means "use the default",
+	// since unlike OKTTL this field has a real, distinct disabled state
+	// a caller needs to be able to select. Bot-exposed as preset buttons
+	// (Откл/4/8/16) on the adaptive-routing screen, same as OKTTLHours'
+	// own precedent. Exists because a large multi-service provider
+	// sharing address space can trip the default threshold from
+	// ordinary unrelated traffic -- confirmed live 2026-09-16: Yandex,
+	// Ozon and T-Bank all had unrelated, never-blocked addresses swept
+	// into the tunnel this way (internal/knownranges doesn't cover any
+	// of them, so this was the naive /24 guess, not a known-range
+	// widening) -- see the russia-ip-exclusion-plan memory. Read fresh
+	// every classify tick, same as OKTTLHours -- applies live within one
+	// tick, no daemon restart.
+	BlockThreshold int `json:"block_threshold,omitempty"`
 }
 
 // DefaultAdaptiveRoutePort is the xray dokodemo-door inbound's port.
@@ -475,6 +499,12 @@ const DefaultAdaptiveRoutePort = 12080
 // literals; if classifier's own default ever changes, update this one
 // to match, tests should catch a drift either way.
 const DefaultOKTTLHours = 6
+
+// DefaultBlockThreshold mirrors internal/classifier.DefaultConfig's own
+// BlockThreshold (4) -- duplicated as a plain constant rather than
+// importing internal/classifier here, same reasoning as
+// DefaultOKTTLHours.
+const DefaultBlockThreshold = 4
 
 func (a AdaptiveRouteConfig) EffectivePort() int {
 	if a.Port > 0 {
@@ -506,6 +536,19 @@ func (a AdaptiveRouteConfig) EffectiveOKTTL() time.Duration {
 		return time.Duration(a.OKTTLHours) * time.Hour
 	}
 	return DefaultOKTTLHours * time.Hour
+}
+
+// EffectiveBlockThreshold returns a.BlockThreshold unchanged unless it's
+// unset (0), in which case it returns DefaultBlockThreshold. Unlike
+// EffectivePort/EffectiveOKTTL, a negative value is returned as-is
+// rather than falling back to the default -- see BlockThreshold's own
+// doc comment for why negative is a real, meaningful "disabled" state
+// here, not garbage input.
+func (a AdaptiveRouteConfig) EffectiveBlockThreshold() int {
+	if a.BlockThreshold == 0 {
+		return DefaultBlockThreshold
+	}
+	return a.BlockThreshold
 }
 
 // Defaults for WGTransportConfig. The address is a deliberately obscure

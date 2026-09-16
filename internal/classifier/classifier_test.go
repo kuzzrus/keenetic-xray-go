@@ -89,6 +89,31 @@ func TestClrFast_SkipsNonLANAndPrivateDst(t *testing.T) {
 	}
 }
 
+func TestClrFast_SkipsExcludedRangeDst(t *testing.T) {
+	cfg, now := testConfig(), time.Now()
+	cfg.ExcludedRangeLookup = func(ip string) (string, bool) {
+		if ip == blockedDst {
+			return "1.2.3.0/24", true
+		}
+		return "", false
+	}
+	actions := ClrFast(cfg, NewState(), []Flow{tcpFlow("SYN_SENT", 5, 0, 0, 0)}, now)
+	if len(actions) != 0 {
+		t.Errorf("actions = %+v, want none -- dst matches ExcludedRangeLookup", actions)
+	}
+}
+
+func TestExcludedRangeLookup_NotConsultedWhenNil(t *testing.T) {
+	cfg := testConfig()
+	if cfg.ExcludedRangeLookup != nil {
+		t.Fatal("testConfig()/DefaultConfig() should leave ExcludedRangeLookup nil")
+	}
+	actions := ClrFast(cfg, NewState(), []Flow{tcpFlow("SYN_SENT", 5, 0, 0, 0)}, time.Now())
+	if len(actions) == 0 {
+		t.Fatal("actions = none, want a promotion -- ExcludedRangeLookup unset should never veto")
+	}
+}
+
 func TestClrFast_SkipsExistingCandidate(t *testing.T) {
 	cfg, state, now := testConfig(), NewState(), time.Now()
 	state.OK[0].add(blockedDst, now, time.Hour) // already confirmed
@@ -114,6 +139,20 @@ func TestClrSoft_TCPStall_NotEnoughData(t *testing.T) {
 	actions := ClrSoft(cfg, state, NewRateCache(), []Flow{tcpFlow("ESTABLISHED", 5, 999, 0, 0)}, now)
 	if len(actions) != 0 {
 		t.Errorf("actions = %+v, want none (ob below threshold)", actions)
+	}
+}
+
+func TestClrSoft_SkipsExcludedRangeDst(t *testing.T) {
+	cfg, now := testConfig(), time.Now()
+	cfg.ExcludedRangeLookup = func(ip string) (string, bool) {
+		if ip == blockedDst {
+			return "1.2.3.0/24", true
+		}
+		return "", false
+	}
+	actions := ClrSoft(cfg, NewState(), NewRateCache(), []Flow{tcpFlow("ESTABLISHED", 5, 1000, 2, 255)}, now)
+	if len(actions) != 0 {
+		t.Errorf("actions = %+v, want none -- dst matches ExcludedRangeLookup", actions)
 	}
 }
 

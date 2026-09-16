@@ -81,6 +81,27 @@ type Config struct {
 	// so the default here is deliberately narrow enough to keep those
 	// while rejecting a sprawling generic provider's own /15s and /16s.
 	KnownRangeMinPrefixBits int
+
+	// ExcludedRangeLookup, when set, vetoes a destination from ever
+	// becoming a classification candidate at all -- checked in ClrFast/
+	// ClrSoft right alongside isPrivateDst, before any Test/OK state
+	// entry is created for it. Unlike KnownRangeLookup (which only
+	// *widens* an already-decided ClrBlockPromote promotion),
+	// this is a hard gate: a destination that matches is never
+	// classified, full stop. Exists for internal/georanges (Russian-
+	// registered IP space) -- the adaptive-route feature exists to route
+	// around *foreign* DPI blocks, so a Russian-hosted false positive
+	// (a LAN health-check probing an unrelated protocol, a transient
+	// stall, ...) should never have been eligible in the first place;
+	// see the russia-ip-exclusion-plan memory for the incident that
+	// prompted this. Kept as an injected pure function for the same
+	// reason as KnownRangeLookup: this package stays free of any I/O of
+	// its own, the caller owns fetching/caching/refreshing the table.
+	// nil -> no additional exclusion, the original behavior every
+	// existing test exercises. cidr is unused by the caller today, kept
+	// only so georanges.Lookup's existing signature (shared with
+	// KnownRangeLookup) can be wired in directly with no adapter.
+	ExcludedRangeLookup func(ip string) (cidr string, ok bool)
 }
 
 // DefaultConfig mirrors config_set_defaults' thresholds (src/config.c)
@@ -147,6 +168,18 @@ func isPrivateDst(dst string) bool {
 		}
 	}
 	return false
+}
+
+// isExcludedDst reports whether cfg.ExcludedRangeLookup (when set) flags
+// dst as never-classify. Mirrors isPrivateDst's own boolean-gate shape;
+// see ExcludedRangeLookup's doc comment for why this is a separate field
+// rather than folded into isPrivateDst's static list.
+func isExcludedDst(cfg *Config, dst string) bool {
+	if cfg.ExcludedRangeLookup == nil {
+		return false
+	}
+	_, ok := cfg.ExcludedRangeLookup(dst)
+	return ok
 }
 
 // fromLAN reports whether src falls in one of cfg's LAN subnets.

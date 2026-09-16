@@ -61,7 +61,7 @@ func ClrFast(cfg *Config, state *State, flows []Flow, now time.Time) []Action {
 		if f.L4Proto != 6 && f.L4Proto != 17 {
 			continue
 		}
-		if !fromLAN(cfg, f.Src) || isPrivateDst(f.Dst) {
+		if !fromLAN(cfg, f.Src) || isPrivateDst(f.Dst) || isExcludedDst(cfg, f.Dst) {
 			continue
 		}
 		if !candidateOK(state, f.L4Proto == 17, f.Dst, now) {
@@ -154,7 +154,7 @@ func ClrSoft(cfg *Config, state *State, cache *RateCache, flows []Flow, now time
 		if f.L4Proto != 6 && f.L4Proto != 17 {
 			continue
 		}
-		if !fromLAN(cfg, f.Src) || isPrivateDst(f.Dst) {
+		if !fromLAN(cfg, f.Src) || isPrivateDst(f.Dst) || isExcludedDst(cfg, f.Dst) {
 			continue
 		}
 		udp := f.L4Proto == 17

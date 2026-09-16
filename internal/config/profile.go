@@ -447,6 +447,19 @@ type AdaptiveRouteConfig struct {
 	// Port/LANSubnet, which reshape xray's own config or the REDIRECT
 	// rule and do need one.
 	OKTTLHours int `json:"ok_ttl_hours,omitempty"`
+
+	// DisableRussianExclusion turns off internal/classifier's
+	// ExcludedRangeLookup veto (internal/georanges, a background-
+	// refreshed table of Russian-registered IPv4 space) -- false (the
+	// zero value) keeps the exclusion ON by default, since this is a
+	// safety fix for a real false-positive class (a LAN health-check
+	// hitting a Russian-hosted server on the wrong protocol reads as
+	// "looks blocked" to the conntrack-only classifier) rather than an
+	// opt-in feature. The honest tradeoff, for anyone who wants this
+	// off: a Russian-hosted service that later gets blocked by RKN would
+	// also stop being eligible for auto-detection while this is on. See
+	// the russia-ip-exclusion-plan memory for the incident this closes.
+	DisableRussianExclusion bool `json:"disable_russian_ip_exclusion,omitempty"`
 }
 
 // DefaultAdaptiveRoutePort is the xray dokodemo-door inbound's port.

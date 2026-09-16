@@ -83,6 +83,18 @@ func knownRangesCachePath() string {
 	return envOr("KEENETIC_XRAY_KNOWN_RANGES_CACHE", logDir()+"/known-ranges.txt")
 }
 
+// georangesCachePath is where georangesRefreshLoop keeps its daily-
+// refreshed copy of internal/georanges' source list (HackingGate/
+// Country-IP-Blocks' RU_IPv4.txt), so internal/classifier's
+// ExcludedRangeLookup has something to consult from the first classify
+// tick after a restart, before the first background refresh of a given
+// run has had a chance to complete. Same reasoning as
+// knownRangesCachePath, a separate file since it's an independently
+// refreshed dataset.
+func georangesCachePath() string {
+	return envOr("KEENETIC_XRAY_GEORANGES_CACHE", logDir()+"/georanges-ru.txt")
+}
+
 const defaultOptPath = "/opt"
 
 func optPath() string {

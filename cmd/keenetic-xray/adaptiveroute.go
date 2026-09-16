@@ -12,6 +12,7 @@ import (
 	"github.com/kuzzrus/keenetic-xray-go/internal/adaptiveroute"
 	"github.com/kuzzrus/keenetic-xray-go/internal/classifier"
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
+	"github.com/kuzzrus/keenetic-xray-go/internal/georanges"
 	"github.com/kuzzrus/keenetic-xray-go/internal/keenetic"
 	"github.com/kuzzrus/keenetic-xray-go/internal/knownranges"
 	"github.com/kuzzrus/keenetic-xray-go/internal/xrayctl"
@@ -394,6 +395,15 @@ func adaptiveRouteClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 			// wiring the function reference once here is enough, no need
 			// to re-set it as the table itself refreshes in the background.
 			c.KnownRangeLookup = knownranges.Lookup
+			// Same reasoning as KnownRangeLookup just above: wire the
+			// function reference once, georangesRefreshLoop
+			// (cmd/keenetic-xray/georanges.go) keeps the table it reads
+			// current in the background. DisableRussianExclusion default
+			// (false) keeps this on -- see AdaptiveRouteConfig's own doc
+			// comment for why.
+			if !cfg.AdaptiveRoute.DisableRussianExclusion {
+				c.ExcludedRangeLookup = georanges.Lookup
+			}
 			clsCfg = &c
 			logf("adaptive-route: classifier started (LAN subnet %s)", subnet)
 		}

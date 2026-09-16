@@ -61,7 +61,8 @@ func ClrFast(cfg *Config, state *State, flows []Flow, now time.Time) []Action {
 		if f.L4Proto != 6 && f.L4Proto != 17 {
 			continue
 		}
-		if !fromLAN(cfg, f.Src) || isPrivateDst(f.Dst) || isExcludedDst(cfg, f.Dst) {
+		if !fromLAN(cfg, f.Src) || isPrivateDst(f.Dst) || isExcludedDst(cfg, f.Dst) ||
+			!promotableDst(f.L4Proto == 17, f.DPort) {
 			continue
 		}
 		if !candidateOK(state, f.L4Proto == 17, f.Dst, now) {
@@ -154,7 +155,8 @@ func ClrSoft(cfg *Config, state *State, cache *RateCache, flows []Flow, now time
 		if f.L4Proto != 6 && f.L4Proto != 17 {
 			continue
 		}
-		if !fromLAN(cfg, f.Src) || isPrivateDst(f.Dst) || isExcludedDst(cfg, f.Dst) {
+		if !fromLAN(cfg, f.Src) || isPrivateDst(f.Dst) || isExcludedDst(cfg, f.Dst) ||
+			!promotableDst(f.L4Proto == 17, f.DPort) {
 			continue
 		}
 		udp := f.L4Proto == 17
@@ -173,14 +175,14 @@ func ClrSoft(cfg *Config, state *State, cache *RateCache, flows []Flow, now time
 				}
 			}
 		case f.L4Proto == 17:
-			if !f.HasReply {
-				if f.DPort != 443 && f.DPort != 53 && f.DPort != 67 && f.DPort != 68 &&
-					f.DPort != 123 && f.OP >= 12 && f.RP == 0 {
-					if candidateOK(state, udp, f.Dst, now) {
-						actions = append(actions, promoteTest(cfg, state, f, now)...)
-					}
-				}
-			} else if f.DPort == 443 && f.OP >= 8 {
+			// QUIC late-stall only. Upstream also promoted *silent*
+			// non-QUIC UDP here (12+ packets, no reply, excluding
+			// 53/67/68/123) -- deliberately dropped: promotableDst above
+			// now admits only UDP 443, which made that branch
+			// unreachable, and it was precisely what caught BitTorrent
+			// DHT/uTP traffic. See promotableDst's own doc comment for
+			// the incident.
+			if f.HasReply && f.OP >= 8 {
 				if origActive, replSilent, hadPrev := cache.delta(f); hadPrev && origActive && replSilent {
 					actions = append(actions, watchOrConfirmLateStall(cfg, state, udp, f, now)...)
 				}
@@ -230,7 +232,14 @@ func ClrJudge(cfg *Config, state *State, flows []Flow, now time.Time) []Action {
 		if f.L4Proto != 6 && f.L4Proto != 17 {
 			continue
 		}
-		if !fromLAN(cfg, f.Src) {
+		// Same port gate as ClrFast/ClrSoft (see promotableDst): a
+		// non-web flow must not keep an entry alive either, or a
+		// torrent swarm's own traffic to an address promoted earlier
+		// would refresh its TTL indefinitely and the mistake would
+		// never expire. Symmetric by design -- such a flow can no
+		// longer justify a drop either, matching the fact that it can
+		// no longer justify a promotion.
+		if !fromLAN(cfg, f.Src) || !promotableDst(f.L4Proto == 17, f.DPort) {
 			continue
 		}
 		udp := f.L4Proto == 17

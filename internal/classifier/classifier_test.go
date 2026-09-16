@@ -114,6 +114,46 @@ func TestExcludedRangeLookup_NotConsultedWhenNil(t *testing.T) {
 	}
 }
 
+// TestClrFast_SilentSYNOnNonWebPortNeverPromotes is the torrent case,
+// confirmed live 2026-09-16: a dead BitTorrent peer looks exactly like
+// ClrFast's silent-SYN signature, and a swarm has dozens at a time. The
+// same flow shape must still promote on 80/443 -- the point is the port,
+// not the signal.
+func TestClrFast_SilentSYNOnNonWebPortNeverPromotes(t *testing.T) {
+	cfg, now := testConfig(), time.Now()
+	for _, dport := range []uint{6881, 51413, 25, 22, 3478} {
+		f := tcpFlow("SYN_SENT", 5, 0, 0, 0)
+		f.DPort = dport
+		if got := ClrFast(cfg, NewState(), []Flow{f}, now); len(got) != 0 {
+			t.Errorf("dport %d: actions = %+v, want none", dport, got)
+		}
+	}
+	for _, dport := range []uint{80, 443} {
+		f := tcpFlow("SYN_SENT", 5, 0, 0, 0)
+		f.DPort = dport
+		if got := ClrFast(cfg, NewState(), []Flow{f}, now); len(got) == 0 {
+			t.Errorf("dport %d: want a promotion, web traffic is the whole point", dport)
+		}
+	}
+}
+
+// TestClrJudge_NonWebFlowCannotRefreshOK covers the other half: a
+// torrent flow to an address promoted earlier must not keep renewing its
+// TTL, or an old mistake would never expire.
+func TestClrJudge_NonWebFlowCannotRefreshOK(t *testing.T) {
+	cfg, state, t0 := testConfig(), NewState(), time.Now()
+	state.OK[0].add(blockedDst, t0, cfg.OKRefreshBelow-time.Minute) // due for refresh
+	f := tcpFlow("ESTABLISHED", 5, 0, 5, 500)                       // healthy
+	f.DPort = 6881
+
+	if got := ClrJudge(cfg, state, []Flow{f}, t0); len(got) != 0 {
+		t.Errorf("actions = %+v, want none -- a non-web flow must not refresh", got)
+	}
+	if at := state.OK[0].at(blockedDst, t0); at.Sub(t0) >= cfg.OKTTL-time.Second {
+		t.Error("TTL was pushed back out by a non-web flow")
+	}
+}
+
 func TestClrFast_SkipsExistingCandidate(t *testing.T) {
 	cfg, state, now := testConfig(), NewState(), time.Now()
 	state.OK[0].add(blockedDst, now, time.Hour) // already confirmed
@@ -206,21 +246,17 @@ func TestClrSoft_TCPLateStall_RepliesResumingCancelsIt(t *testing.T) {
 	}
 }
 
-func TestClrSoft_UDPSilent(t *testing.T) {
-	cfg, state, now := testConfig(), NewState(), time.Now()
-	actions := ClrSoft(cfg, state, NewRateCache(), []Flow{udpFlow(80, 12, 0, 0, 0)}, now)
-	if len(actions) != 2 {
-		t.Fatalf("actions = %+v, want a promotion", actions)
-	}
-}
-
-func TestClrSoft_UDPSilent_ExcludedPortsNeverPromote(t *testing.T) {
+// TestClrSoft_SilentNonQUICUDPNeverPromotes pins the 2026-09-16 policy
+// change: upstream promoted silent UDP on any port outside
+// 443/53/67/68/123, which in practice meant BitTorrent DHT and uTP. Only
+// QUIC (443) is eligible now -- see promotableDst.
+func TestClrSoft_SilentNonQUICUDPNeverPromotes(t *testing.T) {
 	cfg, now := testConfig(), time.Now()
-	for _, dport := range []uint{53, 67, 68, 123} {
+	for _, dport := range []uint{80, 53, 67, 68, 123, 6881, 51413} {
 		state := NewState()
 		got := ClrSoft(cfg, state, NewRateCache(), []Flow{udpFlow(dport, 100, 0, 0, 0)}, now)
 		if len(got) != 0 {
-			t.Errorf("dport %d: actions = %+v, want none (excluded port)", dport, got)
+			t.Errorf("dport %d: actions = %+v, want none", dport, got)
 		}
 	}
 }

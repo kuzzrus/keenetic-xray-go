@@ -584,6 +584,28 @@ func TestRouterHandler_AdaptiveRouteShow_IncludesL7SNIStatus(t *testing.T) {
 	}
 }
 
+func TestRouterHandler_AdaptiveRouteShow_IncludesBlockThreshold(t *testing.T) {
+	h := &RouterHandler{Config: config.Default(), ConfigPath: filepath.Join(t.TempDir(), "c.json")}
+	h.Config.AdaptiveRoute.Enabled = true
+
+	out, err := h.Handle(context.Background(), Command{Action: ActionAdaptiveRouteShow})
+	if err != nil {
+		t.Fatalf("adrt_show: %v", err)
+	}
+	if !strings.Contains(out, "укрупнение блока от 4 адресов") {
+		t.Errorf("adrt_show output = %q, want it to mention the default block threshold (4)", out)
+	}
+
+	h.Config.AdaptiveRoute.BlockThreshold = -1
+	out, err = h.Handle(context.Background(), Command{Action: ActionAdaptiveRouteShow})
+	if err != nil {
+		t.Fatalf("adrt_show: %v", err)
+	}
+	if !strings.Contains(out, "укрупнение блоков: выкл") {
+		t.Errorf("adrt_show output = %q, want it to mention block-widening is off", out)
+	}
+}
+
 func TestRouterHandler_UpdateCore(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "c.json")

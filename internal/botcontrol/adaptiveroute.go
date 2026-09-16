@@ -86,6 +86,11 @@ func (h *RouterHandler) adaptiveRouteShow(ctx context.Context) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Адаптивная маршрутизация: вкл — xray :%d, TTL подтверждённых адресов %s",
 		a.EffectivePort(), a.EffectiveOKTTL())
+	if bt := a.EffectiveBlockThreshold(); bt > 0 {
+		fmt.Fprintf(&b, ", укрупнение блока от %d адресов", bt)
+	} else {
+		b.WriteString(", укрупнение блоков: выкл")
+	}
 	b.WriteString(l7sniLine)
 
 	if !keenetic.Available() {

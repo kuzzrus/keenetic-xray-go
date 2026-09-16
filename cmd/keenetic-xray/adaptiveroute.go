@@ -337,8 +337,29 @@ func applyAdaptiveRouteAtStartup(cfg *config.Config, logf func(string, ...any)) 
 // every single tick.
 func adaptiveRouteClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 	statePath := adaptiveRouteStatePath()
-	state, err := classifier.LoadState(statePath)
-	if err != nil {
+	var state *classifier.State
+	if _, err := os.Stat(adaptiveRouteResetMarkerPath()); err == nil {
+		// adaptiveRouteFlush asked for a clean start -- see its own doc
+		// comment (internal/botcontrol/adaptiveroute.go) for why this
+		// can't just rely on it having deleted statePath directly before
+		// triggering the restart that leads here: the *previous*
+		// process's own shutdown save (this same select loop's own
+		// ctx.Done() case, below) can silently recreate that file from
+		// its still-stale in-memory state after the delete already ran.
+		// Checking here instead is race-free: by the time this startup
+		// code runs, Entware's own stop-then-start restart sequence
+		// guarantees the previous process (and any final save it was
+		// going to do) has already finished. Remove both the marker
+		// (honored) and statePath itself (it may be the just-recreated
+		// stale copy) rather than leaving either for a future restart to
+		// trip over.
+		_ = os.Remove(adaptiveRouteResetMarkerPath())
+		_ = os.Remove(statePath)
+		state = classifier.NewState()
+		logf("adaptive-route: classifier state reset (requested via flush)")
+	} else if loaded, err := classifier.LoadState(statePath); err == nil {
+		state = loaded
+	} else {
 		state = classifier.NewState()
 	}
 	cache := classifier.NewRateCache()

@@ -204,6 +204,8 @@ func l7SNIClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 	}()
 
 	logf("l7sni: capturing on %s (NFLOG group %d)", wan, l7sniNflogGroup)
+	snap := l7sniLoadSnapshot()
+	snapAt := time.Now()
 	for {
 		if ctx.Err() != nil {
 			return
@@ -213,7 +215,55 @@ func l7SNIClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 			logf("l7sni: capture read failed, stopping: %v", err)
 			return
 		}
-		l7SNIHandlePacket(ctx, pkt.Payload, reasm, logf)
+		if time.Since(snapAt) >= l7sniConfigRefreshInterval {
+			snap = l7sniLoadSnapshot()
+			snapAt = time.Now()
+		}
+		l7SNIHandlePacket(ctx, pkt.Payload, reasm, snap, logf)
+	}
+}
+
+// l7sniConfigRefreshInterval is how often the capture loop re-reads
+// config, replacing what used to be a config.Load *per captured packet*
+// inside l7SNIHandlePacket. Found by reading the hot path (2026-09-16)
+// after l7sni turned out to load this router's CPU heavily enough to be
+// worth turning off: every captured packet that yielded a hostname --
+// i.e. every HTTPS connection on the network -- opened, read and
+// JSON-unmarshalled the entire config (profiles, every route list, every
+// setting) and then threw it away, plus re-classified every route entry
+// (see l7sniDomainSet). One page load fans out to dozens of TLS
+// connections, so ordinary browsing meant hundreds of full config parses
+// a second for microseconds of actual work.
+//
+// 2s rather than the classify loop's own 500ms: nothing here needs to
+// react fast. The operator toggling l7sni off or editing a route list
+// taking a couple of seconds to take effect is irrelevant, and this is
+// already several orders of magnitude cheaper than what it replaces.
+const l7sniConfigRefreshInterval = 2 * time.Second
+
+// l7sniSnapshot is everything l7SNIHandlePacket needs from config,
+// resolved once per l7sniConfigRefreshInterval instead of per packet.
+// Owned by l7SNIClassifyLoop's own goroutine and passed down by value --
+// no atomics or locking needed, since that loop is the only reader.
+type l7sniSnapshot struct {
+	enabled bool
+	ttl     time.Duration
+	domains l7sniDomainSet
+}
+
+// l7sniLoadSnapshot reads config once and pre-resolves it. A failed read
+// yields the zero snapshot (disabled, no domains), which the hot path
+// treats as "match nothing" -- the same do-nothing outcome the old
+// per-packet config.Load already had on error.
+func l7sniLoadSnapshot() l7sniSnapshot {
+	cfg, err := config.Load(configPath())
+	if err != nil {
+		return l7sniSnapshot{}
+	}
+	return l7sniSnapshot{
+		enabled: cfg.L7SNI.Enabled,
+		ttl:     cfg.AdaptiveRoute.EffectiveOKTTL(),
+		domains: l7sniDomainsFrom(cfg),
 	}
 }
 
@@ -225,7 +275,15 @@ func l7SNIClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 // (this runs on every captured packet; a persistent problem would show
 // up as "never logs a match", something hardware testing needs to
 // notice directly, not a log line per uninteresting packet).
-func l7SNIHandlePacket(ctx context.Context, raw []byte, reasm *l7sni.Reassembler, logf func(string, ...any)) {
+func l7SNIHandlePacket(ctx context.Context, raw []byte, reasm *l7sni.Reassembler, snap l7sniSnapshot, logf func(string, ...any)) {
+	if !snap.enabled || len(snap.domains) == 0 {
+		// Nothing this packet could possibly match -- checked before any
+		// parsing at all, since with no route lists configured (the
+		// common case for an operator who hasn't set any up) every
+		// captured packet would otherwise be fully parsed just to be
+		// discarded at the match step.
+		return
+	}
 	proto, src, dst, sport, dport, seq, payload, ok := l7sni.ParseIPv4(raw)
 	if !ok || proto != 6 { // TCP only -- QUIC (UDP) is out of scope, see internal/l7sni's doc comment
 		return
@@ -249,15 +307,14 @@ func l7SNIHandlePacket(ctx context.Context, raw []byte, reasm *l7sni.Reassembler
 		return
 	}
 
-	cfg, err := config.Load(configPath())
-	if err != nil || !cfg.L7SNI.Enabled || !l7sniMatchesRoutes(cfg, host) {
+	if !snap.domains.matches(host) {
 		return
 	}
 
 	dstIP := net.IP(dst[:]).String()
 	actx, cancel := context.WithTimeout(ctx, adaptiveRouteOpTimeout)
 	defer cancel()
-	_ = adaptiveroute.AddIP(actx, adaptiveRouteIPSet, dstIP, cfg.AdaptiveRoute.EffectiveOKTTL())
+	_ = adaptiveroute.AddIP(actx, adaptiveRouteIPSet, dstIP, snap.ttl)
 	keenetic.DeleteConntrackFlow(actx, "tcp", net.IP(src[:]).String(), dstIP, uint(sport), uint(dport))
 	logf("l7sni: %s -> %s:%d matched a routes list, redirecting", host, dstIP, dport)
 }

@@ -19,10 +19,40 @@ const georangesSourceURL = "https://country-ip-blocks.hackinggate.com/RU_IPv4.tx
 const georangesRefreshInterval = 24 * time.Hour
 
 // georangesBootstrapFetchTimeout bounds georangesBootstrap's own network
-// fetch attempt (only reached when no cache exists yet) -- see that
-// func's own doc comment for why this needs to be much shorter than
-// runGeorangesRefresh's usual 2-minute ceiling.
-const georangesBootstrapFetchTimeout = 8 * time.Second
+// fetch attempt (only reached when no cache exists yet) -- shorter than
+// runGeorangesRefresh's usual 2-minute ceiling so a dead network can't
+// hold up daemon startup.
+//
+// Was 8s until 2026-09-16, which was simply too tight: on the real
+// router this timed out every time ("georanges: refresh failed:
+// context deadline exceeded"), leaving the table empty -- and since a
+// failed attempt then waited a full georangesRefreshInterval to retry,
+// the Russian-exclusion veto was silently inert for a whole day at a
+// stretch. ~200KB over a router's WAN while everything else is also
+// starting up needs more room than that. Still bounded: this only ever
+// runs on a router that has never successfully fetched the list, and
+// georangesRetryBackoff below is what actually guarantees we get it.
+const georangesBootstrapFetchTimeout = 25 * time.Second
+
+// georangesRetryBackoff is how long georangesRefreshLoop waits between
+// attempts while it still has no table at all -- growing from the first
+// value to the last and then staying there, rather than jumping
+// straight to georangesRefreshInterval.
+//
+// The whole point: an empty table means ExcludedRangeLookup silently
+// matches nothing, so the veto is off. Waiting 24h to retry turned a
+// transient fetch failure into a day-long outage of a safety feature,
+// with one log line as the only evidence (and that line scrolls out of
+// `keenetic-xray logs` within minutes on a busy router). Backoff rather
+// than a flat retry so a genuinely unreachable source doesn't fill the
+// log: roughly nine attempts in the first hour, then every 15 minutes.
+var georangesRetryBackoff = []time.Duration{
+	30 * time.Second,
+	time.Minute,
+	2 * time.Minute,
+	5 * time.Minute,
+	15 * time.Minute,
+}
 
 // georangesBootstrap makes ONE best-effort attempt to have some
 // Russian-ranges table loaded -- cache if one exists (near-instant,
@@ -68,10 +98,23 @@ func georangesBootstrap(ctx context.Context, logf func(string, ...any)) {
 // georangesRefreshLoop keeps internal/georanges' process-wide table
 // fresh going forward. georangesBootstrap (called synchronously before
 // this is even spawned, see main.go) already made the first load
-// attempt, so this only needs to repeat runGeorangesRefresh every
-// georangesRefreshInterval from here on.
+// attempt, so from here on this either tops the table up daily or, if
+// there is still no table at all, keeps retrying on
+// georangesRetryBackoff until there is one -- see that var's doc
+// comment for why the difference matters so much.
 func georangesRefreshLoop(ctx context.Context, logf func(string, ...any)) {
-	timer := time.NewTimer(georangesRefreshInterval)
+	retries := 0
+	next := func() time.Duration {
+		if georanges.CurrentLen() > 0 {
+			retries = 0
+			return georangesRefreshInterval
+		}
+		d := georangesRetryBackoff[min(retries, len(georangesRetryBackoff)-1)]
+		retries++
+		return d
+	}
+
+	timer := time.NewTimer(next())
 	defer timer.Stop()
 	for {
 		select {
@@ -80,7 +123,7 @@ func georangesRefreshLoop(ctx context.Context, logf func(string, ...any)) {
 		case <-timer.C:
 		}
 		runGeorangesRefresh(ctx, logf)
-		timer.Reset(georangesRefreshInterval)
+		timer.Reset(next())
 	}
 }
 

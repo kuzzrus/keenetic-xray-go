@@ -18,6 +18,34 @@ import (
 	"github.com/kuzzrus/keenetic-xray-go/internal/xrayctl"
 )
 
+// inertExclusionWarnInterval is how often warnIfExclusionInert repeats
+// itself while the condition persists.
+const inertExclusionWarnInterval = 10 * time.Minute
+
+// warnIfExclusionInert says so, in the log the operator actually reads,
+// when the Russian-exclusion veto is switched on but has no data behind
+// it and is therefore doing nothing at all.
+//
+// Exists because that exact state went unnoticed for a day (2026-09-16):
+// georanges' first fetch timed out, the table stayed empty,
+// ExcludedRangeLookup matched nothing, and Russian addresses kept being
+// promoted -- while everything *looked* configured and working. The one
+// "refresh failed" line scrolls out of `keenetic-xray logs` within
+// minutes on a router where xray logs every connection, so a single
+// failure message at startup is not enough on its own: a silent safety
+// feature has to keep saying it is silent.
+func warnIfExclusionInert(clsCfg *classifier.Config, lastWarn *time.Time, logf func(string, ...any)) {
+	if clsCfg.ExcludedRangeLookup == nil || georanges.CurrentLen() > 0 {
+		return
+	}
+	if time.Since(*lastWarn) < inertExclusionWarnInterval {
+		return
+	}
+	*lastWarn = time.Now()
+	logf("adaptive-route: ВНИМАНИЕ — исключение российских адресов включено, но список не загружен, " +
+		"вето сейчас не действует (georanges ещё качается или источник недоступен)")
+}
+
 // adaptiveRouteIPSet is the one ipset internal/adaptiveroute's REDIRECT
 // rule matches against (internal/adaptiveroute.RedirectSetName -- shared
 // with internal/botcontrol's bot screen for the same feature, so both
@@ -366,6 +394,7 @@ func adaptiveRouteClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 	var clsCfg *classifier.Config
 	healthFails := 0
 	failedOpen := false
+	var inertWarnedAt time.Time
 
 	t := time.NewTicker(classifyInterval)
 	defer t.Stop()
@@ -438,6 +467,7 @@ func adaptiveRouteClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 		// AdaptiveRoute.Enabled going false then true again).
 		clsCfg.OKTTL = cfg.AdaptiveRoute.EffectiveOKTTL()
 		clsCfg.BlockThreshold = cfg.AdaptiveRoute.EffectiveBlockThreshold()
+		warnIfExclusionInert(clsCfg, &inertWarnedAt, logf)
 
 		now := time.Now()
 		flows, err := classifier.ScanConntrack("")

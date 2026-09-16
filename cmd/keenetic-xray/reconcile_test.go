@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/kuzzrus/keenetic-xray-go/internal/classifier"
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 )
 
@@ -82,6 +84,58 @@ func TestAdaptiveRouteClassifyLoop_NoRouterStopsOnContextCancel(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("adaptiveRouteClassifyLoop did not return after context cancel")
+	}
+}
+
+// TestAdaptiveRouteClassifyLoop_HonorsResetMarker covers the race found
+// live (2026-09-16): adaptiveRouteFlush (internal/botcontrol) can't
+// reliably os.Remove the state file directly, since this loop's own
+// still-running (in some other process) copy would just write its
+// stale in-memory state straight back over the deletion moments later,
+// via its own shutdown save below. A marker file next to the state path
+// is what actually gets honored -- checked here directly: a pre-
+// existing OK entry must NOT survive a startup that finds the marker,
+// even though nothing here calls adaptiveRouteFlush at all.
+func TestAdaptiveRouteClassifyLoop_HonorsResetMarker(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "c.json")
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	t.Setenv("KEENETIC_XRAY_CONFIG", cfgPath)
+	t.Setenv("KEENETIC_XRAY_ADAPTIVE_ROUTE_STATE", statePath)
+
+	cfg := config.Default()
+	cfg.AdaptiveRoute = config.AdaptiveRouteConfig{Enabled: true}
+	if err := cfg.Save(cfgPath); err != nil {
+		t.Fatal(err)
+	}
+
+	stale := classifier.NewState()
+	stale.OK[0]["138.124.255.106"] = time.Now().Add(time.Hour)
+	if err := classifier.SaveState(statePath, stale); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(statePath+".reset", nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	done := make(chan struct{})
+	go func() { adaptiveRouteClassifyLoop(ctx, func(string, ...any) {}); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("adaptiveRouteClassifyLoop did not return after context cancel")
+	}
+
+	if _, err := os.Stat(statePath + ".reset"); !os.IsNotExist(err) {
+		t.Errorf("reset marker should have been removed, stat err = %v", err)
+	}
+	reloaded, err := classifier.LoadState(statePath)
+	if err != nil {
+		t.Fatalf("LoadState after reset: %v", err)
+	}
+	if len(reloaded.OK[0]) != 0 {
+		t.Errorf("OK[0] = %v, want empty -- the stale entry survived a reset", reloaded.OK[0])
 	}
 }
 

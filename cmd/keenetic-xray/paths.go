@@ -74,6 +74,16 @@ func adaptiveRouteStatePath() string {
 	return envOr("KEENETIC_XRAY_ADAPTIVE_ROUTE_STATE", logDir()+"/adaptive-route-state.json")
 }
 
+// adaptiveRouteResetMarkerPath flags that adaptiveRouteClassifyLoop's
+// next startup should discard whatever adaptiveRouteStatePath currently
+// holds, even if a file is sitting there -- see adaptiveRouteFlush's own
+// doc comment (internal/botcontrol/adaptiveroute.go) for why a plain
+// os.Remove of the state file alone, done while the daemon carrying the
+// state to be cleared is still running, isn't reliable on its own.
+func adaptiveRouteResetMarkerPath() string {
+	return adaptiveRouteStatePath() + ".reset"
+}
+
 // knownRangesCachePath is where knownRangesRefreshLoop keeps its daily-
 // refreshed copy of internal/knownranges' source list (lord-alfred/
 // ipranges), so ClrBlockPromote's KnownRangeLookup has something to

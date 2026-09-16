@@ -230,14 +230,27 @@ func (h *RouterHandler) adaptiveRouteOff(ctx context.Context) (string, error) {
 // anything -- confirmed live (2026-09-15) to leave previously-good
 // redirects silently unable to recover for as long as each entry's own
 // TTL allowed, which read as "nothing loads" even though fresh
-// individual addresses were visibly still being caught. Deleting the
-// state file without a restart doesn't help either: the daemon's own
-// periodic save (every 5 minutes) just writes the stale in-memory copy
-// straight back over it. Only a real restart clears that in-memory
-// state, via restartDaemonDetached -- the same safe fire-and-forget
-// pattern daemonRestart already uses, so this method's own return value
-// reaches the operator before the init script's restart actually kills
-// this process.
+// individual addresses were visibly still being caught. Only a real
+// restart clears that in-memory state, via restartDaemonDetached -- the
+// same safe fire-and-forget pattern daemonRestart already uses, so this
+// method's own return value reaches the operator before the init
+// script's restart actually kills this process.
+//
+// The state FILE itself is handled via a marker
+// (AdaptiveRouteStatePath+".reset"), not a direct os.Remove here, for a
+// second, subtler reason found live (2026-09-16): this process is
+// still running its own adaptiveRouteClassifyLoop on another goroutine
+// at the moment this method runs, with its own in-memory state
+// untouched by deleting the file out from under it. Both that loop's
+// periodic save (every 5 minutes) and, more immediately, its shutdown
+// save (ctx.Done(), fired moments later by the very restart triggered
+// below) write that same still-stale in-memory copy straight back to
+// disk -- silently undoing an os.Remove done here for exactly the
+// entries it exists to clear. adaptiveRouteClassifyLoop's own startup
+// checks for the marker before ever trusting whatever it finds at
+// AdaptiveRouteStatePath, which is race-free: by the time that code
+// runs, the previous process (and any final save it was going to do)
+// is already gone, per Entware's own stop-then-start restart sequence.
 func (h *RouterHandler) adaptiveRouteFlush(ctx context.Context) (string, error) {
 	if !keenetic.Available() {
 		return "", fmt.Errorf("ndmc не найден — адаптивная маршрутизация работает только на роутере Keenetic")
@@ -247,8 +260,8 @@ func (h *RouterHandler) adaptiveRouteFlush(ctx context.Context) (string, error) 
 	}
 	var warn string
 	if h.AdaptiveRouteStatePath != "" {
-		if err := os.Remove(h.AdaptiveRouteStatePath); err != nil && !os.IsNotExist(err) {
-			warn = fmt.Sprintf("\n⚠️ не удалось удалить сохранённое состояние классификатора: %v", err)
+		if err := os.WriteFile(h.AdaptiveRouteStatePath+".reset", nil, 0o644); err != nil {
+			warn = fmt.Sprintf("\n⚠️ не удалось пометить состояние классификатора на сброс: %v", err)
 		}
 	}
 	if err := h.restartDaemonDetached(); err != nil {

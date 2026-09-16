@@ -1,0 +1,60 @@
+name: georanges-update
+
+# Rebuilds internal/georanges/data/ru-ipv4.txt from the RIR delegated-
+# statistics files (see cmd/georanges-gen) and commits it straight to
+# main. Runs weekly, not daily like geo-update.yml's presets: RIR
+# delegations change far more slowly than the domain/CDN lists that
+# workflow refreshes, and the list is also embedded straight into the
+# binary (internal/georanges/embedded.go) -- staying a few days behind
+# the true delegated-stats state costs nothing the embedded fallback
+# doesn't already accept.
+#
+# No "high churn -> open a PR instead" branch like geo-update.yml has:
+# that guard exists there because a preset source changing format can
+# silently produce garbage lists. cmd/georanges-gen already refuses to
+# write a suspiciously short file on its own (minRanges), which is the
+# equivalent protection for a single well-understood, machine-generated
+# source -- day-to-day churn here is just RIR reassignments, expected to
+# be a small fraction of ~11k entries every run.
+
+on:
+  schedule:
+    - cron: '43 6 * * 1' # weekly, Monday 06:43 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: georanges-update
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+
+      - name: Regenerate the Russian IPv4 range list
+        run: go run ./cmd/georanges-gen
+
+      - name: Commit if changed
+        run: |
+          set -eu
+          path=internal/georanges/data/ru-ipv4.txt
+
+          if [ -z "$(git status --porcelain "$path")" ]; then
+            echo "unchanged - nothing to do"
+            exit 0
+          fi
+
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add "$path"
+          git commit -m "chore(georanges): refresh $(date -u +%Y-%m-%d)" -m "[skip ci]"
+          # A same-day manual run can race the scheduled push; rebase once.
+          git push || { git pull --rebase origin main && git push; }

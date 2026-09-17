@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 	"github.com/kuzzrus/keenetic-xray-go/internal/updatecheck"
 	"github.com/kuzzrus/keenetic-xray-go/internal/xraycore"
 )
@@ -216,6 +217,87 @@ func TestTelegramBot_SlotSourceWizard_BackupFromNaiveLink(t *testing.T) {
 	}
 	if !rec.has(ActionSetBackupSource) {
 		t.Errorf("router did not receive set_backup_source, saw %v", rec.list())
+	}
+}
+
+// minimalAWGConf is a synthetic (not-a-real-server) AmneziaWG .conf --
+// same minimal shape config.ParseAmneziaWGURI requires: PrivateKey,
+// peer PublicKey, and an Endpoint to split into Profile.Address/Port.
+const minimalAWGConf = `[Interface]
+PrivateKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+Address = 10.8.1.2/32
+
+[Peer]
+PublicKey = CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC=
+Endpoint = awg.example.com:443
+`
+
+// TestTelegramBot_SlotSourceWizard_PrimaryFromConfFile covers sending an
+// AmneziaWG .conf as a Telegram document instead of pasting a vpn://
+// link -- the bot should download it (getFile + a raw GET, see
+// TelegramBot.downloadFile) and feed it into the same slot-source path
+// a pasted link would take.
+func TestTelegramBot_SlotSourceWizard_PrimaryFromConfFile(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	mustRegister(t, store, "r1")
+	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL, ResultTimeout: 2 * time.Second}
+	runBotInBackground(t, bot)
+
+	rec := recordingAgent(t, store, "r1", func(c Command) string {
+		if c.Action == ActionSetPrimarySource {
+			return "primary ← AWG-file"
+		}
+		return "ok"
+	})
+
+	fake.push(1, "/menu")
+	fake.waitForReply(t, 3*time.Second)
+	msgID := fake.lastSent(t).MessageID
+
+	// 🔗 Источники -> ⬆️ Основная -> upload a .conf instead of pasting.
+	fake.pushCallback(1, msgID, "srcm:r1")
+	fake.waitForEditContaining(t, 3*time.Second, "Источники r1")
+	fake.pushCallback(1, msgID, "srcp:r1")
+	waitSent(t, fake, 3*time.Second, "Источник для основной")
+
+	fake.pushDocument(1, "file123", "awg.conf", []byte(minimalAWGConf))
+	got := waitSent(t, fake, 4*time.Second, "primary ← AWG-file")
+	if got == "" {
+		t.Fatal("no confirmation")
+	}
+
+	var srcArg string
+	for _, s := range rec.list() {
+		if strings.HasPrefix(s, ActionSetPrimarySource+" ") {
+			srcArg = strings.TrimPrefix(s, ActionSetPrimarySource+" ")
+		}
+	}
+	if !strings.HasPrefix(srcArg, "vpn://") {
+		t.Fatalf("router received src = %q, want a vpn:// link built from the uploaded file", srcArg)
+	}
+	p, err := config.ParseAmneziaWGURI(srcArg)
+	if err != nil {
+		t.Fatalf("the link the bot built from the uploaded file doesn't parse: %v", err)
+	}
+	if p.Address != "awg.example.com" || p.Port != 443 {
+		t.Errorf("round-tripped Address:Port = %s:%d, want awg.example.com:443", p.Address, p.Port)
+	}
+}
+
+// TestTelegramBot_DocumentOutsideWizard_Hint covers a file sent with no
+// slot-source dialog waiting for one -- must not be silently dropped
+// (now that a document can mean something, silence would read as the
+// bot being broken) and must not disturb whatever else is going on.
+func TestTelegramBot_DocumentOutsideWizard_Hint(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: newBotStore(t), APIBase: srv.URL}
+	runBotInBackground(t, bot)
+
+	fake.pushDocument(1, "f1", "random.conf", []byte("irrelevant"))
+	reply := fake.waitForReply(t, 3*time.Second)
+	if !strings.Contains(reply, "Источники") {
+		t.Errorf("reply = %q, want a hint pointing at 🔗 Источники", reply)
 	}
 }
 

@@ -122,9 +122,19 @@ type tgUpdate struct {
 }
 
 type tgMessage struct {
-	MessageID int    `json:"message_id"`
-	Chat      tgChat `json:"chat"`
-	Text      string `json:"text"`
+	MessageID int         `json:"message_id"`
+	Chat      tgChat      `json:"chat"`
+	Text      string      `json:"text"`
+	Document  *tgDocument `json:"document"`
+}
+
+// tgDocument is a Telegram file attachment. FileID resolves to actual
+// bytes via getFile -> file_path -> a GET on a *different* base path
+// (see downloadFile) -- Telegram never puts file content in the update
+// itself.
+type tgDocument struct {
+	FileID   string `json:"file_id"`
+	FileName string `json:"file_name"`
 }
 
 type tgChat struct {
@@ -493,6 +503,46 @@ func (b *TelegramBot) apiPost(ctx context.Context, method string, payload any) (
 	return data, nil
 }
 
+// downloadFile fetches one Telegram-hosted file's bytes given its
+// file_id. Bot API quirk: getFile only resolves file_id -> file_path;
+// the actual bytes live under a *different* base path than every other
+// method (.../file/bot<token>/<file_path>, not .../bot<token>/<method>
+// the way apiPost calls work), so this can't just reuse apiPost. Capped
+// at 1MB, same limit apiPost itself applies to response bodies -- a
+// WireGuard/AmneziaWG .conf is a few hundred bytes.
+func (b *TelegramBot) downloadFile(ctx context.Context, fileID string) ([]byte, error) {
+	data, err := b.apiPost(ctx, "getFile", map[string]any{"file_id": fileID})
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		Result struct {
+			FilePath string `json:"file_path"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("decoding getFile response: %w", err)
+	}
+	if out.Result.FilePath == "" {
+		return nil, fmt.Errorf("getFile: empty file_path")
+	}
+
+	url := fmt.Sprintf("%s/file/bot%s/%s", b.apiBase(), b.Token, out.Result.FilePath)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("downloading file: unexpected status %s", resp.Status)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+}
+
 // sendMessage sends plain text with no keyboard, best-effort.
 func (b *TelegramBot) sendMessage(ctx context.Context, chatID int64, text string) {
 	b.sendMessageKB(ctx, chatID, text, inlineKeyboard{})
@@ -591,6 +641,12 @@ func (b *TelegramBot) setMyCommands(ctx context.Context) error {
 func (b *TelegramBot) handleMessage(ctx context.Context, msg tgMessage) {
 	if !b.AllowedChats[msg.Chat.ID] {
 		return // silently ignore -- do not reveal that this bot exists to unlisted chats
+	}
+	if msg.Document != nil {
+		if !b.handleWizardDocument(ctx, msg.Chat.ID, msg.Document) {
+			b.sendMessage(ctx, msg.Chat.ID, "файл принимается только как источник профиля: сначала 🔗 Источники → выбери слот, потом пришли .conf.")
+		}
+		return
 	}
 	text := strings.TrimSpace(msg.Text)
 	if b.handleWizardText(ctx, msg.Chat.ID, text) {

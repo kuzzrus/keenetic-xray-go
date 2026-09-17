@@ -148,7 +148,12 @@ jobs:
           gobin="$(go env GOPATH)/bin"
           export PATH="$PATH:$gobin"
           protoc --go_out=. --go_opt=paths=source_relative -I. proxy/wireguard/config.proto
-          touched="infra/conf/wireguard.go proxy/tun/tun_freebsd.go proxy/wireguard/bind.go proxy/wireguard/client.go proxy/wireguard/config.pb.go proxy/wireguard/netstack.go proxy/wireguard/server.go proxy/wireguard/tun_default.go proxy/wireguard/tun_linux.go"
+          # Which files a patch touches differs by tag (v26.9.9 has
+          # proxy/tun/tun_freebsd.go and proxy/wireguard/{netstack,server,
+          # tun_default}.go; v26.3.27 has proxy/wireguard/{tun,gvisortun/
+          # tun}.go instead, neither of the former two) -- read the list
+          # from the patch itself instead of hardcoding one tag's set.
+          touched="$(grep '^diff --git a/' "$patch" | sed -E 's#^diff --git a/(\S+) .*#\1#' | grep '\.go$')"
           # shellcheck disable=SC2086
           bad="$(gofmt -l $touched)"
           if [ -n "$bad" ]; then echo "::error::gofmt found issues in patched files:"; echo "$bad"; exit 1; fi

@@ -20,10 +20,20 @@ on:
         required: true
         default: v26.9.9
       awg_dev:
-        description: "Apply the (not yet production) AmneziaWG patch and publish to xray-core-awg-dev/<tag> instead of the real xray-core/<tag>. Needs packaging/xray-core/amneziawg-<tag>.patch to exist for the chosen tag."
+        description: "Stage the AmneziaWG patch for a tag that is NOT YET in AWG_CONFIRMED_TAGS below, publishing to xray-core-awg-dev/<tag> for manual real-hardware testing before promotion. Needs packaging/xray-core/amneziawg-<tag>.patch to exist for the chosen tag. Tags already in AWG_CONFIRMED_TAGS always get their patch applied and published to the real xray-core/<tag>, regardless of this flag."
         type: boolean
         required: false
         default: false
+
+env:
+  # xray_version tags whose AmneziaWG patch is confirmed working
+  # end-to-end on real hardware (see docs/HANDOFF-amneziawg.md) and is
+  # now a permanent, unconditional part of vendoring that tag -- applied
+  # and published to the real xray-core/<tag> release no matter what
+  # awg_dev is set to. Promoting another tag later (e.g. once a
+  # v26.3.27 patch is hardware-confirmed) is a one-line append here.
+  # Space-separated, matched whole-token in the "resolve" step below.
+  AWG_CONFIRMED_TAGS: "v26.9.9"
 
 permissions:
   contents: write
@@ -31,24 +41,61 @@ permissions:
 jobs:
   prepare:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      apply_patch: ${{ steps.resolve.outputs.apply_patch }}
     steps:
-      - name: Create or reuse the xray-core/<tag> release
+      - name: Resolve AmneziaWG patch/publish target
+        id: resolve
         env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.awg_dev && format('xray-core-awg-dev/{0}', inputs.xray_version) || format('xray-core/{0}', inputs.xray_version) }}
           VER: ${{ inputs.xray_version }}
           AWG_DEV: ${{ inputs.awg_dev }}
         run: |
-          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && exit 0
-          if [ "$AWG_DEV" = "true" ]; then
+          set -eu
+          is_confirmed=false
+          for t in $AWG_CONFIRMED_TAGS; do
+            [ "$t" = "$VER" ] && is_confirmed=true
+          done
+          if [ "$is_confirmed" = "true" ]; then
+            apply_patch=true
+            tag="xray-core/$VER"
+          elif [ "$AWG_DEV" = "true" ]; then
+            apply_patch=true
+            tag="xray-core-awg-dev/$VER"
+          else
+            apply_patch=false
+            tag="xray-core/$VER"
+          fi
+          echo "apply_patch=$apply_patch" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+          VER: ${{ inputs.xray_version }}
+          APPLY_PATCH: ${{ steps.resolve.outputs.apply_patch }}
+        run: |
+          set -eu
+          if [ "$APPLY_PATCH" = "true" ] && [ "$TAG" = "xray-core-awg-dev/$VER" ]; then
             title="Xray-core $VER + AmneziaWG patch (DEV/TEST — not production)"
-            notes="Dev/test build only: upstream Xray-core $VER with the (unmerged) AmneziaWG patch from packaging/xray-core/amneziawg-$VER.patch applied. NOT installed by any keenetic-xray release path -- for manual real-hardware verification before this patch is applied to the real xray-core/$VER release. Upstream: https://github.com/XTLS/Xray-core/releases/tag/$VER — MPL-2.0."
+            notes="Dev/test build only: upstream Xray-core $VER with the (not yet production-confirmed) AmneziaWG patch from packaging/xray-core/amneziawg-$VER.patch applied. NOT installed by any keenetic-xray release path -- for manual real-hardware verification before this tag is promoted (added to AWG_CONFIRMED_TAGS in .github/workflows/xray-core.yml). Upstream: https://github.com/XTLS/Xray-core/releases/tag/$VER — MPL-2.0."
+          elif [ "$APPLY_PATCH" = "true" ]; then
+            title="Xray-core $VER (vendored, AmneziaWG support)"
+            notes="Vendored Xray-core $VER built for keenetic-xray's router targets, with the AmneziaWG obfuscation patch (packaging/xray-core/amneziawg-$VER.patch) applied -- confirmed working end-to-end on real hardware, see docs/HANDOFF-amneziawg.md. Upstream: https://github.com/XTLS/Xray-core/releases/tag/$VER — MPL-2.0. See each asset's .provenance.txt."
           else
             title="Xray-core $VER (vendored)"
             notes="Vendored Xray-core $VER built for keenetic-xray's router targets. Upstream: https://github.com/XTLS/Xray-core/releases/tag/$VER — MPL-2.0. See each asset's .provenance.txt."
           fi
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --latest=false \
-            --title "$title" --notes "$notes"
+          # edit (not just create-if-absent): a tag being promoted into
+          # AWG_CONFIRMED_TAGS already has a release from its earlier
+          # vanilla or dev-staged build, and its title/notes need to
+          # reflect what's actually published there now.
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --title "$title" --notes "$notes"
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --latest=false --title "$title" --notes "$notes"
+          fi
 
   build:
     needs: prepare
@@ -76,7 +123,7 @@ jobs:
           path: xray-core
 
       - name: Checkout this repo (for the AWG patch file)
-        if: ${{ inputs.awg_dev }}
+        if: ${{ needs.prepare.outputs.apply_patch == 'true' }}
         uses: actions/checkout@v4
         with:
           path: keenetic-xray-go
@@ -85,15 +132,15 @@ jobs:
         with:
           go-version-file: xray-core/go.mod
 
-      - name: Apply AmneziaWG patch (dev/test only, not production)
-        if: ${{ inputs.awg_dev }}
+      - name: Apply AmneziaWG patch
+        if: ${{ needs.prepare.outputs.apply_patch == 'true' }}
         working-directory: xray-core
         env:
           VER: ${{ inputs.xray_version }}
         run: |
           set -eu
           patch="../keenetic-xray-go/packaging/xray-core/amneziawg-${VER}.patch"
-          [ -f "$patch" ] || { echo "::error::no AmneziaWG patch for $VER at $patch -- add one before dispatching awg_dev for this tag"; exit 1; }
+          [ -f "$patch" ] || { echo "::error::no AmneziaWG patch for $VER at $patch -- add one before dispatching awg_dev (or confirming) this tag"; exit 1; }
           git apply --verbose "$patch"
           sudo apt-get update -qq
           sudo apt-get install -y -qq protobuf-compiler
@@ -106,13 +153,18 @@ jobs:
           bad="$(gofmt -l $touched)"
           if [ -n "$bad" ]; then echo "::error::gofmt found issues in patched files:"; echo "$bad"; exit 1; fi
 
-      # AWG-dev only, and only where a cross-C toolchain is set up
-      # (matrix.cross_cc): CGO_ENABLED=1, using the vendored amneziawg-go
-      # fork (see the "Apply AmneziaWG patch" step) as a diagnostic for
-      # amnezia-vpn/amneziawg-go#110 ("arm64: outbound H4 header corrupted
-      # in transport packets", CGO_ENABLED=0 specifically) -- the
-      # production (non-awg_dev) build always stays plain CGO_ENABLED=0,
-      # unchanged.
+      # Dev-staging only (inputs.awg_dev, NOT tied to apply_patch -- a
+      # promoted/confirmed tag builds plain CGO_ENABLED=0 like every
+      # other production core, see the Build step below), and only
+      # where a cross-C toolchain is set up (matrix.cross_cc):
+      # CGO_ENABLED=1, using the vendored amneziawg-go fork (see the
+      # "Apply AmneziaWG patch" step) as a diagnostic for
+      # amnezia-vpn/amneziawg-go#110 ("arm64: outbound H4 header
+      # corrupted in transport packets", CGO_ENABLED=0 specifically).
+      # Ruled out live as the actual bug (v26.9.9's real root cause was
+      # proxy/wireguard/bind.go, see the patch and
+      # docs/HANDOFF-amneziawg.md) -- kept only as a free diagnostic for
+      # whatever tag is still being staged.
       - name: Install cross-C toolchain (AWG dev CGO diagnostic)
         if: ${{ inputs.awg_dev && matrix.cross_pkg != '' }}
         run: |
@@ -210,7 +262,7 @@ jobs:
       - name: Upload to the release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.awg_dev && format('xray-core-awg-dev/{0}', inputs.xray_version) || format('xray-core/{0}', inputs.xray_version) }}
+          TAG: ${{ needs.prepare.outputs.tag }}
           BASE: xray-${{ inputs.xray_version }}-linux-${{ matrix.goarch }}
         run: |
           cd "$RUNNER_TEMP"

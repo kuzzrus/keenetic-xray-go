@@ -9,24 +9,33 @@ the `parse_test.go` CRLF gotcha), see
 [`docs/HANDOFF-naive.md`](HANDOFF-naive.md) §1-2 — identical here, not
 repeated.
 
-**Status (updated 2026-09-17): the xray-core patch for `v26.9.9` is
-written, applies cleanly, and is CONFIRMED WORKING END TO END on real
-router hardware** — real AmneziaWG handshake, real HTTP/2 traffic through
-the tunnel to a real remote server (`curl` through the patched core's
-SOCKS inbound, `HTTP/2 301` back from Cloudflare, `curl exit=0`), plus
-independent confirmation from the AWG server's own admin panel showing
-the test client online. Published as a **dev/test-only** build
-(`xray-core-awg-dev/v26.9.9`, never the real `xray-core/v26.9.9` release)
-per the staged-rollout plan below. **Not yet done**: this project's own
-config schema / `ParseAmneziaWGURI` / `buildOutbound` wiring (still
-exactly as originally planned, deliberately deferred until the raw patch
-proved out — see "What's actually built" below for the precise cut
-line), promoting the patch to the real production release, and repeating
-the whole exercise for `v26.3.27`. See "2026-09-17 real-hardware
-debugging arc" near the end of this document for the full account —
-three real bugs found this way, none of them anticipated by the original
-plan below, most of them relegated to their own long detour before the
-actual (surprisingly simple) root cause turned up.
+**Status (updated 2026-09-17, later the same day): the xray-core patch for
+`v26.9.9` is CONFIRMED WORKING END TO END on real router hardware, this
+project's own config/URI/bot integration is built and shipped, a `.conf`
+file can be uploaded as a Telegram document (not just pasted as a
+`vpn://` link), the workflow can now promote a confirmed tag's patch to
+the real production release with a one-line config change (see "What's
+actually built" for whether `v26.9.9` itself has actually been dispatched
+yet), and a `v26.3.27` patch exists and builds clean (not yet
+hardware-tested).** Real AmneziaWG handshake, real HTTP/2
+traffic through the tunnel to a real remote server (`curl` through the
+patched core's SOCKS inbound, `HTTP/2 301` back from Cloudflare, `curl
+exit=0`), plus independent confirmation from the AWG server's own admin
+panel showing the test client online — that was the first end of this
+arc. Everything after that (own plumbing, file upload, production
+promotion, the second core tag) happened in a follow-up session; see
+"What's actually built" below for the precise, current cut line. **Only
+remaining gap**: nobody has yet configured an AWG profile *through the
+bot* (paste or upload) and confirmed it connects on real hardware — every
+hardware test so far, including the one that found the `bind.go` root
+cause, used a hand-written JSON config against the patched binary
+directly, deliberately bypassing this project's own layer (see "What's
+actually built" for why that separation was deliberate and worth
+keeping). See "2026-09-17 real-hardware debugging arc" near the end of
+this document for the full account of finding that root cause — three
+real bugs found that way, none of them anticipated by the original plan
+below, most of them relegated to their own long detour before the actual
+(surprisingly simple) fix turned up.
 
 ## The task
 
@@ -341,32 +350,82 @@ session as bugs got found and fixed), applying cleanly to a fresh
 - The critical fix, in `proxy/wireguard/bind.go` (see the debugging arc
   below) — this is the one that actually made it work.
 
-**Still not built at all** — exactly what the plan below always said was
-Step 3/4/5, deliberately deferred until the raw patch proved out (now
-true): `internal/config/profile.go`'s `Profile.AWG`/`"amneziawg"`
-protocol, `internal/config/amneziawguri.go`'s `ParseAmneziaWGURI`,
-`ParseProfileURI`'s `vpn://` case, `internal/botcontrol/
-telegram_wizard.go`'s prefix-check gap, `internal/config/xray.go`'s
-`buildOutbound` branch. None of this project's own config/CLI/bot has
-ever touched AWG yet — every test so far ran the patched core directly
-via a hand-written JSON config, deliberately bypassing this project's
-own layer entirely (see the original plan's own "Verification, staged to
-isolate variables" reasoning for why — it paid off exactly as intended:
-every bug found this session was in the *patch*, none of them would have
-been any easier to find with this project's own plumbing in the loop
-too, and several rounds would have needed disentangling "is this xray-
-core or is this our own code" on top of everything else).
+**Built and shipped in the follow-up session** — what the plan below
+originally called Step 3/4/5, deliberately deferred until the raw patch
+proved out (it did): `internal/config/profile.go`'s `Profile.AWG`/
+`"amneziawg"` protocol, `internal/config/amneziawguri.go`'s
+`ParseAmneziaWGURI` (handles both base64 alphabets real links came back
+in), `ParseProfileURI`'s `vpn://` case, `internal/subscription/
+resolve.go`'s `ResolveSourcePinned` (a *second* hardcoded prefix gate,
+independent of the wizard's own, that also needed the same fix —
+found by tracing what `/set_primary_source` actually calls, not
+assumed), `internal/botcontrol/telegram_wizard.go`'s prefix-check gap,
+`internal/config/xray.go`'s `buildAmneziaWGOutbound` branch. Shipped as
+PR #216, released `v0.32.31`. On top of that, `internal/botcontrol/
+telegram.go`/`telegram_wizard.go` gained a `.conf`-as-Telegram-document
+path: `TelegramBot.downloadFile` (getFile + a GET against Telegram's
+*separate* file-serving base path) feeds an uploaded file's raw bytes
+into the exact same `wizardSetSlotSource` a pasted `vpn://` link uses,
+by re-deriving the equivalent `"vpn://"+base64(...)` string — no second
+parser to keep in sync.
 
-**Also still not done**: promoting the patch to the real
-`xray-core/v26.9.9` release (still gated behind `awg_dev=true` only,
-per the staged-rollout plan — the user hasn't asked to graduate it yet),
-and repeating the whole exercise for `v26.3.27` (whose `proxy/wireguard/
-client.go` and `config.proto` are confirmed structurally different from
-`v26.9.9`'s, per the plan-mode research earlier this session — the
-`bind.go` bug almost certainly exists there too, un-investigated, since
-`bind.go` itself didn't change between `v26.3.27`/`v26.9.9` in the diff
-pulled during that research, but this hasn't been independently
-re-confirmed against `v26.3.27`'s actual current file).
+Every test through the *own-plumbing* layer so far is unit-level
+(`internal/config/amneziawguri_test.go`, `internal/botcontrol/
+telegram_wizard_test.go`'s `TestTelegramBot_SlotSourceWizard_
+PrimaryFromConfFile`) — nobody has yet configured a profile through the
+bot (link or file) and confirmed it connects on real hardware. Every
+hardware test so far, including the one that found `bind.go`'s root
+cause, used a hand-written JSON config against the patched binary
+directly, deliberately bypassing this project's own layer entirely (see
+the original plan's own "Verification, staged to isolate variables"
+reasoning for why — it paid off exactly as intended: every bug found in
+the first round was in the *patch*, none of them would have been any
+easier to find with this project's own plumbing in the loop too, and
+several rounds would have needed disentangling "is this xray-core or is
+this our own code" on top of everything else). That gap is now the only
+thing standing between "the patch works" and "a profile can be set up
+the normal way and it works" being fully closed.
+
+**Also done**: `.github/workflows/xray-core.yml` gained an
+`AWG_CONFIRMED_TAGS` workflow-level env var (currently just `v26.9.9`)
+— a tag listed there always gets its patch applied and always publishes
+to the real `xray-core/<tag>`, regardless of `awg_dev`; the "Create or
+reuse the release" step became "Create or update" (`gh release edit`
+when the release already exists) so a promoted tag's title/notes get
+corrected to say so. Promoting `v26.9.9` for real is then just
+dispatching the workflow once (`xray_version=v26.9.9`, `awg_dev` can be
+left `false`) — check this document's own git history / the Actions
+run list for whether that dispatch has actually happened yet before
+assuming the real `xray-core/v26.9.9` release carries the patched
+binary rather than the original vanilla one. `awg_dev` keeps its
+original meaning for any tag NOT in `AWG_CONFIRMED_TAGS` — right now,
+that's `v26.3.27`.
+
+**`v26.3.27`'s own patch now exists** —
+`packaging/xray-core/amneziawg-v26.3.27.patch` — derived independently
+(not copy-pasted) since `proxy/wireguard/client.go` and `config.proto`
+are structurally quite different at this tag (confirmed, not assumed):
+`DeviceConfig` ends at field 9 here (no field 10 yet — v26.9.9 already
+had `dns` at 10), so the 25 new fields land at **10-34**, not 11-35;
+`client.go` has no `Handler.init()` at all — the client-side UAPI
+string is built by `createIPCRequest()` via `fmt.Sprintf`+
+`request.WriteString`, not `cfg.WriteString("literal"+var)`, so every
+insertion line has a different (but equivalent) shape; only 4 files need
+the import-path swap here, not 7-8, and `proxy/tun/tun_freebsd.go`
+doesn't exist yet at this tag so is correctly omitted, while a
+`gvisortun` subpackage and a monolithic `tun.go` do exist here and don't
+at v26.9.9. **The `bind.go` bug is confirmed present at this tag too**,
+in `netBindClient.connectTo()` rather than `Open()`'s batched closure —
+same unconditional zeroing, same fix (`len(bind.reserved) == 3`, which
+already exists as `Send`'s own guard in the very same file, same as at
+v26.9.9). Verified so far: `git apply --check` clean against two
+independent fresh `v26.3.27` clones, and the patched clone cross-compiles
+for both `linux/arm64` and `linux/mipsle` (`CGO_ENABLED=0`) plus builds
+natively and passes `go vet`. **Not yet done for this tag**: a dev/test
+build has not been hardware-tested (dispatch `awg_dev=true,
+xray_version=v26.3.27` to get one, same as the original v26.9.9
+staging round); until that happens, do not add `v26.3.27` to
+`AWG_CONFIRMED_TAGS`.
 
 ## 2026-09-17 real-hardware debugging arc — the actual bug hunt
 
@@ -487,13 +546,25 @@ bug in this project's *own* 15-line bridge file.
 
 ## How to resume
 
-Re-enter Plan Mode, re-read this document plus the current code
-(`internal/config/xray.go`'s `buildOutbound`, `internal/config/
-profile.go`, this project's pinned xray-core tag) since code may have
-moved on since this was written, then write a fresh plan-file draft
-from this document rather than assuming an old plan-file survived (it
-won't have — Plan Mode's plan file gets reused for whatever's being
-planned at the time). If resuming straight into Step 3/4/5 (this
-project's own config/URI/`buildOutbound` plumbing — the only part of the
-original plan not yet built), the xray-core patch itself needs no further
-research first; start from "What's actually built" above.
+Everything the original plan called for is now built (see "What's
+actually built"). What's left is verification and one more tag:
+
+1. **Real-hardware test of a bot-configured profile** — the one gap
+   called out repeatedly above. Paste a real `vpn://` link (or upload a
+   `.conf`) via 🔗 Источники on a router running a patched core, confirm
+   it actually connects, the same way the raw patch was confirmed
+   working directly. Nothing code-side is expected to need changing for
+   this — `buildAmneziaWGOutbound`'s JSON output is unit-tested against
+   the exact key spellings the patch's `infra/conf/wireguard.go` expects
+   — but it hasn't been run for real yet.
+2. **`v26.3.27`**: dispatch `.github/workflows/xray-core.yml` with
+   `xray_version=v26.3.27, awg_dev=true`, get the dev/test build, repeat
+   the same real-hardware verification the `v26.9.9` arc went through
+   (a packet capture early if anything looks like Round 1-3 of that arc
+   again — see "Lesson for next time" above). Only once that's confirmed:
+   add `v26.3.27` to `AWG_CONFIRMED_TAGS` in the workflow and dispatch
+   again with `awg_dev=false` (or just omit it) to promote it for real.
+3. If re-entering Plan Mode for either of these, re-read this document
+   plus the current code first — don't assume an old plan-file survived
+   (Plan Mode's plan file gets reused for whatever's being planned at the
+   time).

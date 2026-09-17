@@ -30,7 +30,7 @@ func ResolveSource(ctx context.Context, src, selector string) (config.Profile, e
 func ResolveSourcePinned(ctx context.Context, src, selector, importKey string) (config.Profile, string, error) {
 	src = strings.TrimSpace(src)
 	switch {
-	case strings.HasPrefix(src, "vless://"), strings.HasPrefix(src, "naive+"):
+	case strings.HasPrefix(src, "vless://"), strings.HasPrefix(src, "naive+"), strings.HasPrefix(src, "vpn://"):
 		p, err := config.ParseProfileURI(src)
 		if err != nil {
 			return config.Profile{}, "", err
@@ -54,7 +54,7 @@ func ResolveSourcePinned(ctx context.Context, src, selector, importKey string) (
 		}
 		return p, p.ImportKey(), nil
 	default:
-		return config.Profile{}, "", fmt.Errorf("нужна vless:// или naive+https:// ссылка, либо http(s):// URL подписки")
+		return config.Profile{}, "", fmt.Errorf("нужна vless://, naive+https:// или vpn:// ссылка, либо http(s):// URL подписки")
 	}
 }
 

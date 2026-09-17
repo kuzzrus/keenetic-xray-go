@@ -67,7 +67,7 @@ index f906979..08d5e9a 100644
  golang.zx2c4.com/wireguard/windows v1.0.1/go.mod h1:+fbT3FFdX4zzYDLwJh5+HPEcNN/3HyNdzhNSVsQM+zs=
  gonum.org/v1/gonum v0.17.0 h1:VbpOemQlsSMrYmn7T2OUvQ4dqxQXU+ouZFQsZOx50z4=
 diff --git a/infra/conf/wireguard.go b/infra/conf/wireguard.go
-index 0e41c9c..b9892ae 100644
+index 0e41c9c..9100ad5 100644
 --- a/infra/conf/wireguard.go
 +++ b/infra/conf/wireguard.go
 @@ -67,6 +67,37 @@ type WireGuardConfig struct {
@@ -108,7 +108,7 @@ index 0e41c9c..b9892ae 100644
  }
  
  func (c *WireGuardConfig) Build() (proto.Message, error) {
-@@ -144,6 +175,32 @@ func (c *WireGuardConfig) Build() (proto.Message, error) {
+@@ -144,9 +175,65 @@ func (c *WireGuardConfig) Build() (proto.Message, error) {
  	config.NoKernelTun = c.NoKernelTun
  	config.DNS = c.DNS
  
@@ -128,18 +128,51 @@ index 0e41c9c..b9892ae 100644
 +	config.I3 = c.I3
 +	config.I4 = c.I4
 +	config.I5 = c.I5
-+	config.HeaderProtectionKey = c.HeaderProtectionKey
++	if c.HeaderProtectionKey != "" {
++		// Unlike every other AWG field, amneziawg-go's UAPI expects this
++		// one as hex (device/uapi.go: `key.FromHex(value)`), same as
++		// private_key/public_key/preshared_key -- a real key, not a
++		// tunable parameter. ParseWireGuardKey already does exactly this
++		// base64-or-hex -> hex conversion for those three; reuse it here
++		// instead of relaying the .conf's base64 form verbatim (confirmed
++		// live: relaying it as-is fails with "encoding/hex: invalid byte").
++		config.HeaderProtectionKey, err = ParseWireGuardKey(c.HeaderProtectionKey)
++		if err != nil {
++			return nil, errors.New("invalid AmneziaWG header protection key: %w", err)
++		}
++	}
 +	config.ContentPaddingAddition = c.ContentPaddingAddition
 +	config.RekeyAfterTime = c.RekeyAfterTime
 +	config.RekeyTimeout = c.RekeyTimeout
 +	config.RejectAfterTime = c.RejectAfterTime
 +	config.KeepaliveTimeout = c.KeepaliveTimeout
 +	config.MaxHandshakeAttempts = c.MaxHandshakeAttempts
-+	config.RandomTrailers = c.RandomTrailers
-+	config.DisableCookies = c.DisableCookies
++	config.RandomTrailers = onOffToBool(c.RandomTrailers)
++	config.DisableCookies = onOffToBool(c.DisableCookies)
 +
  	return config, nil
  }
+ 
++// onOffToBool converts AmneziaWG's own .conf convention ("on"/"off",
++// confirmed from a real vpn:// link's decoded .conf) to the "true"/
++// "false" amneziawg-go's UAPI actually wants (device/uapi.go:
++// `strconv.ParseBool(value)` for both random_trailers and
++// disable_cookies -- confirmed live, relaying "on" as-is fails with
++// `strconv.ParseBool: parsing "on": invalid syntax`). Anything else
++// (empty, or already "true"/"false") passes through unchanged.
++func onOffToBool(v string) string {
++	switch strings.ToLower(v) {
++	case "on":
++		return "true"
++	case "off":
++		return "false"
++	default:
++		return v
++	}
++}
++
+ func ParseWireGuardKey(str string) (string, error) {
+ 	var err error
  
 diff --git a/proxy/tun/tun_freebsd.go b/proxy/tun/tun_freebsd.go
 index 0784750..197fe47 100644

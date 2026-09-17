@@ -518,3 +518,76 @@ func TestGenerateXrayConfig_NaiveSidecarOutbound(t *testing.T) {
 		t.Errorf("naive server address/credentials leaked into the xray config: %s", data)
 	}
 }
+
+func TestGenerateXrayConfig_AmneziaWGOutbound(t *testing.T) {
+	p := Profile{
+		Protocol: "amneziawg",
+		Remark:   "AWG",
+		Address:  "awg.example.com",
+		Port:     443,
+		AWG: &AmneziaWGParams{
+			PrivateKey:          "AAAA=",
+			Address:             "10.8.1.2/32",
+			DNS:                 []string{"8.8.8.8", "8.8.4.4"},
+			PeerPublicKey:       "BBBB=",
+			PresharedKey:        "CCCC=",
+			AllowedIPs:          []string{"0.0.0.0/0", "::/0"},
+			PersistentKeepalive: 25,
+			Jc:                  "4", Jmin: "40", Jmax: "70",
+			H1:                  "1000000001-1000000010",
+			HeaderProtectionKey: "DDDD=",
+			RandomTrailers:      "on",
+			DisableCookies:      "on",
+		},
+	}
+	data, err := GenerateXrayConfig(XrayConfigOptions{SOCKSPort: 1080, Outbound: p})
+	if err != nil {
+		t.Fatalf("GenerateXrayConfig: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	outbound := decoded["outbounds"].([]any)[0].(map[string]any)
+	if outbound["tag"] != "proxy" || outbound["protocol"] != "wireguard" {
+		t.Fatalf("outbound = %#v, want tag=proxy protocol=wireguard", outbound)
+	}
+	settings := outbound["settings"].(map[string]any)
+	switch {
+	case settings["IsClient"] != true:
+		t.Errorf("IsClient = %v, want true", settings["IsClient"])
+	case settings["secretKey"] != "AAAA=":
+		t.Errorf("secretKey = %v", settings["secretKey"])
+	case settings["jc"] != "4" || settings["jmin"] != "40" || settings["jmax"] != "70":
+		t.Errorf("jc/jmin/jmax = %v/%v/%v", settings["jc"], settings["jmin"], settings["jmax"])
+	case settings["h1"] != "1000000001-1000000010":
+		t.Errorf("h1 = %v, want the range verbatim", settings["h1"])
+	case settings["headerProtectionKey"] != "DDDD=":
+		t.Errorf("headerProtectionKey = %v, want the base64 form verbatim (the patched core converts it)", settings["headerProtectionKey"])
+	case settings["randomTrailers"] != "on" || settings["disableCookies"] != "on":
+		t.Errorf("randomTrailers/disableCookies = %v/%v, want the profile's own on/on verbatim", settings["randomTrailers"], settings["disableCookies"])
+	case settings["remoteDNS"] == nil:
+		t.Error("remoteDNS missing")
+	}
+	peers, ok := settings["peers"].([]any)
+	if !ok || len(peers) != 1 {
+		t.Fatalf("peers = %#v, want exactly one", settings["peers"])
+	}
+	peer := peers[0].(map[string]any)
+	switch {
+	case peer["publicKey"] != "BBBB=":
+		t.Errorf("peer publicKey = %v", peer["publicKey"])
+	case peer["preSharedKey"] != "CCCC=":
+		t.Errorf("peer preSharedKey = %v", peer["preSharedKey"])
+	case peer["endpoint"] != "awg.example.com:443":
+		t.Errorf("peer endpoint = %v, want awg.example.com:443 (from Profile.Address/Port)", peer["endpoint"])
+	case peer["keepAlive"] != float64(25):
+		t.Errorf("peer keepAlive = %v, want 25", peer["keepAlive"])
+	}
+	// No routing block, same invariant as every other protocol here --
+	// see GenerateXrayConfig's own comment for why.
+	if _, has := decoded["routing"]; has {
+		t.Error("amneziawg outbound must not add a routing block")
+	}
+}

@@ -3,6 +3,8 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net"
+	"strconv"
 )
 
 // XrayConfigOptions parameterizes GenerateXrayConfig. The same generator
@@ -241,6 +243,16 @@ func buildOutbound(p Profile, xhttpMode string, sidecarSOCKS int) (xrayOutbound,
 		}, nil
 	}
 
+	// Protocol == "amneziawg" -- also doesn't speak vless: a direct
+	// `wireguard` outbound on the vendored, AmneziaWG-patched xray-core
+	// (see packaging/xray-core/amneziawg-<tag>.patch,
+	// docs/HANDOFF-amneziawg.md). No sidecar, no second process -- unlike
+	// naive above, the patched binary this project already ships
+	// understands AWG's obfuscation fields directly.
+	if p.Protocol == "amneziawg" {
+		return buildAmneziaWGOutbound(p)
+	}
+
 	user := map[string]any{
 		"id":         p.UUID,
 		"encryption": firstNonEmpty(p.Encryption, "none"),
@@ -269,6 +281,77 @@ func buildOutbound(p Profile, xhttpMode string, sidecarSOCKS int) (xrayOutbound,
 		Protocol:       "vless",
 		Settings:       settings,
 		StreamSettings: stream,
+	}, nil
+}
+
+// buildAmneziaWGOutbound builds a direct `wireguard` outbound for an
+// AmneziaWG profile. Field spellings here must match
+// infra/conf/wireguard.go's own json tags in the vendored patch exactly
+// (confirmed camelCase, e.g. "headerProtectionKey", "remoteDNS") -- this
+// project defined that spelling itself when writing the patch (see
+// docs/HANDOFF-amneziawg.md), so buildOutbound and the patch have to
+// agree, not follow some external spec. Every AWG obfuscation field is
+// relayed exactly as ParseAmneziaWGURI stored it -- see
+// AmneziaWGParams' own doc comment for why nothing here parses or
+// reinterprets any of them.
+func buildAmneziaWGOutbound(p Profile) (xrayOutbound, error) {
+	a := p.AWG
+	if a == nil {
+		return xrayOutbound{}, fmt.Errorf("profile %q: amneziawg egress requires AWG parameters", p.Remark)
+	}
+
+	peer := map[string]any{
+		"publicKey": a.PeerPublicKey,
+		"endpoint":  net.JoinHostPort(p.Address, strconv.Itoa(p.Port)),
+	}
+	if a.PresharedKey != "" {
+		peer["preSharedKey"] = a.PresharedKey
+	}
+	if len(a.AllowedIPs) > 0 {
+		peer["allowedIPs"] = a.AllowedIPs
+	}
+	if a.PersistentKeepalive > 0 {
+		peer["keepAlive"] = a.PersistentKeepalive
+	}
+
+	settings := map[string]any{
+		"IsClient":  true,
+		"secretKey": a.PrivateKey,
+		"peers":     []map[string]any{peer},
+	}
+	if a.Address != "" {
+		settings["address"] = []string{a.Address}
+	}
+	if len(a.DNS) > 0 {
+		settings["remoteDNS"] = a.DNS
+	}
+	if a.MTU > 0 {
+		settings["mtu"] = a.MTU
+	}
+	for jsonKey, v := range map[string]string{
+		"jc": a.Jc, "jmin": a.Jmin, "jmax": a.Jmax,
+		"s1": a.S1, "s2": a.S2, "s3": a.S3, "s4": a.S4,
+		"h1": a.H1, "h2": a.H2, "h3": a.H3, "h4": a.H4,
+		"i1": a.I1, "i2": a.I2, "i3": a.I3, "i4": a.I4, "i5": a.I5,
+		"headerProtectionKey":    a.HeaderProtectionKey,
+		"contentPaddingAddition": a.ContentPaddingAddition,
+		"rekeyAfterTime":         a.RekeyAfterTime,
+		"rekeyTimeout":           a.RekeyTimeout,
+		"rejectAfterTime":        a.RejectAfterTime,
+		"keepaliveTimeout":       a.KeepaliveTimeout,
+		"maxHandshakeAttempts":   a.MaxHandshakeAttempts,
+		"randomTrailers":         a.RandomTrailers,
+		"disableCookies":         a.DisableCookies,
+	} {
+		if v != "" {
+			settings[jsonKey] = v
+		}
+	}
+
+	return xrayOutbound{
+		Tag:      "proxy",
+		Protocol: "wireguard",
+		Settings: settings,
 	}, nil
 }
 

@@ -70,6 +70,66 @@ type Profile struct {
 	// `xhttpSettings` verbatim, so new upstream tuning fields work without
 	// a code change here.
 	XHTTPExtra json.RawMessage `json:"xhttp_extra,omitempty"`
+
+	// AWG holds AmneziaWG's own fields (Protocol == "amneziawg" only) --
+	// see AmneziaWGParams' own doc comment. Address/Port above are the
+	// *server's* endpoint (from the link's [Peer] Endpoint), matching
+	// every other protocol's "which server" convention; AWG.Address is
+	// the unrelated client-side tunnel-internal address.
+	AWG *AmneziaWGParams `json:"awg,omitempty"`
+}
+
+// AmneziaWGParams holds AmneziaWG (AWG) obfuscation parameters and the
+// underlying WireGuard fields, exactly as ParseAmneziaWGURI extracted
+// them from a vpn:// link's decoded .conf text. Every AWG-specific field
+// (Jc through DisableCookies) is a plain string, carried verbatim all the
+// way to the patched xray-core's own UAPI write -- see
+// packaging/xray-core/amneziawg-<tag>.patch and
+// docs/HANDOFF-amneziawg.md. Some are plain integers, some are min-max
+// ranges ("5-60"), I1-I5 are amneziawg-go's own "<b 0xHEX><r N>"
+// byte-blob/random-fill notation, RandomTrailers/DisableCookies are the
+// .conf's own "on"/"off" spelling (not Go's true/false -- the patched
+// core's own JSON bridge converts that, along with HeaderProtectionKey's
+// base64-to-hex conversion; both confirmed necessary live, see the
+// handoff doc's debugging-arc section). This project never parses,
+// validates, or reinterprets any of it -- only relays what the link
+// gives it.
+type AmneziaWGParams struct {
+	PrivateKey string   `json:"private_key"`
+	Address    string   `json:"address"` // client's tunnel-internal address, e.g. "10.8.1.2/32"
+	DNS        []string `json:"dns,omitempty"`
+	MTU        int      `json:"mtu,omitempty"`
+
+	PeerPublicKey       string   `json:"peer_public_key"`
+	PresharedKey        string   `json:"preshared_key,omitempty"`
+	AllowedIPs          []string `json:"allowed_ips,omitempty"`
+	PersistentKeepalive int      `json:"persistent_keepalive,omitempty"`
+
+	Jc                     string `json:"jc,omitempty"`
+	Jmin                   string `json:"jmin,omitempty"`
+	Jmax                   string `json:"jmax,omitempty"`
+	S1                     string `json:"s1,omitempty"`
+	S2                     string `json:"s2,omitempty"`
+	S3                     string `json:"s3,omitempty"`
+	S4                     string `json:"s4,omitempty"`
+	H1                     string `json:"h1,omitempty"`
+	H2                     string `json:"h2,omitempty"`
+	H3                     string `json:"h3,omitempty"`
+	H4                     string `json:"h4,omitempty"`
+	I1                     string `json:"i1,omitempty"`
+	I2                     string `json:"i2,omitempty"`
+	I3                     string `json:"i3,omitempty"`
+	I4                     string `json:"i4,omitempty"`
+	I5                     string `json:"i5,omitempty"`
+	HeaderProtectionKey    string `json:"header_protection_key,omitempty"`
+	ContentPaddingAddition string `json:"content_padding_addition,omitempty"`
+	RekeyAfterTime         string `json:"rekey_after_time,omitempty"`
+	RekeyTimeout           string `json:"rekey_timeout,omitempty"`
+	RejectAfterTime        string `json:"reject_after_time,omitempty"`
+	KeepaliveTimeout       string `json:"keepalive_timeout,omitempty"`
+	MaxHandshakeAttempts   string `json:"max_handshake_attempts,omitempty"`
+	RandomTrailers         string `json:"random_trailers,omitempty"`
+	DisableCookies         string `json:"disable_cookies,omitempty"`
 }
 
 // Validate checks that a Profile has the fields required to generate a
@@ -87,6 +147,8 @@ func (p *Profile) Validate() error {
 		return p.validateVLESS()
 	case "naive":
 		return p.validateNaive()
+	case "amneziawg":
+		return p.validateAmneziaWG()
 	default:
 		return fmt.Errorf("unsupported protocol %q", p.Protocol)
 	}
@@ -133,6 +195,25 @@ func (p *Profile) validateNaive() error {
 	}
 	if p.Password == "" {
 		return fmt.Errorf("naive: missing password")
+	}
+	return nil
+}
+
+// validateAmneziaWG checks the fields a working AmneziaWG tunnel actually
+// needs: the standard WireGuard identity/endpoint (private key, peer
+// public key; Address/Port are already checked above). Every AWG
+// obfuscation field is optional -- absent simply means that UAPI key
+// never gets sent at all (see the patched core's own client.go), so none
+// of them are checked here.
+func (p *Profile) validateAmneziaWG() error {
+	if p.AWG == nil {
+		return fmt.Errorf("amneziawg: missing AWG parameters")
+	}
+	if p.AWG.PrivateKey == "" {
+		return fmt.Errorf("amneziawg: missing private key")
+	}
+	if p.AWG.PeerPublicKey == "" {
+		return fmt.Errorf("amneziawg: missing peer public key")
 	}
 	return nil
 }
@@ -1319,6 +1400,12 @@ func (c *Config) Redacted() *Config {
 		p.ShortID = mask(p.ShortID)
 		p.User = mask(p.User)
 		p.Password = mask(p.Password)
+		if p.AWG != nil {
+			p.AWG.PrivateKey = mask(p.AWG.PrivateKey)
+			p.AWG.PeerPublicKey = mask(p.AWG.PeerPublicKey)
+			p.AWG.PresharedKey = mask(p.AWG.PresharedKey)
+			p.AWG.HeaderProtectionKey = mask(p.AWG.HeaderProtectionKey)
+		}
 	}
 	if d.Subscription != nil {
 		d.Subscription.URL = mask(d.Subscription.URL)

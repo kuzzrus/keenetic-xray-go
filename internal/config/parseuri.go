@@ -19,8 +19,10 @@ func ParseProfileURI(raw string) (Profile, error) {
 		return ParseVLESSURI(trimmed)
 	case strings.HasPrefix(trimmed, "naive+"):
 		return ParseNaiveURI(trimmed)
+	case strings.HasPrefix(trimmed, "vpn://"):
+		return ParseAmneziaWGURI(trimmed)
 	default:
 		scheme, _, _ := strings.Cut(trimmed, "://")
-		return Profile{}, fmt.Errorf("unrecognized share-link scheme %q (want vless:// or naive+https://)", scheme)
+		return Profile{}, fmt.Errorf("unrecognized share-link scheme %q (want vless://, naive+https://, or vpn://)", scheme)
 	}
 }

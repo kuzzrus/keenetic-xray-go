@@ -1342,7 +1342,7 @@ func (h *RouterHandler) profileList() string {
 // and the slot index repointed; the source is remembered per slot.
 func (h *RouterHandler) setSlotSource(ctx context.Context, primary bool, args []string) (string, error) {
 	if len(args) < 1 || strings.TrimSpace(args[0]) == "" {
-		return "", fmt.Errorf("нужна vless:// ссылка или http(s):// URL")
+		return "", fmt.Errorf("нужна vless://, naive+https:// или vpn:// ссылка, либо http(s):// URL")
 	}
 	src := strings.TrimSpace(args[0])
 	selector := ""

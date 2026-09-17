@@ -19,6 +19,11 @@ on:
         description: "XTLS/Xray-core tag to build (e.g. v26.9.9). May be an upstream pre-release; the pin (packaging/xray-core/version) decides what's the default."
         required: true
         default: v26.9.9
+      awg_dev:
+        description: "Apply the (not yet production) AmneziaWG patch and publish to xray-core-awg-dev/<tag> instead of the real xray-core/<tag>. Needs packaging/xray-core/amneziawg-<tag>.patch to exist for the chosen tag."
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: write
@@ -30,13 +35,20 @@ jobs:
       - name: Create or reuse the xray-core/<tag> release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: xray-core/${{ inputs.xray_version }}
+          TAG: ${{ inputs.awg_dev && format('xray-core-awg-dev/{0}', inputs.xray_version) || format('xray-core/{0}', inputs.xray_version) }}
           VER: ${{ inputs.xray_version }}
+          AWG_DEV: ${{ inputs.awg_dev }}
         run: |
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && exit 0
+          if [ "$AWG_DEV" = "true" ]; then
+            title="Xray-core $VER + AmneziaWG patch (DEV/TEST — not production)"
+            notes="Dev/test build only: upstream Xray-core $VER with the (unmerged) AmneziaWG patch from packaging/xray-core/amneziawg-$VER.patch applied. NOT installed by any keenetic-xray release path -- for manual real-hardware verification before this patch is applied to the real xray-core/$VER release. Upstream: https://github.com/XTLS/Xray-core/releases/tag/$VER — MPL-2.0."
+          else
+            title="Xray-core $VER (vendored)"
+            notes="Vendored Xray-core $VER built for keenetic-xray's router targets. Upstream: https://github.com/XTLS/Xray-core/releases/tag/$VER — MPL-2.0. See each asset's .provenance.txt."
+          fi
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --latest=false \
-            --title "Xray-core $VER (vendored)" \
-            --notes "Vendored Xray-core $VER built for keenetic-xray's router targets. Upstream: https://github.com/XTLS/Xray-core/releases/tag/$VER — MPL-2.0. See each asset's .provenance.txt."
+            --title "$title" --notes "$notes"
 
   build:
     needs: prepare
@@ -59,9 +71,36 @@ jobs:
           ref: ${{ inputs.xray_version }}
           path: xray-core
 
+      - name: Checkout this repo (for the AWG patch file)
+        if: ${{ inputs.awg_dev }}
+        uses: actions/checkout@v4
+        with:
+          path: keenetic-xray-go
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: xray-core/go.mod
+
+      - name: Apply AmneziaWG patch (dev/test only, not production)
+        if: ${{ inputs.awg_dev }}
+        working-directory: xray-core
+        env:
+          VER: ${{ inputs.xray_version }}
+        run: |
+          set -eu
+          patch="../keenetic-xray-go/packaging/xray-core/amneziawg-${VER}.patch"
+          [ -f "$patch" ] || { echo "::error::no AmneziaWG patch for $VER at $patch -- add one before dispatching awg_dev for this tag"; exit 1; }
+          git apply --verbose "$patch"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq protobuf-compiler
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+          gobin="$(go env GOPATH)/bin"
+          export PATH="$PATH:$gobin"
+          protoc --go_out=. --go_opt=paths=source_relative -I. proxy/wireguard/config.proto
+          touched="infra/conf/wireguard.go proxy/tun/tun_freebsd.go proxy/wireguard/bind.go proxy/wireguard/client.go proxy/wireguard/config.pb.go proxy/wireguard/netstack.go proxy/wireguard/server.go proxy/wireguard/tun_default.go proxy/wireguard/tun_linux.go"
+          # shellcheck disable=SC2086
+          bad="$(gofmt -l $touched)"
+          if [ -n "$bad" ]; then echo "::error::gofmt found issues in patched files:"; echo "$bad"; exit 1; fi
 
       - name: Build
         working-directory: xray-core
@@ -135,10 +174,10 @@ jobs:
           echo "== unpacked =="; "$Q" ./xray version
           echo "== packed ==";   "$Q" "./xray-${VER}-linux-${GOARCH}" version
 
-      - name: Upload to xray-core/${{ inputs.xray_version }}
+      - name: Upload to the release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: xray-core/${{ inputs.xray_version }}
+          TAG: ${{ inputs.awg_dev && format('xray-core-awg-dev/{0}', inputs.xray_version) || format('xray-core/{0}', inputs.xray_version) }}
           BASE: xray-${{ inputs.xray_version }}-linux-${{ matrix.goarch }}
         run: |
           cd "$RUNNER_TEMP"

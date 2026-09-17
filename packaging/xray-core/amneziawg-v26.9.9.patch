@@ -1,0 +1,668 @@
+diff --git a/go.mod b/go.mod
+index be24f79..4e01f3b 100644
+--- a/go.mod
++++ b/go.mod
+@@ -3,6 +3,7 @@ module github.com/xtls/xray-core
+ go 1.27
+ 
+ require (
++	github.com/amnezia-vpn/amneziawg-go/v3 v3.1.20260828
+ 	github.com/apernet/quic-go v0.61.1-0.20260806010916-184d081eef3e
+ 	github.com/cloudflare/circl v1.6.5
+ 	github.com/ghodss/yaml v1.0.1-0.20220118164431-d8423dcdf344
+@@ -30,7 +31,6 @@ require (
+ 	golang.org/x/sync v0.22.0
+ 	golang.org/x/sys v0.47.0
+ 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
+-	golang.zx2c4.com/wireguard v0.0.0-20250521234502-f333402bd9cb
+ 	golang.zx2c4.com/wireguard/windows v1.0.1
+ 	google.golang.org/grpc v1.83.2
+ 	google.golang.org/protobuf v1.36.12
+@@ -42,7 +42,7 @@ require (
+ 
+ require (
+ 	github.com/andybalholm/brotli v1.0.6 // indirect
+-	github.com/google/btree v1.1.2 // indirect
++	github.com/google/btree v1.1.3 // indirect
+ 	github.com/google/gopacket v1.1.19 // indirect
+ 	github.com/huin/goupnp v1.2.0 // indirect
+ 	github.com/jackpal/go-nat-pmp v1.0.2 // indirect
+diff --git a/go.sum b/go.sum
+index f906979..08d5e9a 100644
+--- a/go.sum
++++ b/go.sum
+@@ -1,3 +1,5 @@
++github.com/amnezia-vpn/amneziawg-go/v3 v3.1.20260828 h1:D8d8gGvwXcTxUIsE4z6F6vjy4/VZddu95vMNtOygh1c=
++github.com/amnezia-vpn/amneziawg-go/v3 v3.1.20260828/go.mod h1:YoPc6qcOZqD7TXZ1xpedD8Sx3aSKsxN05ZqEFmXDNHk=
+ github.com/andybalholm/brotli v1.0.6 h1:Yf9fFpf49Zrxb9NlQaluyE92/+X7UVHlhMNJN2sxfOI=
+ github.com/andybalholm/brotli v1.0.6/go.mod h1:fO7iG3H7G2nSZ7m0zPUDn85XEX2GTukHGRSepvi9Eig=
+ github.com/apernet/quic-go v0.61.1-0.20260806010916-184d081eef3e h1:5mgtR5gwIgBKMiGI1QdXldZZ+SNor06Nbu1wCBulQBg=
+@@ -18,8 +20,8 @@ github.com/golang/mock v1.7.0-rc.1 h1:YojYx61/OLFsiv6Rw1Z96LpldJIy31o+UHmwAUMJ6/
+ github.com/golang/mock v1.7.0-rc.1/go.mod h1:s42URUywIqd+OcERslBJvOjepvNymP31m3q8d/GkuRs=
+ github.com/golang/protobuf v1.5.4 h1:i7eJL8qZTpSEXOPTxNKhASYpMn+8e5Q6AdndVa1dWek=
+ github.com/golang/protobuf v1.5.4/go.mod h1:lnTiLA8Wa4RWRcIUkrtSVa5nRhsEGBg48fD6rSs7xps=
+-github.com/google/btree v1.1.2 h1:xf4v41cLI2Z6FxbKm+8Bu+m8ifhj15JuZ9sa0jZCMUU=
+-github.com/google/btree v1.1.2/go.mod h1:qOPhT0dTNdNzV6Z/lhRX0YXUafgPLFUh+gZMl761Gm4=
++github.com/google/btree v1.1.3 h1:CVpQJjYgC4VbzxeGVHfvZrv1ctoYCAI8vbl07Fcxlyg=
++github.com/google/btree v1.1.3/go.mod h1:qOPhT0dTNdNzV6Z/lhRX0YXUafgPLFUh+gZMl761Gm4=
+ github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
+ github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
+ github.com/google/gopacket v1.1.19 h1:ves8RnFZPGiFnTS0uPQStjwru6uO6h+nlr9j6fL7kF8=
+@@ -103,6 +105,8 @@ go.opentelemetry.io/otel/sdk/metric v1.44.0 h1:3LlKgI+VjbVsjNRFZJZAJ30WjXC5VkNRk
+ go.opentelemetry.io/otel/sdk/metric v1.44.0/go.mod h1:5B5pMARnXxKhltooO4xUuCBorl65a4EpnTalObqOigA=
+ go.opentelemetry.io/otel/trace v1.44.0 h1:jxF5CsGYCe74MCRx2X4g7WsY/VBKRqqpNvXlX/6gtIk=
+ go.opentelemetry.io/otel/trace v1.44.0/go.mod h1:oLl1jrMQAVo6v3GAggN+1VH9VIz9iUSvW53sW1Q8PIE=
++go.uber.org/atomic v1.11.0 h1:ZvwS0R+56ePWxUNi+Atn9dWONBPp/AUETXlHW0DxSjE=
++go.uber.org/atomic v1.11.0/go.mod h1:LUxbIzbOniOlMKjJjyPfpl4v+PKK2cNJn91OQbhoJI0=
+ go.uber.org/mock v0.5.2 h1:LbtPTcP8A5k9WPXj54PPPbjcI4Y6lhyOZXn+VS7wNko=
+ go.uber.org/mock v0.5.2/go.mod h1:wLlUxC2vVTPTaE3UD51E0BGOAElKrILxhVSDYQLld5o=
+ go.yaml.in/yaml/v3 v3.0.5 h1:N6y/pJk8buWs9NY5ERU2HSMfm+IuD/OtfdAnq6kESPw=
+@@ -155,8 +159,6 @@ golang.org/x/xerrors v0.0.0-20191011141410-1b5146add898/go.mod h1:I/5z698sn9Ka8T
+ golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1/go.mod h1:I/5z698sn9Ka8TeJc9MKroUUfqBBauWjQqLJ2OPfmY0=
+ golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 h1:B82qJJgjvYKsXS9jeunTOisW56dUokqW/FOteYJJ/yg=
+ golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2/go.mod h1:deeaetjYA+DHMHg+sMSMI58GrEteJUUzzw7en6TJQcI=
+-golang.zx2c4.com/wireguard v0.0.0-20250521234502-f333402bd9cb h1:whnFRlWMcXI9d+ZbWg+4sHnLp52d5yiIPUxMBSt4X9A=
+-golang.zx2c4.com/wireguard v0.0.0-20250521234502-f333402bd9cb/go.mod h1:rpwXGsirqLqN2L0JDJQlwOboGHmptD5ZD6T2VmcqhTw=
+ golang.zx2c4.com/wireguard/windows v1.0.1 h1:eOxiDVbywPC+ZQqvdCK7x+ZwWXKbYv50TtH8ysFIbw8=
+ golang.zx2c4.com/wireguard/windows v1.0.1/go.mod h1:+fbT3FFdX4zzYDLwJh5+HPEcNN/3HyNdzhNSVsQM+zs=
+ gonum.org/v1/gonum v0.17.0 h1:VbpOemQlsSMrYmn7T2OUvQ4dqxQXU+ouZFQsZOx50z4=
+diff --git a/infra/conf/wireguard.go b/infra/conf/wireguard.go
+index 0e41c9c..b9892ae 100644
+--- a/infra/conf/wireguard.go
++++ b/infra/conf/wireguard.go
+@@ -67,6 +67,37 @@ type WireGuardConfig struct {
+ 	Reserved       []byte                 `json:"reserved"`
+ 	DomainStrategy string                 `json:"domainStrategy"`
+ 	DNS            []string               `json:"remoteDNS"`
++
++	// AmneziaWG obfuscation parameters -- all optional, carried through
++	// verbatim (see wireguard.DeviceConfig's own comment for why: some
++	// are plain integers, some are min-max ranges, i1-i5 are a
++	// byte-blob/random-fill notation, and amneziawg-go's own UAPI parser
++	// already understands all three shapes).
++	Jc                     string `json:"jc,omitempty"`
++	Jmin                   string `json:"jmin,omitempty"`
++	Jmax                   string `json:"jmax,omitempty"`
++	S1                     string `json:"s1,omitempty"`
++	S2                     string `json:"s2,omitempty"`
++	S3                     string `json:"s3,omitempty"`
++	S4                     string `json:"s4,omitempty"`
++	H1                     string `json:"h1,omitempty"`
++	H2                     string `json:"h2,omitempty"`
++	H3                     string `json:"h3,omitempty"`
++	H4                     string `json:"h4,omitempty"`
++	I1                     string `json:"i1,omitempty"`
++	I2                     string `json:"i2,omitempty"`
++	I3                     string `json:"i3,omitempty"`
++	I4                     string `json:"i4,omitempty"`
++	I5                     string `json:"i5,omitempty"`
++	HeaderProtectionKey    string `json:"headerProtectionKey,omitempty"`
++	ContentPaddingAddition string `json:"contentPaddingAddition,omitempty"`
++	RekeyAfterTime         string `json:"rekeyAfterTime,omitempty"`
++	RekeyTimeout           string `json:"rekeyTimeout,omitempty"`
++	RejectAfterTime        string `json:"rejectAfterTime,omitempty"`
++	KeepaliveTimeout       string `json:"keepaliveTimeout,omitempty"`
++	MaxHandshakeAttempts   string `json:"maxHandshakeAttempts,omitempty"`
++	RandomTrailers         string `json:"randomTrailers,omitempty"`
++	DisableCookies         string `json:"disableCookies,omitempty"`
+ }
+ 
+ func (c *WireGuardConfig) Build() (proto.Message, error) {
+@@ -144,6 +175,32 @@ func (c *WireGuardConfig) Build() (proto.Message, error) {
+ 	config.NoKernelTun = c.NoKernelTun
+ 	config.DNS = c.DNS
+ 
++	config.Jc = c.Jc
++	config.Jmin = c.Jmin
++	config.Jmax = c.Jmax
++	config.S1 = c.S1
++	config.S2 = c.S2
++	config.S3 = c.S3
++	config.S4 = c.S4
++	config.H1 = c.H1
++	config.H2 = c.H2
++	config.H3 = c.H3
++	config.H4 = c.H4
++	config.I1 = c.I1
++	config.I2 = c.I2
++	config.I3 = c.I3
++	config.I4 = c.I4
++	config.I5 = c.I5
++	config.HeaderProtectionKey = c.HeaderProtectionKey
++	config.ContentPaddingAddition = c.ContentPaddingAddition
++	config.RekeyAfterTime = c.RekeyAfterTime
++	config.RekeyTimeout = c.RekeyTimeout
++	config.RejectAfterTime = c.RejectAfterTime
++	config.KeepaliveTimeout = c.KeepaliveTimeout
++	config.MaxHandshakeAttempts = c.MaxHandshakeAttempts
++	config.RandomTrailers = c.RandomTrailers
++	config.DisableCookies = c.DisableCookies
++
+ 	return config, nil
+ }
+ 
+diff --git a/proxy/tun/tun_freebsd.go b/proxy/tun/tun_freebsd.go
+index 0784750..197fe47 100644
+--- a/proxy/tun/tun_freebsd.go
++++ b/proxy/tun/tun_freebsd.go
+@@ -12,7 +12,7 @@ import (
+ 	"sync"
+ 	"unsafe"
+ 
+-	"golang.zx2c4.com/wireguard/tun"
++	"github.com/amnezia-vpn/amneziawg-go/v3/tun"
+ 	"gvisor.dev/gvisor/pkg/buffer"
+ 	"gvisor.dev/gvisor/pkg/tcpip"
+ 	"gvisor.dev/gvisor/pkg/tcpip/stack"
+diff --git a/proxy/wireguard/bind.go b/proxy/wireguard/bind.go
+index 0e71e15..81d8ccc 100644
+--- a/proxy/wireguard/bind.go
++++ b/proxy/wireguard/bind.go
+@@ -10,9 +10,9 @@ import (
+ 	"sync"
+ 	"syscall"
+ 
++	"github.com/amnezia-vpn/amneziawg-go/v3/conn"
+ 	"github.com/xtls/xray-core/common"
+ 	"github.com/xtls/xray-core/common/errors"
+-	"golang.zx2c4.com/wireguard/conn"
+ )
+ 
+ type bind struct {
+diff --git a/proxy/wireguard/client.go b/proxy/wireguard/client.go
+index ef0cc1e..e25f5dc 100644
+--- a/proxy/wireguard/client.go
++++ b/proxy/wireguard/client.go
+@@ -10,8 +10,9 @@ import (
+ 	"sync"
+ 	"time"
+ 
+-	"golang.zx2c4.com/wireguard/tun"
++	"github.com/amnezia-vpn/amneziawg-go/v3/tun"
+ 
++	"github.com/amnezia-vpn/amneziawg-go/v3/device"
+ 	"github.com/xtls/xray-core/common"
+ 	"github.com/xtls/xray-core/common/buf"
+ 	"github.com/xtls/xray-core/common/dice"
+@@ -28,7 +29,6 @@ import (
+ 	"github.com/xtls/xray-core/features/stats"
+ 	"github.com/xtls/xray-core/transport"
+ 	"github.com/xtls/xray-core/transport/internet"
+-	"golang.zx2c4.com/wireguard/device"
+ )
+ 
+ type entry struct {
+@@ -345,6 +345,85 @@ func (h *Handler) init(ctx context.Context) error {
+ 	bind.reserved = h.conf.Reserved
+ 	var cfg strings.Builder
+ 	cfg.WriteString("private_key=" + h.conf.SecretKey + "\n")
++	// AmneziaWG obfuscation parameters -- device-level UAPI keys, so they
++	// must be written before the first "public_key=" line below. Every
++	// field is empty for a plain (non-AWG) profile, so none of these
++	// lines write anything and this is a no-op for existing configs.
++	if h.conf.Jc != "" {
++		cfg.WriteString("jc=" + h.conf.Jc + "\n")
++	}
++	if h.conf.Jmin != "" {
++		cfg.WriteString("jmin=" + h.conf.Jmin + "\n")
++	}
++	if h.conf.Jmax != "" {
++		cfg.WriteString("jmax=" + h.conf.Jmax + "\n")
++	}
++	if h.conf.S1 != "" {
++		cfg.WriteString("s1=" + h.conf.S1 + "\n")
++	}
++	if h.conf.S2 != "" {
++		cfg.WriteString("s2=" + h.conf.S2 + "\n")
++	}
++	if h.conf.S3 != "" {
++		cfg.WriteString("s3=" + h.conf.S3 + "\n")
++	}
++	if h.conf.S4 != "" {
++		cfg.WriteString("s4=" + h.conf.S4 + "\n")
++	}
++	if h.conf.H1 != "" {
++		cfg.WriteString("h1=" + h.conf.H1 + "\n")
++	}
++	if h.conf.H2 != "" {
++		cfg.WriteString("h2=" + h.conf.H2 + "\n")
++	}
++	if h.conf.H3 != "" {
++		cfg.WriteString("h3=" + h.conf.H3 + "\n")
++	}
++	if h.conf.H4 != "" {
++		cfg.WriteString("h4=" + h.conf.H4 + "\n")
++	}
++	if h.conf.I1 != "" {
++		cfg.WriteString("i1=" + h.conf.I1 + "\n")
++	}
++	if h.conf.I2 != "" {
++		cfg.WriteString("i2=" + h.conf.I2 + "\n")
++	}
++	if h.conf.I3 != "" {
++		cfg.WriteString("i3=" + h.conf.I3 + "\n")
++	}
++	if h.conf.I4 != "" {
++		cfg.WriteString("i4=" + h.conf.I4 + "\n")
++	}
++	if h.conf.I5 != "" {
++		cfg.WriteString("i5=" + h.conf.I5 + "\n")
++	}
++	if h.conf.HeaderProtectionKey != "" {
++		cfg.WriteString("header_protection_key=" + h.conf.HeaderProtectionKey + "\n")
++	}
++	if h.conf.ContentPaddingAddition != "" {
++		cfg.WriteString("content_padding_addition=" + h.conf.ContentPaddingAddition + "\n")
++	}
++	if h.conf.RekeyAfterTime != "" {
++		cfg.WriteString("rekey_after_time=" + h.conf.RekeyAfterTime + "\n")
++	}
++	if h.conf.RekeyTimeout != "" {
++		cfg.WriteString("rekey_timeout=" + h.conf.RekeyTimeout + "\n")
++	}
++	if h.conf.RejectAfterTime != "" {
++		cfg.WriteString("reject_after_time=" + h.conf.RejectAfterTime + "\n")
++	}
++	if h.conf.KeepaliveTimeout != "" {
++		cfg.WriteString("keepalive_timeout=" + h.conf.KeepaliveTimeout + "\n")
++	}
++	if h.conf.MaxHandshakeAttempts != "" {
++		cfg.WriteString("max_handshake_attempts=" + h.conf.MaxHandshakeAttempts + "\n")
++	}
++	if h.conf.RandomTrailers != "" {
++		cfg.WriteString("random_trailers=" + h.conf.RandomTrailers + "\n")
++	}
++	if h.conf.DisableCookies != "" {
++		cfg.WriteString("disable_cookies=" + h.conf.DisableCookies + "\n")
++	}
+ 	for _, peer := range h.conf.Peers {
+ 		cfg.WriteString("public_key=" + peer.PublicKey + "\n")
+ 		if peer.PreSharedKey != "" {
+diff --git a/proxy/wireguard/config.pb.go b/proxy/wireguard/config.pb.go
+index 4f434d1..364a09e 100644
+--- a/proxy/wireguard/config.pb.go
++++ b/proxy/wireguard/config.pb.go
+@@ -1,7 +1,7 @@
+ // Code generated by protoc-gen-go. DO NOT EDIT.
+ // versions:
+-// 	protoc-gen-go v1.36.11
+-// 	protoc        v6.33.5
++// 	protoc-gen-go v1.36.12
++// 	protoc        v5.29.3
+ // source: proxy/wireguard/config.proto
+ 
+ package wireguard
+@@ -165,8 +165,39 @@ type DeviceConfig struct {
+ 	IsClient       bool                        `protobuf:"varint,8,opt,name=is_client,json=isClient,proto3" json:"is_client,omitempty"`
+ 	NoKernelTun    bool                        `protobuf:"varint,9,opt,name=no_kernel_tun,json=noKernelTun,proto3" json:"no_kernel_tun,omitempty"`
+ 	DNS            []string                    `protobuf:"bytes,10,rep,name=DNS,proto3" json:"DNS,omitempty"`
+-	unknownFields  protoimpl.UnknownFields
+-	sizeCache      protoimpl.SizeCache
++	// AmneziaWG obfuscation parameters. All optional (empty = unset, not
++	// sent over UAPI at all). Every value is carried verbatim from the
++	// operator's .conf as a string -- some are plain integers, some are
++	// min-max ranges (e.g. "5-60"), i1-i5 are "<b 0xHEX><r N>" byte-blob/
++	// random-fill notation. amneziawg-go's own UAPI parser already
++	// understands all three shapes; this project only relays what's given.
++	Jc                     string `protobuf:"bytes,11,opt,name=jc,proto3" json:"jc,omitempty"`
++	Jmin                   string `protobuf:"bytes,12,opt,name=jmin,proto3" json:"jmin,omitempty"`
++	Jmax                   string `protobuf:"bytes,13,opt,name=jmax,proto3" json:"jmax,omitempty"`
++	S1                     string `protobuf:"bytes,14,opt,name=s1,proto3" json:"s1,omitempty"`
++	S2                     string `protobuf:"bytes,15,opt,name=s2,proto3" json:"s2,omitempty"`
++	S3                     string `protobuf:"bytes,16,opt,name=s3,proto3" json:"s3,omitempty"`
++	S4                     string `protobuf:"bytes,17,opt,name=s4,proto3" json:"s4,omitempty"`
++	H1                     string `protobuf:"bytes,18,opt,name=h1,proto3" json:"h1,omitempty"`
++	H2                     string `protobuf:"bytes,19,opt,name=h2,proto3" json:"h2,omitempty"`
++	H3                     string `protobuf:"bytes,20,opt,name=h3,proto3" json:"h3,omitempty"`
++	H4                     string `protobuf:"bytes,21,opt,name=h4,proto3" json:"h4,omitempty"`
++	I1                     string `protobuf:"bytes,22,opt,name=i1,proto3" json:"i1,omitempty"`
++	I2                     string `protobuf:"bytes,23,opt,name=i2,proto3" json:"i2,omitempty"`
++	I3                     string `protobuf:"bytes,24,opt,name=i3,proto3" json:"i3,omitempty"`
++	I4                     string `protobuf:"bytes,25,opt,name=i4,proto3" json:"i4,omitempty"`
++	I5                     string `protobuf:"bytes,26,opt,name=i5,proto3" json:"i5,omitempty"`
++	HeaderProtectionKey    string `protobuf:"bytes,27,opt,name=header_protection_key,json=headerProtectionKey,proto3" json:"header_protection_key,omitempty"`
++	ContentPaddingAddition string `protobuf:"bytes,28,opt,name=content_padding_addition,json=contentPaddingAddition,proto3" json:"content_padding_addition,omitempty"`
++	RekeyAfterTime         string `protobuf:"bytes,29,opt,name=rekey_after_time,json=rekeyAfterTime,proto3" json:"rekey_after_time,omitempty"`
++	RekeyTimeout           string `protobuf:"bytes,30,opt,name=rekey_timeout,json=rekeyTimeout,proto3" json:"rekey_timeout,omitempty"`
++	RejectAfterTime        string `protobuf:"bytes,31,opt,name=reject_after_time,json=rejectAfterTime,proto3" json:"reject_after_time,omitempty"`
++	KeepaliveTimeout       string `protobuf:"bytes,32,opt,name=keepalive_timeout,json=keepaliveTimeout,proto3" json:"keepalive_timeout,omitempty"`
++	MaxHandshakeAttempts   string `protobuf:"bytes,33,opt,name=max_handshake_attempts,json=maxHandshakeAttempts,proto3" json:"max_handshake_attempts,omitempty"`
++	RandomTrailers         string `protobuf:"bytes,34,opt,name=random_trailers,json=randomTrailers,proto3" json:"random_trailers,omitempty"`
++	DisableCookies         string `protobuf:"bytes,35,opt,name=disable_cookies,json=disableCookies,proto3" json:"disable_cookies,omitempty"`
++	unknownFields          protoimpl.UnknownFields
++	sizeCache              protoimpl.SizeCache
+ }
+ 
+ func (x *DeviceConfig) Reset() {
+@@ -269,6 +300,181 @@ func (x *DeviceConfig) GetDNS() []string {
+ 	return nil
+ }
+ 
++func (x *DeviceConfig) GetJc() string {
++	if x != nil {
++		return x.Jc
++	}
++	return ""
++}
++
++func (x *DeviceConfig) GetJmin() string {
++	if x != nil {
++		return x.Jmin
++	}
++	return ""
++}
++
++func (x *DeviceConfig) GetJmax() string {
++	if x != nil {
++		return x.Jmax
++	}
++	return ""
++}
++
++func (x *DeviceConfig) GetS1() string {
++	if x != nil {
++		return x.S1
++	}
++	return ""
++}
++
++func (x *DeviceConfig) GetS2() string {
++	if x != nil {
++		return x.S2
++	}
++	return ""
++}
++
++func (x *DeviceConfig) GetS3() string {
++	if x != nil {
++		return x.S3
++	}
++	return ""
++}
++
++func (x *DeviceConfig) GetS4() string {
++	if x != nil {
++		return x.S4
++	}
++	return ""
++}
++
++func (x *DeviceConfig) GetH1() string {
++	if x != nil {
++		return x.H1
++	}
++	return ""
++}
++
++func (x *DeviceConfig) GetH2() string {
++	if x != nil {
++		return x.H2
++	}
++	return ""
++}
++
++func (x *DeviceConfig) GetH3() string {
++	if x != nil {
++		return x.H3
++	}
++	return ""
++}
++
++func (x *DeviceConfig) GetH4() string {
++	if x != nil {
++		return x.H4
++	}
++	return ""
++}
++
++func (x *DeviceConfig) GetI1() string {
++	if x != nil {
++		return x.I1
++	}
++	return ""
++}
++
++func (x *DeviceConfig) GetI2() string {
++	if x != nil {
++		return x.I2
++	}
++	return ""
++}
++
++func (x *DeviceConfig) GetI3() string {
++	if x != nil {
++		return x.I3
++	}
++	return ""
++}
++
++func (x *DeviceConfig) GetI4() string {
++	if x != nil {
++		return x.I4
++	}
++	return ""
++}
++
++func (x *DeviceConfig) GetI5() string {
++	if x != nil {
++		return x.I5
++	}
++	return ""
++}
++
++func (x *DeviceConfig) GetHeaderProtectionKey() string {
++	if x != nil {
++		return x.HeaderProtectionKey
++	}
++	return ""
++}
++
++func (x *DeviceConfig) GetContentPaddingAddition() string {
++	if x != nil {
++		return x.ContentPaddingAddition
++	}
++	return ""
++}
++
++func (x *DeviceConfig) GetRekeyAfterTime() string {
++	if x != nil {
++		return x.RekeyAfterTime
++	}
++	return ""
++}
++
++func (x *DeviceConfig) GetRekeyTimeout() string {
++	if x != nil {
++		return x.RekeyTimeout
++	}
++	return ""
++}
++
++func (x *DeviceConfig) GetRejectAfterTime() string {
++	if x != nil {
++		return x.RejectAfterTime
++	}
++	return ""
++}
++
++func (x *DeviceConfig) GetKeepaliveTimeout() string {
++	if x != nil {
++		return x.KeepaliveTimeout
++	}
++	return ""
++}
++
++func (x *DeviceConfig) GetMaxHandshakeAttempts() string {
++	if x != nil {
++		return x.MaxHandshakeAttempts
++	}
++	return ""
++}
++
++func (x *DeviceConfig) GetRandomTrailers() string {
++	if x != nil {
++		return x.RandomTrailers
++	}
++	return ""
++}
++
++func (x *DeviceConfig) GetDisableCookies() string {
++	if x != nil {
++		return x.DisableCookies
++	}
++	return ""
++}
++
+ var File_proxy_wireguard_config_proto protoreflect.FileDescriptor
+ 
+ const file_proxy_wireguard_config_proto_rawDesc = "" +
+@@ -283,7 +489,7 @@ const file_proxy_wireguard_config_proto_rawDesc = "" +
+ 	"\n" +
+ 	"keep_alive\x18\x04 \x01(\tR\tkeepAlive\x12\x1f\n" +
+ 	"\vallowed_ips\x18\x05 \x03(\tR\n" +
+-	"allowedIps\"\xee\x03\n" +
++	"allowedIps\"\x94\t\n" +
+ 	"\fDeviceConfig\x12\x1d\n" +
+ 	"\n" +
+ 	"secret_key\x18\x01 \x01(\tR\tsecretKey\x12\x1a\n" +
+@@ -296,7 +502,32 @@ const file_proxy_wireguard_config_proto_rawDesc = "" +
+ 	"\tis_client\x18\b \x01(\bR\bisClient\x12\"\n" +
+ 	"\rno_kernel_tun\x18\t \x01(\bR\vnoKernelTun\x12\x10\n" +
+ 	"\x03DNS\x18\n" +
+-	" \x03(\tR\x03DNS\"\\\n" +
++	" \x03(\tR\x03DNS\x12\x0e\n" +
++	"\x02jc\x18\v \x01(\tR\x02jc\x12\x12\n" +
++	"\x04jmin\x18\f \x01(\tR\x04jmin\x12\x12\n" +
++	"\x04jmax\x18\r \x01(\tR\x04jmax\x12\x0e\n" +
++	"\x02s1\x18\x0e \x01(\tR\x02s1\x12\x0e\n" +
++	"\x02s2\x18\x0f \x01(\tR\x02s2\x12\x0e\n" +
++	"\x02s3\x18\x10 \x01(\tR\x02s3\x12\x0e\n" +
++	"\x02s4\x18\x11 \x01(\tR\x02s4\x12\x0e\n" +
++	"\x02h1\x18\x12 \x01(\tR\x02h1\x12\x0e\n" +
++	"\x02h2\x18\x13 \x01(\tR\x02h2\x12\x0e\n" +
++	"\x02h3\x18\x14 \x01(\tR\x02h3\x12\x0e\n" +
++	"\x02h4\x18\x15 \x01(\tR\x02h4\x12\x0e\n" +
++	"\x02i1\x18\x16 \x01(\tR\x02i1\x12\x0e\n" +
++	"\x02i2\x18\x17 \x01(\tR\x02i2\x12\x0e\n" +
++	"\x02i3\x18\x18 \x01(\tR\x02i3\x12\x0e\n" +
++	"\x02i4\x18\x19 \x01(\tR\x02i4\x12\x0e\n" +
++	"\x02i5\x18\x1a \x01(\tR\x02i5\x122\n" +
++	"\x15header_protection_key\x18\x1b \x01(\tR\x13headerProtectionKey\x128\n" +
++	"\x18content_padding_addition\x18\x1c \x01(\tR\x16contentPaddingAddition\x12(\n" +
++	"\x10rekey_after_time\x18\x1d \x01(\tR\x0erekeyAfterTime\x12#\n" +
++	"\rrekey_timeout\x18\x1e \x01(\tR\frekeyTimeout\x12*\n" +
++	"\x11reject_after_time\x18\x1f \x01(\tR\x0frejectAfterTime\x12+\n" +
++	"\x11keepalive_timeout\x18  \x01(\tR\x10keepaliveTimeout\x124\n" +
++	"\x16max_handshake_attempts\x18! \x01(\tR\x14maxHandshakeAttempts\x12'\n" +
++	"\x0frandom_trailers\x18\" \x01(\tR\x0erandomTrailers\x12'\n" +
++	"\x0fdisable_cookies\x18# \x01(\tR\x0edisableCookies\"\\\n" +
+ 	"\x0eDomainStrategy\x12\f\n" +
+ 	"\bFORCE_IP\x10\x00\x12\r\n" +
+ 	"\tFORCE_IP4\x10\x01\x12\r\n" +
+diff --git a/proxy/wireguard/config.proto b/proxy/wireguard/config.proto
+index 6280598..d7d138a 100644
+--- a/proxy/wireguard/config.proto
++++ b/proxy/wireguard/config.proto
+@@ -35,4 +35,36 @@ message DeviceConfig {
+   bool is_client = 8;
+   bool no_kernel_tun = 9;
+   repeated string DNS = 10;
++
++  // AmneziaWG obfuscation parameters. All optional (empty = unset, not
++  // sent over UAPI at all). Every value is carried verbatim from the
++  // operator's .conf as a string -- some are plain integers, some are
++  // min-max ranges (e.g. "5-60"), i1-i5 are "<b 0xHEX><r N>" byte-blob/
++  // random-fill notation. amneziawg-go's own UAPI parser already
++  // understands all three shapes; this project only relays what's given.
++  string jc = 11;
++  string jmin = 12;
++  string jmax = 13;
++  string s1 = 14;
++  string s2 = 15;
++  string s3 = 16;
++  string s4 = 17;
++  string h1 = 18;
++  string h2 = 19;
++  string h3 = 20;
++  string h4 = 21;
++  string i1 = 22;
++  string i2 = 23;
++  string i3 = 24;
++  string i4 = 25;
++  string i5 = 26;
++  string header_protection_key = 27;
++  string content_padding_addition = 28;
++  string rekey_after_time = 29;
++  string rekey_timeout = 30;
++  string reject_after_time = 31;
++  string keepalive_timeout = 32;
++  string max_handshake_attempts = 33;
++  string random_trailers = 34;
++  string disable_cookies = 35;
+ }
+\ No newline at end of file
+diff --git a/proxy/wireguard/netstack.go b/proxy/wireguard/netstack.go
+index 813f467..80cad97 100644
+--- a/proxy/wireguard/netstack.go
++++ b/proxy/wireguard/netstack.go
+@@ -19,8 +19,8 @@ import (
+ 	"syscall"
+ 	"time"
+ 
++	"github.com/amnezia-vpn/amneziawg-go/v3/tun"
+ 	"github.com/xtls/xray-core/transport/internet"
+-	"golang.zx2c4.com/wireguard/tun"
+ 
+ 	"golang.org/x/net/dns/dnsmessage"
+ 	"gvisor.dev/gvisor/pkg/buffer"
+diff --git a/proxy/wireguard/server.go b/proxy/wireguard/server.go
+index 51416c4..3c8e874 100644
+--- a/proxy/wireguard/server.go
++++ b/proxy/wireguard/server.go
+@@ -9,6 +9,8 @@ import (
+ 	"strings"
+ 	"sync"
+ 
++	"github.com/amnezia-vpn/amneziawg-go/v3/device"
++	"github.com/amnezia-vpn/amneziawg-go/v3/tun"
+ 	"github.com/xtls/xray-core/common"
+ 	"github.com/xtls/xray-core/common/buf"
+ 	c "github.com/xtls/xray-core/common/ctx"
+@@ -25,8 +27,6 @@ import (
+ 	"github.com/xtls/xray-core/transport/internet"
+ 	"github.com/xtls/xray-core/transport/internet/stat"
+ 	"golang.org/x/crypto/curve25519"
+-	"golang.zx2c4.com/wireguard/device"
+-	"golang.zx2c4.com/wireguard/tun"
+ 	"gvisor.dev/gvisor/pkg/tcpip/stack"
+ )
+ 
+diff --git a/proxy/wireguard/tun_default.go b/proxy/wireguard/tun_default.go
+index edad554..7e8ed17 100644
+--- a/proxy/wireguard/tun_default.go
++++ b/proxy/wireguard/tun_default.go
+@@ -6,7 +6,7 @@ import (
+ 	"errors"
+ 	"net/netip"
+ 
+-	"golang.zx2c4.com/wireguard/tun"
++	"github.com/amnezia-vpn/amneziawg-go/v3/tun"
+ )
+ 
+ func createKernelTun([]netip.Addr, []netip.Addr, int) (tdev tun.Device, tnet *Net, err error) {
+diff --git a/proxy/wireguard/tun_linux.go b/proxy/wireguard/tun_linux.go
+index eb01754..cebc426 100644
+--- a/proxy/wireguard/tun_linux.go
++++ b/proxy/wireguard/tun_linux.go
+@@ -14,10 +14,10 @@ import (
+ 
+ 	"golang.org/x/sys/unix"
+ 
++	"github.com/amnezia-vpn/amneziawg-go/v3/tun"
+ 	"github.com/vishvananda/netlink"
+ 	"github.com/xtls/xray-core/common/errors"
+ 	"github.com/xtls/xray-core/transport/internet"
+-	"golang.zx2c4.com/wireguard/tun"
+ )
+ 
+ var (

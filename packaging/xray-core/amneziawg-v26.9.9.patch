@@ -197,7 +197,7 @@ index 0784750..197fe47 100644
  	"gvisor.dev/gvisor/pkg/tcpip"
  	"gvisor.dev/gvisor/pkg/tcpip/stack"
 diff --git a/proxy/wireguard/bind.go b/proxy/wireguard/bind.go
-index 0e71e15..81d8ccc 100644
+index 0e71e15..bd4ca6c 100644
 --- a/proxy/wireguard/bind.go
 +++ b/proxy/wireguard/bind.go
 @@ -10,9 +10,9 @@ import (
@@ -211,6 +211,27 @@ index 0e71e15..81d8ccc 100644
  )
  
  type bind struct {
+@@ -63,7 +63,19 @@ func (b *bind) Open(port uint16) (fns []conn.ReceiveFunc, actualPort uint16, err
+ 					errors.LogErrorInner(context.Background(), err, "bind recv err")
+ 					continue
+ 				}
+-				if n > 3 {
++				// Only meaningful for vanilla WireGuard's own reserved-bytes
++				// convention (mirrors Send's own guard below, which only
++				// ever writes these bytes when b.reserved is actually
++				// configured) -- for AmneziaWG, bytes 0-3 together are the
++				// H1-H4 magic-header marker the peer uses to classify the
++				// message type; force-zeroing 3 of those 4 bytes on every
++				// receive destroys it, so an otherwise-valid response gets
++				// misclassified ("Received message with unknown type")
++				// before it ever reaches AmneziaWG's own header-cipher/
++				// type-matching logic. Found live: this router's real
++				// handshake response was never recognized because of
++				// this, unconditionally, regardless of any AWG config.
++				if n > 3 && len(b.reserved) == 3 {
+ 					bufs[0][1] = 0
+ 					bufs[0][2] = 0
+ 					bufs[0][3] = 0
 diff --git a/proxy/wireguard/client.go b/proxy/wireguard/client.go
 index ef0cc1e..e25f5dc 100644
 --- a/proxy/wireguard/client.go

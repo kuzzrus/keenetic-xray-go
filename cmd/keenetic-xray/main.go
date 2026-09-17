@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -209,15 +210,44 @@ func cmdDaemon(args []string) error {
 			logf("rci: конфиг роутера читаю через %s (записи — ndmc)", url)
 		}
 	}
-	applyProxy0AtStartup(cfg, logf)
-	applyRoutesAtStartup(cfg, logf)
-	applyWGTransportAtStartup(cfg, logf)
-	applyMSSClamp(cfg, logf)
-	applyDNSAtStartup(cfg, logf)
-	applyAdaptiveRouteAtStartup(cfg, logf)
-	// Synchronous, bounded: see georangesBootstrap's own doc comment for
+	// Each of these reconciles a different, independent Keenetic facility
+	// (Proxy0 interface binding, route object-groups, the WG-transport
+	// interface, MSS-clamp iptables rules, DNS-proxy config, adaptive-
+	// route ipset/conntrack) against cfg -- no ordering dependency between
+	// them, no shared mutable state (internal/keenetic's RCI client is
+	// already mutex-guarded for exactly this kind of concurrent use). Run
+	// concurrently instead of sequentially: each is already individually
+	// timeout-bounded (30-90s), but run one after another the *sum* of
+	// those bounds had grown, release by release, into the real cause of
+	// a regression reported live (2026-09-17) -- self-update used to feel
+	// instant and started taking minutes as more of these accumulated,
+	// with the daemon's Telegram polling and failover state machine (both
+	// started only after this whole chain, further below) unreachable
+	// for the entire wait. Concurrent, the wall-clock cost collapses from
+	// the sum of all six to roughly the slowest one.
+	startupBegin := time.Now()
+	var startupWG sync.WaitGroup
+	for _, fn := range []func(){
+		func() { applyProxy0AtStartup(cfg, logf) },
+		func() { applyRoutesAtStartup(cfg, logf) },
+		func() { applyWGTransportAtStartup(cfg, logf) },
+		func() { applyMSSClamp(cfg, logf) },
+		func() { applyDNSAtStartup(cfg, logf) },
+		func() { applyAdaptiveRouteAtStartup(cfg, logf) },
+	} {
+		startupWG.Add(1)
+		go func(f func()) {
+			defer startupWG.Done()
+			f()
+		}(fn)
+	}
+	startupWG.Wait()
+	logf("startup: reconciled proxy0/routes/wg-transport/mss/dns/adaptive-route in %s", time.Since(startupBegin).Round(time.Millisecond))
+	// Synchronous, bounded, and deliberately AFTER the group above rather
+	// than folded into it: see georangesBootstrap's own doc comment for
 	// why ClrFast/ClrSoft's ExcludedRangeLookup veto must never race its
-	// own data source the way it used to.
+	// own data source the way it used to -- it still needs to finish
+	// before adaptiveRouteClassifyLoop starts, just below.
 	georangesBootstrap(ctx, logf)
 	go adaptiveRouteClassifyLoop(ctx, logf)
 	go l7SNIClassifyLoop(ctx, logf)

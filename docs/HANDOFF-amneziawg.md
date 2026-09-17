@@ -9,11 +9,24 @@ the `parse_test.go` CRLF gotcha), see
 [`docs/HANDOFF-naive.md`](HANDOFF-naive.md) §1-2 — identical here, not
 repeated.
 
-**Status: fully researched, plan written, never started.** No code exists
-for this yet. Plan Mode's own plan file (`.claude/plans/*.md`) held this
-plan at one point but has since been overwritten by a different feature
-(Russian-IP adaptive-route exclusion) the user asked to build first — this
-document is the durable copy.
+**Status (updated 2026-09-17): the xray-core patch for `v26.9.9` is
+written, applies cleanly, and is CONFIRMED WORKING END TO END on real
+router hardware** — real AmneziaWG handshake, real HTTP/2 traffic through
+the tunnel to a real remote server (`curl` through the patched core's
+SOCKS inbound, `HTTP/2 301` back from Cloudflare, `curl exit=0`), plus
+independent confirmation from the AWG server's own admin panel showing
+the test client online. Published as a **dev/test-only** build
+(`xray-core-awg-dev/v26.9.9`, never the real `xray-core/v26.9.9` release)
+per the staged-rollout plan below. **Not yet done**: this project's own
+config schema / `ParseAmneziaWGURI` / `buildOutbound` wiring (still
+exactly as originally planned, deliberately deferred until the raw patch
+proved out — see "What's actually built" below for the precise cut
+line), promoting the patch to the real production release, and repeating
+the whole exercise for `v26.3.27`. See "2026-09-17 real-hardware
+debugging arc" near the end of this document for the full account —
+three real bugs found this way, none of them anticipated by the original
+plan below, most of them relegated to their own long detour before the
+actual (surprisingly simple) root cause turned up.
 
 ## The task
 
@@ -303,6 +316,175 @@ project already vendors and always ships, none of it is needed.
   acknowledged gap until the user tests it live — same as every other
   protocol this project has added.
 
+## What's actually built (as of 2026-09-17) vs. still just planned
+
+**Built, committed, and confirmed working on real hardware** —
+`packaging/xray-core/amneziawg-v26.9.9.patch` (668→731 lines across the
+session as bugs got found and fixed), applying cleanly to a fresh
+`v26.9.9` checkout:
+- The library swap + all 25 new `DeviceConfig` fields + `client.go`'s
+  UAPI-string additions + `infra/conf/wireguard.go`'s JSON bridge, all
+  exactly per the original plan below.
+- A fork, `kuzzrus/amneziawg-go` (commit `58a3db1` on top of the
+  `v3.1.20260828` tag this project pins), with upstream's own open
+  `amnezia-vpn/amneziawg-go#169` applied — a real fix for a real race
+  (stale S1-S4 transport padding on the first post-configuration
+  packet), wired in via an ordinary `go.mod` `replace` directive. Kept
+  even though it turned out not to be *this* debugging arc's root cause
+  — it's still a legitimate, worthwhile fix on its own merits.
+- `.github/workflows/xray-core.yml`'s `awg_dev` dispatch input,
+  publishing to `xray-core-awg-dev/<tag>` (never the real
+  `xray-core/<tag>`) — including, as a diagnostic that turned out to be
+  a dead end but stayed since it's harmless and free, an `awg_dev`+
+  `arm64`-only `CGO_ENABLED=1` path (statically linked via
+  `-linkmode external -extldflags -static`, `gcc-aarch64-linux-gnu`).
+- The critical fix, in `proxy/wireguard/bind.go` (see the debugging arc
+  below) — this is the one that actually made it work.
+
+**Still not built at all** — exactly what the plan below always said was
+Step 3/4/5, deliberately deferred until the raw patch proved out (now
+true): `internal/config/profile.go`'s `Profile.AWG`/`"amneziawg"`
+protocol, `internal/config/amneziawguri.go`'s `ParseAmneziaWGURI`,
+`ParseProfileURI`'s `vpn://` case, `internal/botcontrol/
+telegram_wizard.go`'s prefix-check gap, `internal/config/xray.go`'s
+`buildOutbound` branch. None of this project's own config/CLI/bot has
+ever touched AWG yet — every test so far ran the patched core directly
+via a hand-written JSON config, deliberately bypassing this project's
+own layer entirely (see the original plan's own "Verification, staged to
+isolate variables" reasoning for why — it paid off exactly as intended:
+every bug found this session was in the *patch*, none of them would have
+been any easier to find with this project's own plumbing in the loop
+too, and several rounds would have needed disentangling "is this xray-
+core or is this our own code" on top of everything else).
+
+**Also still not done**: promoting the patch to the real
+`xray-core/v26.9.9` release (still gated behind `awg_dev=true` only,
+per the staged-rollout plan — the user hasn't asked to graduate it yet),
+and repeating the whole exercise for `v26.3.27` (whose `proxy/wireguard/
+client.go` and `config.proto` are confirmed structurally different from
+`v26.9.9`'s, per the plan-mode research earlier this session — the
+`bind.go` bug almost certainly exists there too, un-investigated, since
+`bind.go` itself didn't change between `v26.3.27`/`v26.9.9` in the diff
+pulled during that research, but this hasn't been independently
+re-confirmed against `v26.3.27`'s actual current file).
+
+## 2026-09-17 real-hardware debugging arc — the actual bug hunt
+
+Once the patch was written and locally verified (patch applies clean,
+cross-compiles for both arches, a hand-written JSON config passes `xray
+run -test`), it went through **six** real-hardware rounds before genuinely
+working — a useful record of what did and didn't matter, since most of
+the plausible-sounding theories along the way turned out to be dead ends,
+and the real fix was almost anticlimactically small.
+
+**Round 1 — config validates, handshake times out completely.** First
+real test against a `vpn://`-decoded config (secretKey/peers/jc/jmin/...
+straight into a hand-written JSON, `xray run -config`) produced total
+silence: `Sending handshake initiation` on repeat, zero response, ever.
+Root cause, found by reading `amneziawg-go`'s actual `device/uapi.go` at
+the pinned tag: **two fields needed conversion, not verbatim passthrough,
+contradicting the plan's own "everything is a string, relay as-is"
+design**:
+- `header_protection_key` — UAPI does `key.FromHex(value)`, the same
+  treatment as `private_key`/`public_key`/`preshared_key` (it's a real
+  32-byte key, not a tunable parameter). The `.conf` carries it as
+  base64 like every other WG key. Fixed by routing it through the
+  existing `ParseWireGuardKey` (base64-or-hex → hex) instead of a raw
+  copy.
+- `random_trailers`/`disable_cookies` — UAPI does
+  `strconv.ParseBool(value)`, Go's boolean spellings only. The `.conf`
+  (and this document, originally) use `on`/`off`. Fixed with a small
+  `onOffToBool()` converting the `.conf` spelling to what `ParseBool`
+  actually accepts.
+
+This alone wasn't the endpoint's fault either, as it turned out: the
+*first* real `vpn://` link tested resolved its `Endpoint` to
+**this router's own WAN IP** (confirmed later via `ip route get`) — an
+unrelated red herring that made Round 1's total silence look consistent
+with a config bug for longer than it should have. A second, independently
+confirmed-working (tested on the operator's phone with the official
+client) `vpn://` link, resolving to a genuinely different remote server,
+is what the rest of this arc actually debugged against.
+
+**Round 2 — config now clean, but `Received message with unknown type`
+on every attempt.** With both field fixes in place, UAPI accepted every
+line with zero errors — real progress, but the handshake still didn't
+complete, now failing at classification instead of parsing. Two
+plausible-looking upstream bugs were tried and **both were dead ends**:
+- `amnezia-vpn/amneziawg-go#169` (open, unmerged) — fixes a real race
+  where `RoutineReadFromTUN` snapshots S1-S4 transport padding before
+  its first blocking TUN read, so a UAPI update landing mid-read leaves
+  packets at a stale offset. Forked, applied, verified via the fork's
+  own test suite. **Did not change the symptom** — this bug affects
+  *transport* (data) packets specifically; the failure here was at
+  *handshake* time, a different code path entirely.
+- `amnezia-vpn/amneziawg-go#110` ("arm64: outbound H4 header corrupted
+  in transport packets", `CGO_ENABLED=0`, "embedded Linux (Keenetic OS,
+  Entware)" — this project's exact platform, described independently)
+  looked like an extremely close match. Built a whole `CGO_ENABLED=1`
+  diagnostic path (cross-`gcc`, static linking so the binary stays
+  portable) to test it. **Also did not change the symptom.**
+
+**Round 3 — the decisive diagnostic: `tcpdump` on the router itself**
+(`opkg install tcpdump`, none of the config-tweaking rounds before this
+had actual wire-level evidence). Captured on the real egress interface
+during a full handshake-retry cycle: **zero packets ever arrived back
+from the server** — every packet on the wire was outbound only (the I1-I5
+decoy burst plus the real handshake-init, all visible in cleartext in the
+capture, e.g. literal `mail.ru`/`vk.com`/`OPTIONS sip:ozon.ru` ASCII
+matching the config's own decoy payloads exactly). Yet the client kept
+logging "received" something. That contradiction — a receive-side claim
+with no corresponding wire-level receive — is what actually narrowed the
+search: whatever was misclassifying packets had to be **local to this
+project's own code**, not the network, and not amneziawg-go's own
+(otherwise-correct) classification logic, which never even runs on data
+that was never received.
+
+**Root cause, `proxy/wireguard/bind.go`** (this project's own bridge
+between amneziawg-go's `conn.Bind` interface and xray-core's
+dialer/transport — confirmed untouched by amnezia-xray-core's own
+upstream patch, which only ever changes import paths in this file):
+
+```go
+if n > 3 {
+    bufs[0][1] = 0
+    bufs[0][2] = 0
+    bufs[0][3] = 0
+}
+```
+
+Unconditional, on every received packet. Harmless for vanilla WireGuard
+(message type is one byte; this only matters at all for peers using the
+separate "reserved bytes" connection-switching convention, which `Send`'s
+own mirror of this correctly guards with `if len(b.reserved) == 3`, a
+condition the receive side never had). Fatal for AmneziaWG: bytes 0-3
+*together* are the 32-bit H1-H4 magic-header marker used to identify
+message type at all — zeroing 3 of those 4 bytes on every single receive
+guarantees misclassification, regardless of how correct every other AWG
+parameter is. Fixed by giving the receive side the same
+`len(b.reserved) == 3` guard `Send` already had. One-line diagnosis once
+found, but took two full dead-end rounds and a packet capture to actually
+locate, because every symptom up to that point (config accepted, decoys
+sent correctly, "received" something, "unknown type") was consistent with
+several *other*, more exotic-sounding theories first.
+
+**Round 4 — confirmed working, end to end**, immediately after the
+`bind.go` fix: `Received handshake response` (not "unknown type"),
+`Receiving keepalive packet`, and a `curl` through the patched core's own
+SOCKS inbound completing a real TLS handshake + HTTP/2 request against
+`1.1.1.1`, getting a genuine `301` back from Cloudflare (`curl exit=0`).
+Independently corroborated server-side: the test client showed "online"
+in the AWG server's own admin panel both times the tunnel came up.
+
+**Lesson for next time** (`v26.3.27`'s own patch, or any future
+xray-core/amneziawg-go bump): when a *received* message is misbehaving
+and every config-level theory has been exhausted, get a packet capture
+before spending more rounds on library-internals theories — "does
+anything real actually arrive on the wire" is a question no amount of
+log-reading answers as fast or as conclusively, and it would have
+short-circuited two dead-end rounds (#169, CGO) straight to the actual
+bug in this project's *own* 15-line bridge file.
+
 ## How to resume
 
 Re-enter Plan Mode, re-read this document plus the current code
@@ -311,4 +493,7 @@ profile.go`, this project's pinned xray-core tag) since code may have
 moved on since this was written, then write a fresh plan-file draft
 from this document rather than assuming an old plan-file survived (it
 won't have — Plan Mode's plan file gets reused for whatever's being
-planned at the time).
+planned at the time). If resuming straight into Step 3/4/5 (this
+project's own config/URI/`buildOutbound` plumbing — the only part of the
+original plan not yet built), the xray-core patch itself needs no further
+research first; start from "What's actually built" above.

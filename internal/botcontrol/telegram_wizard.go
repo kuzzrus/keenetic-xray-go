@@ -2,6 +2,7 @@ package botcontrol
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"strings"
 
@@ -74,7 +75,7 @@ func (b *TelegramBot) startSlotSourceWizard(ctx context.Context, chatID int64, r
 	b.wizards[chatID] = &wizState{step: wizSlotSource, routerID: routerID, primary: primary}
 	b.wizardMu.Unlock()
 	b.sendMessage(ctx, chatID,
-		"Источник для "+slot+" ("+routerID+"):\nвставь vless://, naive+https:// или vpn:// ссылку, либо http(s):// URL подписки.\n"+
+		"Источник для "+slot+" ("+routerID+"):\nвставь vless://, naive+https:// или vpn:// ссылку, пришли .conf-файл (AmneziaWG), либо http(s):// URL подписки.\n"+
 			"Для подписки можно добавить селектор через пробел — номер профиля или часть названия.\nОтмена: /cancel")
 }
 
@@ -231,6 +232,35 @@ func (b *TelegramBot) handleWizardText(ctx context.Context, chatID int64, text s
 	}
 
 	b.wizardClear(chatID)
+	return true
+}
+
+// handleWizardDocument feeds one uploaded file into a chat's active
+// dialog when that dialog is waiting for a slot source (wizSlotSource,
+// started by startSlotSourceWizard) -- lets a user send an AmneziaWG
+// .conf as a file instead of pasting a vpn:// link. Returns false when
+// there's no dialog wanting a document right now, so the caller can
+// reply with a generic hint instead of silently dropping the file.
+func (b *TelegramBot) handleWizardDocument(ctx context.Context, chatID int64, doc *tgDocument) bool {
+	b.wizardMu.Lock()
+	st, ok := b.wizards[chatID]
+	b.wizardMu.Unlock()
+	if !ok || st.step != wizSlotSource {
+		return false
+	}
+
+	data, err := b.downloadFile(ctx, doc.FileID)
+	if err != nil {
+		b.sendMessage(ctx, chatID, fmt.Sprintf("не удалось скачать файл %q: %s", doc.FileName, b.scrubToken(err)))
+		return true // consumed -- wizard stays armed, same as a bad pasted link
+	}
+
+	// A vpn:// link is exactly "vpn://" + base64(.conf text) -- see
+	// ParseAmneziaWGURI's own doc comment -- so a .conf file's raw bytes
+	// reduce to that same shape and can go through wizardSetSlotSource
+	// unchanged, no separate parsing path to keep in sync.
+	src := "vpn://" + base64.RawStdEncoding.EncodeToString(data)
+	b.wizardSetSlotSource(ctx, chatID, st, src)
 	return true
 }
 

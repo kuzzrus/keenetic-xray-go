@@ -23,6 +23,7 @@ type fakeTelegram struct {
 	edits    []sentMessage
 	nextMsg  int
 	updateID int64
+	files    map[string][]byte // file_id -> content, for getFile + download
 }
 
 type sentMessage struct {
@@ -60,6 +61,25 @@ func newFakeTelegram(t *testing.T) (*httptest.Server, *fakeTelegram) {
 	f := &fakeTelegram{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// File downloads live on a differently-shaped path than every
+		// other Bot API call (.../file/bot<token>/<file_path> instead of
+		// .../bot<token>/<method>, see TelegramBot.downloadFile) and
+		// return raw bytes, not JSON -- handled before the JSON-response
+		// switch below.
+		if strings.Contains(r.URL.Path, "/file/bot") {
+			rest := r.URL.Path[strings.Index(r.URL.Path, "/file/bot")+len("/file/bot"):]
+			if i := strings.IndexByte(rest, '/'); i >= 0 {
+				f.mu.Lock()
+				content := f.files[rest[i+1:]]
+				f.mu.Unlock()
+				w.Header().Set("Content-Type", "application/octet-stream")
+				_, _ = w.Write(content)
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/getUpdates"):
@@ -68,6 +88,14 @@ func newFakeTelegram(t *testing.T) (*httptest.Server, *fakeTelegram) {
 			f.updates = nil
 			f.mu.Unlock()
 			_ = json.NewEncoder(w).Encode(tgGetUpdatesResponse{OK: true, Result: pending})
+		case strings.HasSuffix(r.URL.Path, "/getFile"):
+			var body struct {
+				FileID string `json:"file_id"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			// file_path == file_id keeps this fake simple; the download
+			// branch above just looks it back up in f.files.
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{"file_id": body.FileID, "file_path": body.FileID}})
 		case strings.HasSuffix(r.URL.Path, "/sendMessage"):
 			var body struct {
 				ChatID      int64           `json:"chat_id"`
@@ -108,6 +136,31 @@ func (f *fakeTelegram) push(chatID int64, text string) {
 	defer f.mu.Unlock()
 	f.updateID++
 	f.updates = append(f.updates, tgUpdate{UpdateID: f.updateID, Message: &tgMessage{Chat: tgChat{ID: chatID}, Text: text}})
+}
+
+// setFile registers content Telegram should serve for fileID via
+// getFile + download.
+func (f *fakeTelegram) setFile(fileID string, content []byte) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.files == nil {
+		f.files = map[string][]byte{}
+	}
+	f.files[fileID] = content
+}
+
+// pushDocument queues an incoming message carrying a file attachment
+// (no text) -- registers content under fileID first, so the bot's own
+// getFile + download round trip resolves to it.
+func (f *fakeTelegram) pushDocument(chatID int64, fileID, fileName string, content []byte) {
+	f.setFile(fileID, content)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.updateID++
+	f.updates = append(f.updates, tgUpdate{
+		UpdateID: f.updateID,
+		Message:  &tgMessage{Chat: tgChat{ID: chatID}, Document: &tgDocument{FileID: fileID, FileName: fileName}},
+	})
 }
 
 func (f *fakeTelegram) pushCallback(chatID int64, messageID int, data string) {

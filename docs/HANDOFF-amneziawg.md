@@ -13,11 +13,12 @@ repeated.
 `v26.9.9` is CONFIRMED WORKING END TO END on real router hardware, this
 project's own config/URI/bot integration is built and shipped, a `.conf`
 file can be uploaded as a Telegram document (not just pasted as a
-`vpn://` link), the workflow can now promote a confirmed tag's patch to
-the real production release with a one-line config change (see "What's
-actually built" for whether `v26.9.9` itself has actually been dispatched
-yet), and a `v26.3.27` patch exists and builds clean (not yet
-hardware-tested).** Real AmneziaWG handshake, real HTTP/2
+`vpn://` link), and the real production `xray-core/v26.9.9` release now
+carries the patched binary** (promoted for real — any router pulling
+`PrereleaseTag` gets AmneziaWG support automatically now, no manual
+dev-binary swap needed). **A `v26.3.27` patch also exists, builds clean,
+and has a dev/test build published** (`xray-core-awg-dev/v26.3.27`) —
+not yet hardware-tested, not yet promoted. Real AmneziaWG handshake, real HTTP/2
 traffic through the tunnel to a real remote server (`curl` through the
 patched core's SOCKS inbound, `HTTP/2 301` back from Cloudflare, `curl
 exit=0`), plus independent confirmation from the AWG server's own admin
@@ -386,20 +387,19 @@ this our own code" on top of everything else). That gap is now the only
 thing standing between "the patch works" and "a profile can be set up
 the normal way and it works" being fully closed.
 
-**Also done**: `.github/workflows/xray-core.yml` gained an
-`AWG_CONFIRMED_TAGS` workflow-level env var (currently just `v26.9.9`)
-— a tag listed there always gets its patch applied and always publishes
-to the real `xray-core/<tag>`, regardless of `awg_dev`; the "Create or
-reuse the release" step became "Create or update" (`gh release edit`
-when the release already exists) so a promoted tag's title/notes get
-corrected to say so. Promoting `v26.9.9` for real is then just
-dispatching the workflow once (`xray_version=v26.9.9`, `awg_dev` can be
-left `false`) — check this document's own git history / the Actions
-run list for whether that dispatch has actually happened yet before
-assuming the real `xray-core/v26.9.9` release carries the patched
-binary rather than the original vanilla one. `awg_dev` keeps its
-original meaning for any tag NOT in `AWG_CONFIRMED_TAGS` — right now,
-that's `v26.3.27`.
+**Also done, and actually dispatched**: `.github/workflows/xray-core.yml`
+gained an `AWG_CONFIRMED_TAGS` workflow-level env var (currently just
+`v26.9.9`) — a tag listed there always gets its patch applied and always
+publishes to the real `xray-core/<tag>`, regardless of `awg_dev`. **The
+real `xray-core/v26.9.9` release has been promoted for real** (dispatched
+`xray_version=v26.9.9, awg_dev=false` after this landed on `main`) — its
+title/notes now say "AmneziaWG support" and all 8 assets (`arm64`/
+`mipsle` × binary/`.xz`/`.sha256`/`.provenance.txt`) were rebuilt with
+the patch applied. Any router that updates its core via the bot's
+⚙️ Ядро → "Пререлиз" button (which pulls `PrereleaseTag = v26.9.9`) now
+gets the patched binary automatically — no manual dev-binary swap
+needed for this tag anymore. `awg_dev` keeps its original meaning for
+any tag NOT in `AWG_CONFIRMED_TAGS` — right now, that's `v26.3.27`.
 
 **`v26.3.27`'s own patch now exists** —
 `packaging/xray-core/amneziawg-v26.3.27.patch` — derived independently
@@ -421,10 +421,15 @@ already exists as `Send`'s own guard in the very same file, same as at
 v26.9.9). Verified so far: `git apply --check` clean against two
 independent fresh `v26.3.27` clones, and the patched clone cross-compiles
 for both `linux/arm64` and `linux/mipsle` (`CGO_ENABLED=0`) plus builds
-natively and passes `go vet`. **Not yet done for this tag**: a dev/test
-build has not been hardware-tested (dispatch `awg_dev=true,
-xray_version=v26.3.27` to get one, same as the original v26.9.9
-staging round); until that happens, do not add `v26.3.27` to
+natively and passes `go vet`. A dev/test build **has been dispatched and
+published** (`xray_version=v26.3.27, awg_dev=true` →
+`xray-core-awg-dev/v26.3.27`, all 8 assets present) — one gofmt-check bug
+was found and fixed along the way (the "Apply AmneziaWG patch" step's
+post-apply `gofmt -l` had `v26.9.9`'s touched-file list hardcoded; fixed
+to read the list from the patch's own `diff --git` lines instead, see
+git log). **Not yet done for this tag**: real-hardware verification (the
+dev build has never actually been tried against a live AWG server, only
+compiled/cross-compiled) — until that happens, do not add `v26.3.27` to
 `AWG_CONFIRMED_TAGS`.
 
 ## 2026-09-17 real-hardware debugging arc — the actual bug hunt
@@ -551,19 +556,22 @@ actually built"). What's left is verification and one more tag:
 
 1. **Real-hardware test of a bot-configured profile** — the one gap
    called out repeatedly above. Paste a real `vpn://` link (or upload a
-   `.conf`) via 🔗 Источники on a router running a patched core, confirm
-   it actually connects, the same way the raw patch was confirmed
-   working directly. Nothing code-side is expected to need changing for
-   this — `buildAmneziaWGOutbound`'s JSON output is unit-tested against
-   the exact key spellings the patch's `infra/conf/wireguard.go` expects
-   — but it hasn't been run for real yet.
-2. **`v26.3.27`**: dispatch `.github/workflows/xray-core.yml` with
-   `xray_version=v26.3.27, awg_dev=true`, get the dev/test build, repeat
-   the same real-hardware verification the `v26.9.9` arc went through
-   (a packet capture early if anything looks like Round 1-3 of that arc
-   again — see "Lesson for next time" above). Only once that's confirmed:
-   add `v26.3.27` to `AWG_CONFIRMED_TAGS` in the workflow and dispatch
-   again with `awg_dev=false` (or just omit it) to promote it for real.
+   `.conf`) via 🔗 Источники on a router running `xray-core/v26.9.9`
+   (already the patched build, promoted — see "What's actually built"),
+   confirm it actually connects, the same way the raw patch was
+   confirmed working directly. Nothing code-side is expected to need
+   changing for this — `buildAmneziaWGOutbound`'s JSON output is
+   unit-tested against the exact key spellings the patch's
+   `infra/conf/wireguard.go` expects — but it hasn't been run for real
+   yet.
+2. **`v26.3.27`**: the dev/test build already exists
+   (`xray-core-awg-dev/v26.3.27`, dispatched and published — see "What's
+   actually built"). What's left is the same real-hardware verification
+   the `v26.9.9` arc went through (a packet capture early if anything
+   looks like Round 1-3 of that arc again — see "Lesson for next time"
+   above). Only once that's confirmed: add `v26.3.27` to
+   `AWG_CONFIRMED_TAGS` in the workflow and dispatch again with
+   `awg_dev=false` (or just omit it) to promote it for real.
 3. If re-entering Plan Mode for either of these, re-read this document
    plus the current code first — don't assume an old plan-file survived
    (Plan Mode's plan file gets reused for whatever's being planned at the

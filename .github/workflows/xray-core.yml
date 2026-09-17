@@ -60,9 +60,13 @@ jobs:
           - goarch: arm64
             gomips: ""
             upx: "--lzma"
+            cross_cc: aarch64-linux-gnu-gcc
+            cross_pkg: gcc-aarch64-linux-gnu
           - goarch: mipsle
             gomips: softfloat
             upx: "" # NRV, not LZMA: UPX's LZMA path doesn't cover mips ELF
+            cross_cc: ""
+            cross_pkg: ""
     steps:
       - name: Checkout Xray-core ${{ inputs.xray_version }}
         uses: actions/checkout@v4
@@ -102,15 +106,40 @@ jobs:
           bad="$(gofmt -l $touched)"
           if [ -n "$bad" ]; then echo "::error::gofmt found issues in patched files:"; echo "$bad"; exit 1; fi
 
+      # AWG-dev only, and only where a cross-C toolchain is set up
+      # (matrix.cross_cc): CGO_ENABLED=1, using the vendored amneziawg-go
+      # fork (see the "Apply AmneziaWG patch" step) as a diagnostic for
+      # amnezia-vpn/amneziawg-go#110 ("arm64: outbound H4 header corrupted
+      # in transport packets", CGO_ENABLED=0 specifically) -- the
+      # production (non-awg_dev) build always stays plain CGO_ENABLED=0,
+      # unchanged.
+      - name: Install cross-C toolchain (AWG dev CGO diagnostic)
+        if: ${{ inputs.awg_dev && matrix.cross_pkg != '' }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq "${{ matrix.cross_pkg }}"
+
       - name: Build
         working-directory: xray-core
         env:
-          CGO_ENABLED: "0"
+          CGO_ENABLED: ${{ inputs.awg_dev && matrix.cross_cc != '' && '1' || '0' }}
+          CC: ${{ matrix.cross_cc }}
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
           GOMIPS: ${{ matrix.gomips }}
           GOFLAGS: -trimpath
-        run: go build -ldflags "-s -w -buildid=" -o "$RUNNER_TEMP/xray" ./main
+        run: |
+          set -eu
+          ldflags="-s -w -buildid="
+          # A CGO build links dynamically against the cross-toolchain's own
+          # glibc by default -- meaningless on the router's own Entware
+          # libc. Force a fully static link so this stays as portable as
+          # the plain CGO_ENABLED=0 builds (same reason this project uses
+          # CGO_ENABLED=0 everywhere else).
+          if [ "$CGO_ENABLED" = "1" ]; then
+            ldflags="$ldflags -linkmode external -extldflags -static"
+          fi
+          go build -ldflags "$ldflags" -o "$RUNNER_TEMP/xray" ./main
 
       - name: Package
         env:
@@ -118,6 +147,8 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           GOMIPS: ${{ matrix.gomips }}
           UPX_FLAGS: ${{ matrix.upx }}
+          CGO_ENABLED: ${{ inputs.awg_dev && matrix.cross_cc != '' && '1' || '0' }}
+          CROSS_CC: ${{ matrix.cross_cc }}
         run: |
           set -eu
           sudo apt-get update -qq
@@ -146,7 +177,9 @@ jobs:
             echo "Xray-core ${VER}"
             echo "upstream:        https://github.com/XTLS/Xray-core/releases/tag/${VER}"
             echo "commit:          ${commit}"
-            echo "build:           GOOS=linux GOARCH=${GOARCH} GOMIPS=${GOMIPS:-} CGO_ENABLED=0 GOFLAGS=-trimpath"
+            cc_note=""
+            [ "$CGO_ENABLED" = "1" ] && cc_note=" CC=${CROSS_CC} (static)"
+            echo "build:           GOOS=linux GOARCH=${GOARCH} GOMIPS=${GOMIPS:-} CGO_ENABLED=${CGO_ENABLED}${cc_note} GOFLAGS=-trimpath"
             echo "ldflags:         -s -w -buildid="
             echo "go:              go.mod declares ${go_ver}; built with $(go version | awk '{print $3}')"
             echo "pack:            $(upx --version | head -n1) -9 ${UPX_FLAGS}"

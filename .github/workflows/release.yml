@@ -9,7 +9,15 @@ permissions:
   contents: write
 
 jobs:
+  # REL-01: a tag push used to go straight to `release` below with no
+  # test gate at all -- ci.yml only triggers on branch pushes/PRs, never
+  # on tags, so nothing actually stopped an untested commit (or a tag
+  # pushed straight from a local branch) from cutting a public release.
+  test:
+    uses: ./.github/workflows/test.yml
+
   release:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -84,10 +92,21 @@ jobs:
             "dist/keenetic-xray-mipsle_linux_mipsle_softfloat/keenetic-xray" \
             "dist/keenetic-xray_${VERSION}-1_mipsel-3.4.ipk"
 
-      - name: Upload .ipk packages to the release
+      # REL-01: goreleaser's own checksums.txt (downloaded by install.sh's
+      # optional checksum check) is written before the .ipk files even
+      # exist, so it never covered them. Append their sha256 in the same
+      # sha256sum format goreleaser itself uses, then re-upload over
+      # goreleaser's version with --clobber below.
+      - name: Extend checksums.txt with the .ipk files
+        run: |
+          set -eu
+          cd dist
+          sha256sum -- *.ipk >> checksums.txt
+
+      - name: Upload .ipk packages and updated checksums to the release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${GITHUB_REF_NAME}" dist/*.ipk --clobber
+        run: gh release upload "${GITHUB_REF_NAME}" dist/*.ipk dist/checksums.txt --clobber
 
       # goreleaser has changelog disabled and runs in append mode, so the
       # release body it creates is empty. Fill it from the squash-merge
@@ -118,3 +137,12 @@ jobs:
             echo "_Установка/обновление: \`keenetic-xray_*_<arch>.ipk\` (UPX-упакован). Отдельные \`keenetic-xray-linux-<arch>\` — распакованные бинари на случай отката._"
           } > "${RUNNER_TEMP}/notes.md"
           gh release edit "$TAG" --notes-file "${RUNNER_TEMP}/notes.md"
+
+      # REL-01: the release stays a draft (.goreleaser.yaml's `release:
+      # draft: true`) -- invisible on the releases page and to the
+      # releases/latest API install.sh queries -- until every step above
+      # has actually succeeded. This must stay the last step.
+      - name: Publish the release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${GITHUB_REF_NAME}" --draft=false

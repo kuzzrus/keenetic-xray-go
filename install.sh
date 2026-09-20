@@ -128,7 +128,8 @@ echo "keenetic-xray: detected architecture $ARCH"
 # hardcoding a version number here -- a static URL would go stale the
 # moment a new release ships, since asset filenames embed the version.
 API_URL="https://api.github.com/repos/${REPO}/releases/latest"
-ASSET_URL="$(fetch "$API_URL" \
+RELEASE_JSON="$(fetch "$API_URL")"
+ASSET_URL="$(printf '%s\n' "$RELEASE_JSON" \
     | grep -o "\"browser_download_url\": *\"[^\"]*_${ARCH}\.ipk\"" \
     | sed -e 's/.*"\(https[^"]*\)"/\1/' \
     | head -n 1)"
@@ -139,4 +140,38 @@ fi
 
 echo "keenetic-xray: downloading $ASSET_URL"
 fetch "$ASSET_URL" "$TMP_IPK"
+
+# REL-01: best-effort checksum verification against the release's own
+# checksums.txt (release.yml extends goreleaser's checksums.txt with each
+# .ipk's sha256 once it's built). Skipped quietly, not a hard failure,
+# when this router's busybox build lacks sha256sum -- same "don't
+# require a specific tool" reasoning as fetch()'s own curl/wget fallback
+# above. Every other on-router checksum check in this project
+# (internal/xraycore, internal/naivecore, internal/susanincore) hashes
+# inside the Go binary instead of shelling out, precisely because this
+# script runs before that binary even exists on the router -- there's no
+# equivalent to fall back on here.
+if command -v sha256sum >/dev/null 2>&1; then
+    CHECKSUMS_URL="$(printf '%s\n' "$RELEASE_JSON" \
+        | grep -o '"browser_download_url": *"[^"]*checksums\.txt"' \
+        | sed -e 's/.*"\(https[^"]*\)"/\1/' \
+        | head -n 1)"
+    ASSET_NAME="$(basename "$ASSET_URL")"
+    WANT_SUM=""
+    if [ -n "$CHECKSUMS_URL" ]; then
+        WANT_SUM="$(fetch "$CHECKSUMS_URL" | grep "  ${ASSET_NAME}\$" | awk '{print $1}' | head -n 1)"
+    fi
+    if [ -n "$WANT_SUM" ]; then
+        GOT_SUM="$(sha256sum "$TMP_IPK" | awk '{print $1}')"
+        if [ "$GOT_SUM" != "$WANT_SUM" ]; then
+            echo "keenetic-xray: checksum mismatch for $ASSET_URL: got $GOT_SUM, want $WANT_SUM -- refusing to install" >&2
+            exit 1
+        fi
+    else
+        echo "keenetic-xray: no checksum for ${ASSET_NAME} in the latest release -- installing unverified" >&2
+    fi
+else
+    echo "keenetic-xray: sha256sum not found -- installing without checksum verification" >&2
+fi
+
 opkg install "$TMP_IPK"

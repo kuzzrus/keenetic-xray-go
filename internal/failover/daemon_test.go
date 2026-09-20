@@ -704,6 +704,21 @@ func TestDaemon_ReloadConfig_SingleProfile_NoBackup(t *testing.T) {
 	}
 }
 
+// rotateBackupCandidate calls realActions.RotateBackupCandidate on the
+// Run goroutine via d.do(), the same serialization ForceSwitch/Snapshot/
+// ReloadConfig themselves use. Calling it directly from a test's own
+// goroutine while Run is concurrently active is a real data race against
+// Run's own startup-time SwitchLiveTo (and any live Tick) -- caught by
+// -race in CI even though it never flakes locally without -race.
+func rotateBackupCandidate(t *testing.T, ctx context.Context, d *Daemon) bool {
+	t.Helper()
+	var got bool
+	if !d.do(ctx, func(context.Context) { got = d.actions.RotateBackupCandidate() }) {
+		t.Fatal("d.do: Run is not active")
+	}
+	return got
+}
+
 // poolProfile is a minimal valid plain-VLESS profile for the backup-pool
 // rotation tests below -- same shape as the literals already used
 // throughout this file (e.g. TestDaemon_ReloadConfig), just factored out
@@ -804,7 +819,7 @@ func TestDaemon_ForceSwitch_ToBackup_ClearsStaleOverride(t *testing.T) {
 
 	// Simulate an in-progress "both slots down" episode having already
 	// substituted backup2 in for the configured backup1.
-	if !d.actions.RotateBackupCandidate() {
+	if !rotateBackupCandidate(t, ctx, d) {
 		t.Fatal("RotateBackupCandidate() = false, want backup2 to be available")
 	}
 	if d.actions.backupOverride == nil || d.actions.backupOverride.Remark != "backup2" {
@@ -861,7 +876,7 @@ func TestDaemon_ReloadConfig_ClearsStaleOverride(t *testing.T) {
 	runErr := make(chan error, 1)
 	go func() { runErr <- d.Run(ctx) }()
 
-	if !d.actions.RotateBackupCandidate() {
+	if !rotateBackupCandidate(t, ctx, d) {
 		t.Fatal("RotateBackupCandidate() = false, want backup2 to be available")
 	}
 
@@ -920,7 +935,7 @@ func TestDaemon_OnBackupRotate_EmitsEvent(t *testing.T) {
 
 	// backup1 is the only candidate besides primary -- this call exhausts
 	// the pool immediately, exercising the to==nil branch of noteBackupRotate.
-	if got := d.actions.RotateBackupCandidate(); got {
+	if got := rotateBackupCandidate(t, ctx, d); got {
 		t.Fatalf("RotateBackupCandidate() = true, want false (only primary+backup1 configured, nothing else to rotate to)")
 	}
 	select {

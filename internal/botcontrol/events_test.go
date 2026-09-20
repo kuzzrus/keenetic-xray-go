@@ -133,6 +133,19 @@ func TestRenderFailoverEvent_XrayCrashLoop(t *testing.T) {
 	}
 }
 
+func TestRenderFailoverEvent_BackupRotated(t *testing.T) {
+	var leftPrimaryAt time.Time
+	ev, fwd := renderFailoverEvent(failover.Event{
+		Kind: failover.EventBackupRotated, At: time.Now(), Detail: "backup1 недоступен, пробую backup2 из пула подписки",
+	}, &leftPrimaryAt)
+	if !fwd || ev.Kind != "backup_rotated" {
+		t.Fatalf("render = %+v, fwd=%v", ev, fwd)
+	}
+	if !strings.Contains(ev.Text, "backup1") || !strings.Contains(ev.Text, "backup2") {
+		t.Errorf("text = %q, want it to carry the detail verbatim", ev.Text)
+	}
+}
+
 func TestFailoverEvents_RendersAndCloses(t *testing.T) {
 	in := make(chan failover.Event, 4)
 	ctx, cancel := context.WithCancel(context.Background())

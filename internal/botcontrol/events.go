@@ -195,6 +195,9 @@ func renderFailoverEvent(fe failover.Event, leftPrimaryAt *time.Time) (Event, bo
 		return Event{Kind: "xray_crashloop", Time: fe.At, Text: "⚠️ xray падает и перезапускается (" +
 			fe.Detail + ") — глянь /logs и профиль (адрес/ключи/транспорт)"}, true
 	}
+	if fe.Kind == failover.EventBackupRotated {
+		return Event{Kind: "backup_rotated", Time: fe.At, Text: "🔁 " + fe.Detail}, true
+	}
 	if fe.Kind != failover.EventFailover {
 		return Event{Kind: "unknown", Text: fe.From.String() + " → " + fe.To.String(), Time: fe.At}, true
 	}

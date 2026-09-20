@@ -704,6 +704,245 @@ func TestDaemon_ReloadConfig_SingleProfile_NoBackup(t *testing.T) {
 	}
 }
 
+// poolProfile is a minimal valid plain-VLESS profile for the backup-pool
+// rotation tests below -- same shape as the literals already used
+// throughout this file (e.g. TestDaemon_ReloadConfig), just factored out
+// since these tests need more than two.
+func poolProfile(uuid, remark string) config.Profile {
+	return config.Profile{
+		UUID: uuid, Address: remark + ".invalid", Port: 443,
+		Network: "tcp", Security: "none", Encryption: "none", Remark: remark,
+	}
+}
+
+// TestRealActions_RotateBackupCandidate_PicksUntriedPoolProfiles is a
+// pure-logic test of the ephemeral pool fallback (see realActions' own
+// doc comment on backupOverride) -- no xray process involved, just
+// newRealActions + cfg.Profiles.
+func TestRealActions_RotateBackupCandidate_PicksUntriedPoolProfiles(t *testing.T) {
+	cfg := config.Default()
+	cfg.Profiles = []config.Profile{
+		poolProfile("p", "primary"),
+		poolProfile("b1", "backup1"),
+		poolProfile("b2", "backup2"),
+		poolProfile("b3", "backup3"),
+	}
+	cfg.PrimaryIndex, cfg.BackupIndex = 0, 1
+	a := newRealActions(Paths{}, cfg)
+
+	seen := map[string]bool{}
+	for i := 0; i < 2; i++ {
+		if !a.RotateBackupCandidate() {
+			t.Fatalf("round %d: RotateBackupCandidate() = false, want a candidate still available", i)
+		}
+		if a.backupOverride == nil {
+			t.Fatalf("round %d: backupOverride is nil after a successful rotation", i)
+		}
+		key := a.backupOverride.ImportKey()
+		if key == cfg.Profiles[0].ImportKey() {
+			t.Fatalf("round %d: rotated onto primary itself", i)
+		}
+		if seen[key] {
+			t.Fatalf("round %d: rotated onto %q again, already tried this episode", i, a.backupOverride.Remark)
+		}
+		seen[key] = true
+	}
+	// Both non-primary, non-configured-backup candidates (backup2,
+	// backup3) have now been tried; only the pool of 4 total is
+	// exhausted after also having started from backup1 (configured, thus
+	// marked tried on the first rotation).
+	if a.RotateBackupCandidate() {
+		t.Fatalf("3rd rotation should have exhausted the pool (primary + backup1 + backup2 + backup3, 3 of which are eligible), got a candidate: %+v", a.backupOverride)
+	}
+}
+
+// TestRealActions_CurrentBackup_FallsBackToConfigured checks the read
+// side: with no override active, currentBackup must return the
+// genuinely configured backup, not nil or a stale value.
+func TestRealActions_CurrentBackup_FallsBackToConfigured(t *testing.T) {
+	cfg := config.Default()
+	cfg.Profiles = []config.Profile{poolProfile("p", "primary"), poolProfile("b1", "backup1"), poolProfile("b2", "backup2")}
+	cfg.PrimaryIndex, cfg.BackupIndex = 0, 1
+	a := newRealActions(Paths{}, cfg)
+
+	if got := a.currentBackup(); got == nil || got.Remark != "backup1" {
+		t.Fatalf("currentBackup() = %+v, want the configured backup1", got)
+	}
+	a.RotateBackupCandidate()
+	if got := a.currentBackup(); got == nil || got.Remark == "backup1" {
+		t.Fatalf("currentBackup() after a rotation = %+v, want the override, not the stale configured backup", got)
+	}
+}
+
+// TestDaemon_ForceSwitch_ToBackup_ClearsStaleOverride: an explicit
+// operator "run on backup now" must always mean the actually-configured
+// backup, never a leftover pool substitute from an earlier automatic
+// "both slots down" episode the operator doesn't know about.
+func TestDaemon_ForceSwitch_ToBackup_ClearsStaleOverride(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.Profiles = []config.Profile{
+		poolProfile("p", "primary"),
+		poolProfile("b1", "backup1"),
+		poolProfile("b2", "backup2"),
+	}
+	cfg.PrimaryIndex, cfg.BackupIndex = 0, 1
+	cfg.Failover.CheckIntervalSeconds = 60
+	cfg.Failover.FailuresRequired = 1 << 30
+
+	paths := Paths{
+		XrayBinary:       os.Args[0],
+		ProductionConfig: filepath.Join(dir, "production.json"),
+		PretestConfig:    filepath.Join(dir, "pretest.json"),
+		Env:              []string{"FAILOVER_TEST_HELPER=1"},
+	}
+	d := NewDaemon(paths, cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runErr := make(chan error, 1)
+	go func() { runErr <- d.Run(ctx) }()
+
+	// Simulate an in-progress "both slots down" episode having already
+	// substituted backup2 in for the configured backup1.
+	if !d.actions.RotateBackupCandidate() {
+		t.Fatal("RotateBackupCandidate() = false, want backup2 to be available")
+	}
+	if d.actions.backupOverride == nil || d.actions.backupOverride.Remark != "backup2" {
+		t.Fatalf("backupOverride = %+v, want backup2", d.actions.backupOverride)
+	}
+
+	if err := d.ForceSwitch(ctx, RoleBackup); err != nil {
+		t.Fatalf("ForceSwitch(backup): %v", err)
+	}
+	if d.actions.backupOverride != nil {
+		t.Errorf("backupOverride = %+v after an explicit ForceSwitch(backup), want nil", d.actions.backupOverride)
+	}
+	data, err := os.ReadFile(paths.ProductionConfig)
+	if err != nil {
+		t.Fatalf("reading production config: %v", err)
+	}
+	if !strings.Contains(string(data), "backup1.invalid") {
+		t.Errorf("production config = %s, want the actually-configured backup1, not the stale backup2 override", data)
+	}
+
+	cancel()
+	select {
+	case <-runErr:
+	case <-time.After(20 * time.Second):
+		t.Fatal("Run did not return after ctx cancellation")
+	}
+}
+
+// TestDaemon_ReloadConfig_ClearsStaleOverride: a fresh config (the
+// operator just repointed backup via 🔗 Источники/sub_set*) must win
+// immediately over an ephemeral pool substitute a prior automatic
+// episode happened to land on.
+func TestDaemon_ReloadConfig_ClearsStaleOverride(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.Profiles = []config.Profile{
+		poolProfile("p", "primary"),
+		poolProfile("b1", "backup1"),
+		poolProfile("b2", "backup2"),
+	}
+	cfg.PrimaryIndex, cfg.BackupIndex = 0, 1
+	cfg.Failover.CheckIntervalSeconds = 60
+	cfg.Failover.FailuresRequired = 1 << 30
+
+	paths := Paths{
+		XrayBinary:       os.Args[0],
+		ProductionConfig: filepath.Join(dir, "production.json"),
+		PretestConfig:    filepath.Join(dir, "pretest.json"),
+		Env:              []string{"FAILOVER_TEST_HELPER=1"},
+	}
+	d := NewDaemon(paths, cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runErr := make(chan error, 1)
+	go func() { runErr <- d.Run(ctx) }()
+
+	if !d.actions.RotateBackupCandidate() {
+		t.Fatal("RotateBackupCandidate() = false, want backup2 to be available")
+	}
+
+	fresh := config.Default()
+	fresh.Profiles = []config.Profile{cfg.Profiles[0], poolProfile("b3", "backup3")}
+	fresh.PrimaryIndex, fresh.BackupIndex = 0, 1
+	fresh.Failover = cfg.Failover
+
+	if !d.ReloadConfig(ctx, fresh) {
+		t.Fatal("ReloadConfig reported the daemon not running")
+	}
+	if d.actions.backupOverride != nil {
+		t.Errorf("backupOverride = %+v after ReloadConfig, want nil", d.actions.backupOverride)
+	}
+
+	cancel()
+	select {
+	case <-runErr:
+	case <-time.After(20 * time.Second):
+		t.Fatal("Run did not return after ctx cancellation")
+	}
+}
+
+// TestDaemon_OnBackupRotate_EmitsEvent checks the chat-facing side:
+// RotateBackupCandidate succeeding (or exhausting the pool) must reach
+// Daemon.Events() as EventBackupRotated, the same wiring path
+// noteXrayCrash/recordTransition already use.
+func TestDaemon_OnBackupRotate_EmitsEvent(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.Profiles = []config.Profile{poolProfile("p", "primary"), poolProfile("b1", "backup1")}
+	cfg.PrimaryIndex, cfg.BackupIndex = 0, 1
+	cfg.Failover.CheckIntervalSeconds = 60
+	cfg.Failover.FailuresRequired = 1 << 30
+
+	paths := Paths{
+		XrayBinary:       os.Args[0],
+		ProductionConfig: filepath.Join(dir, "production.json"),
+		PretestConfig:    filepath.Join(dir, "pretest.json"),
+		Env:              []string{"FAILOVER_TEST_HELPER=1"},
+	}
+	d := NewDaemon(paths, cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runErr := make(chan error, 1)
+	go func() { runErr <- d.Run(ctx) }()
+
+	select {
+	case ev := <-d.Events():
+		if ev.Kind != EventDaemonStart {
+			t.Fatalf("first event Kind = %v, want EventDaemonStart", ev.Kind)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no EventDaemonStart emitted")
+	}
+
+	// backup1 is the only candidate besides primary -- this call exhausts
+	// the pool immediately, exercising the to==nil branch of noteBackupRotate.
+	if got := d.actions.RotateBackupCandidate(); got {
+		t.Fatalf("RotateBackupCandidate() = true, want false (only primary+backup1 configured, nothing else to rotate to)")
+	}
+	select {
+	case ev := <-d.Events():
+		if ev.Kind != EventBackupRotated {
+			t.Errorf("event Kind = %v, want EventBackupRotated", ev.Kind)
+		}
+		if !strings.Contains(ev.Detail, "backup1") {
+			t.Errorf("event Detail = %q, want it to name backup1", ev.Detail)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no EventBackupRotated emitted after an exhausted rotation")
+	}
+
+	cancel()
+	select {
+	case <-runErr:
+	case <-time.After(20 * time.Second):
+		t.Fatal("Run did not return after ctx cancellation")
+	}
+}
+
 func TestDaemon_Snapshot(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()

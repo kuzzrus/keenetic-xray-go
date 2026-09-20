@@ -43,10 +43,18 @@ func startQualitySweep(ctx context.Context, cfg *config.Config, logf func(string
 	}
 	every := time.Duration(cfg.Failover.QualitySweepMinutes) * time.Minute
 	logf("quality sweep: включён, интервал %s, порт %d", every, port)
+	// startupProfiles is captured here, synchronously, rather than closed
+	// over as cfg.Profiles inside the goroutine below: cfg is the same
+	// *config.Config the daemon and (when enabled) the bot handler hold,
+	// and reading cfg.Profiles from this goroutine on every config.Load
+	// failure would race a concurrent bot-triggered mutation or
+	// Daemon.ReloadConfig (CFG-01). A startup snapshot is fine here --
+	// this only ever backs the rare "couldn't reload from disk" fallback.
+	startupProfiles := cfg.Profiles
 	go sw.Run(ctx, func() []config.Profile {
 		fresh, err := config.Load(configPath())
 		if err != nil {
-			return cfg.Profiles
+			return startupProfiles
 		}
 		return fresh.Profiles
 	}, every)

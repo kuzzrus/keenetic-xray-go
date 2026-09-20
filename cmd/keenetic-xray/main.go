@@ -171,28 +171,14 @@ func cmdDaemon(args []string) error {
 	}
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
-	go func() {
-		for range hup {
-			fresh, err := config.Load(configPath())
-			if err != nil {
-				fmt.Fprintln(os.Stderr, "reload: loading config:", err)
-				continue
-			}
-			// Pick up an rci enable/disable done via the CLI without a restart.
-			if fresh.RCI.Enabled {
-				if _, e := keenetic.UseRCI(fresh.RCI.BaseURL()); e != nil {
-					fmt.Fprintln(os.Stderr, "reload: rci:", e)
-				}
-			} else {
-				_, _ = keenetic.UseRCI("")
-			}
-			if d.ReloadConfig(ctx, fresh) {
-				fmt.Println("reload: applied")
-			} else {
-				fmt.Fprintln(os.Stderr, "reload: daemon not ready yet")
-			}
-		}
-	}()
+	// handler is assigned further below, inside the `if cfg.Agent.Enabled`
+	// block -- the goroutine that consumes hup is only started after that
+	// block closes (CFG-01: closing over handler from here would be an
+	// unsynchronized read of a variable another goroutine is still
+	// initializing, the same bug class this reload path exists to avoid).
+	// signal.Notify is registered here regardless, so an early SIGHUP
+	// isn't lost -- the channel is buffered.
+	var handler *botcontrol.RouterHandler
 
 	if p, b := cfg.Primary(), cfg.Backup(); p != nil && b != nil {
 		fmt.Printf("starting failover daemon (primary=%s, backup=%s)\n", p.Remark, b.Remark)
@@ -284,8 +270,18 @@ func cmdDaemon(args []string) error {
 			presetDrift,
 			selfUpdateFail,
 		)
-		handler := &botcontrol.RouterHandler{
-			Daemon: d, Config: cfg, ConfigPath: configPath(),
+		// CFG-01: RouterHandler gets its own independently-loaded config,
+		// never the same *config.Config pointer as the daemon's cfg above
+		// -- see RouterHandler.Config's own doc comment for why sharing
+		// it was a real data race (this handler's command dispatch runs
+		// on its own goroutine, unsynchronized with the daemon's Run
+		// goroutine).
+		botCfg, err := config.Load(configPath())
+		if err != nil {
+			return fmt.Errorf("agent is enabled but config could not be loaded a second time: %w", err)
+		}
+		handler = &botcontrol.RouterHandler{
+			Daemon: d, Config: botCfg, ConfigPath: configPath(),
 			XrayBinary: xrayBinaryPath(), OptPath: optPath(),
 			InitScript:             initScript,
 			CronFile:               cronFilePath(),
@@ -311,6 +307,45 @@ func cmdDaemon(args []string) error {
 		}()
 		fmt.Println("bot-control agent enabled, polling", opts.ControlServerURL)
 	}
+
+	go func() {
+		for range hup {
+			fresh, err := config.Load(configPath())
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "reload: loading config:", err)
+				continue
+			}
+			// Pick up an rci enable/disable done via the CLI without a restart.
+			if fresh.RCI.Enabled {
+				if _, e := keenetic.UseRCI(fresh.RCI.BaseURL()); e != nil {
+					fmt.Fprintln(os.Stderr, "reload: rci:", e)
+				}
+			} else {
+				_, _ = keenetic.UseRCI("")
+			}
+			if d.ReloadConfig(ctx, fresh) {
+				fmt.Println("reload: applied")
+			} else {
+				fmt.Fprintln(os.Stderr, "reload: daemon not ready yet")
+			}
+			// CFG-01: hand the bot handler its own independent copy of
+			// this same reload -- deliberately a second config.Load, not
+			// fresh itself (ReloadConfig's *d.cfg = *fresh is a shallow
+			// copy; reusing fresh here would leave d.cfg and the bot's
+			// adopted copy sharing sub-object memory, e.g. the same
+			// Profiles backing array). Unconditional regardless of
+			// whether ReloadConfig above found the daemon ready: the
+			// bot's own view should track disk state on its own
+			// schedule, not the daemon's.
+			if handler != nil {
+				if botFresh, err := config.Load(configPath()); err == nil {
+					handler.ConfigReload.Store(botFresh)
+				} else {
+					fmt.Fprintln(os.Stderr, "reload: loading config for agent:", err)
+				}
+			}
+		}
+	}()
 
 	if err := d.Run(ctx); err != nil && ctx.Err() == nil {
 		return err

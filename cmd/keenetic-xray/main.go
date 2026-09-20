@@ -271,7 +271,7 @@ func cmdDaemon(args []string) error {
 			return fmt.Errorf("agent is enabled but misconfigured: %w", err)
 		}
 		postUpd := make(chan botcontrol.Event, 1)
-		go watchPostUpdate(ctx, d.State, selfUpdateMarkerPath(), postUpd, logf)
+		go watchPostUpdate(ctx, d.State, postUpdateProbe(cfg), selfUpdateMarkerPath(), postUpd, logf)
 		autoRollback := make(chan botcontrol.Event, 1)
 		go watchAutoRollbackNotice(ctx, autoRollback)
 		selfUpdateFail := make(chan botcontrol.Event, 1)

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1296,6 +1297,39 @@ func TestRouterHandler_SetPorts_RejectsOutOfRange(t *testing.T) {
 		if _, err := h.Handle(context.Background(), Command{Action: ActionSetPorts, Args: []string{c[0], c[1]}}); err == nil {
 			t.Errorf("socks=%q: expected an error", c[0])
 		}
+	}
+}
+
+// TestRouterHandler_SetPorts_RejectsConflictWithNaiveSidecar is the
+// end-to-end regression test for CFG-02: setPorts used to only check
+// the 1-65535 range and SOCKS != HTTP, with no idea a chosen port could
+// land on one of this project's own other fixed listeners (here, the
+// naive production sidecar at the default pretest_port+2 = 11082).
+func TestRouterHandler_SetPorts_RejectsConflictWithNaiveSidecar(t *testing.T) {
+	cfg := config.Default()
+	h := &RouterHandler{Config: cfg, ConfigPath: filepath.Join(t.TempDir(), "c.json")}
+	naiveSidecarPort := strconv.Itoa(cfg.Failover.PretestPort + 2)
+	if _, err := h.Handle(context.Background(), Command{Action: ActionSetPorts, Args: []string{"1090", naiveSidecarPort}}); err == nil {
+		t.Errorf("expected an error for http_port=%s colliding with the naive production sidecar", naiveSidecarPort)
+	}
+}
+
+// TestRouterHandler_SetPorts_RollsBackConfigOnRejection makes sure a
+// rejected change doesn't leave h.Config -- the same shared pointer the
+// running daemon reads (CFG-01) -- holding the rejected values in memory
+// just because they were assigned before Save's own validation ran.
+func TestRouterHandler_SetPorts_RollsBackConfigOnRejection(t *testing.T) {
+	cfg := config.Default()
+	origSOCKS, origHTTP := cfg.Failover.SOCKSPort, cfg.Failover.HTTPPort
+	h := &RouterHandler{Config: cfg, ConfigPath: filepath.Join(t.TempDir(), "c.json")}
+
+	naiveSidecarPort := strconv.Itoa(cfg.Failover.PretestPort + 2)
+	if _, err := h.Handle(context.Background(), Command{Action: ActionSetPorts, Args: []string{"1090", naiveSidecarPort}}); err == nil {
+		t.Fatal("expected the conflicting port change to be rejected")
+	}
+	if cfg.Failover.SOCKSPort != origSOCKS || cfg.Failover.HTTPPort != origHTTP {
+		t.Errorf("Config after a rejected change = %d/%d, want the original %d/%d restored",
+			cfg.Failover.SOCKSPort, cfg.Failover.HTTPPort, origSOCKS, origHTTP)
 	}
 }
 

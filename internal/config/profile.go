@@ -1250,6 +1250,63 @@ func (c *Config) Validate() error {
 	if err := c.DNS.validate(); err != nil {
 		return err
 	}
+	if err := c.validatePorts(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validatePorts checks the production SOCKS/HTTP ports against range and
+// against every other fixed TCP port this project derives from the same
+// config -- CFG-02: setPorts (the bot handler) used to only check the
+// 1-65535 range and that SOCKS != HTTP, with no idea that e.g. the naive
+// sidecars or the adaptive-routing inbound could land on the exact same
+// port (a real, reachable collision: HTTP=11082 against a naive
+// production sidecar at the default pretest_port=11080). Living in
+// Validate() rather than only in setPorts means every writer --
+// setup/setup_edit's own prompts, the bot, any future one -- gets this
+// for free through Save(), rather than each needing to remember to call
+// a separate check.
+//
+// WGTransport's port is deliberately excluded: it's UDP-only, and a UDP
+// port can't actually collide with a TCP SOCKS/HTTP listener at the OS
+// level -- flagging that pair would be a false positive.
+func (c *Config) validatePorts() error {
+	for name, v := range map[string]int{
+		"failover.socks_port":   c.Failover.SOCKSPort,
+		"failover.http_port":    c.Failover.HTTPPort,
+		"failover.pretest_port": c.Failover.PretestPort,
+	} {
+		if v < 1 || v > 65535 {
+			return fmt.Errorf("%s %d out of range (1-65535)", name, v)
+		}
+	}
+	if c.Failover.SOCKSPort == c.Failover.HTTPPort {
+		return fmt.Errorf("failover.socks_port and failover.http_port must differ (both %d)", c.Failover.SOCKSPort)
+	}
+
+	type namedPort struct {
+		port int
+		name string
+	}
+	reserved := []namedPort{
+		{c.Failover.PretestPort, "pretest"},
+		{c.Failover.PretestPort + 2, "naive production sidecar"},
+		{c.Failover.PretestPort + 3, "naive pretest sidecar"},
+	}
+	if c.AdaptiveRoute.Enabled {
+		reserved = append(reserved, namedPort{c.AdaptiveRoute.EffectivePort(), "adaptive routing"})
+	}
+	for _, candidate := range []namedPort{
+		{c.Failover.SOCKSPort, "failover.socks_port"},
+		{c.Failover.HTTPPort, "failover.http_port"},
+	} {
+		for _, r := range reserved {
+			if candidate.port == r.port {
+				return fmt.Errorf("%s=%d conflicts with this project's own %s port", candidate.name, candidate.port, r.name)
+			}
+		}
+	}
 	return nil
 }
 

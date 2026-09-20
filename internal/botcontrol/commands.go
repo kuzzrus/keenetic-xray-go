@@ -1099,9 +1099,18 @@ func (h *RouterHandler) setPorts(ctx context.Context, args []string) (string, er
 		return "", fmt.Errorf("SOCKS и HTTP порты должны различаться")
 	}
 
+	prevSOCKS, prevHTTP := h.Config.Failover.SOCKSPort, h.Config.Failover.HTTPPort
 	h.Config.Failover.SOCKSPort = socksPort
 	h.Config.Failover.HTTPPort = httpPort
+	// Roll back on a Save failure -- most commonly now Config.Validate's
+	// own port-conflict check (CFG-02: e.g. HTTP landing on the naive
+	// sidecar's port), not just a disk error. h.Config is the same
+	// shared pointer the running daemon reads (CFG-01), so leaving the
+	// rejected values in memory here -- even though they were never
+	// written to disk -- could still leak into what the daemon actually
+	// uses next.
 	if err := h.Config.Save(h.ConfigPath); err != nil {
+		h.Config.Failover.SOCKSPort, h.Config.Failover.HTTPPort = prevSOCKS, prevHTTP
 		return "", err
 	}
 	h.rebindXray(ctx)

@@ -70,8 +70,20 @@ checksum:
 
 # release-please/a human pushing a v* tag owns creating the tag/release;
 # goreleaser only attaches build artifacts to it.
+#
+# REL-01: draft, not published, until release.yml's own later steps
+# (UPX-pack, .ipk build, checksums.txt extension) all succeed and
+# explicitly undraft it as the very last step. Before this, goreleaser's
+# `release --clean` published the release immediately -- a failure in any
+# of those later steps left a public release missing its .ipk assets
+# (the only thing install.sh actually looks for) with no automatic way
+# back short of a human noticing and fixing it. A draft is invisible to
+# the GitHub releases page and to the `releases/latest` API install.sh
+# queries, so an incomplete run just leaves the previous release as
+# "latest" instead.
 release:
   mode: append
+  draft: true
 
 changelog:
   disable: true

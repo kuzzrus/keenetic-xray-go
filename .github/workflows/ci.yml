@@ -7,48 +7,7 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.24.x'
-
-      - name: gofmt
-        run: |
-          fmt_out="$(gofmt -l .)"
-          if [ -n "$fmt_out" ]; then
-            echo "gofmt needs to be run on:"
-            echo "$fmt_out"
-            exit 1
-          fi
-
-      - name: go vet
-        run: go vet ./...
-
-      - name: staticcheck
-        run: |
-          go install honnef.co/go/tools/cmd/staticcheck@2025.1.1
-          staticcheck ./...
-
-      - name: go test
-        run: go test -race ./...
-
-      - name: shellcheck
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y shellcheck
-          shellcheck -s sh -S warning \
-            install.sh \
-            server-install.sh \
-            packaging/build-ipk.sh \
-            packaging/ipk/postinst \
-            packaging/ipk/prerm \
-            packaging/init.d/S99keenetic-xray \
-            packaging/ndm/netfilter.d/50-keenetic-xray.sh \
-            packaging/ndm/ifipchanged.d/50-keenetic-xray.sh \
-            packaging/ndm/ifstatechanged.d/50-keenetic-xray.sh \
-            packaging/server/control-server-self-update.sh
+    uses: ./.github/workflows/test.yml
 
   build:
     needs: test

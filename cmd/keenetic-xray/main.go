@@ -295,6 +295,8 @@ func cmdDaemon(args []string) error {
 			Logf:                   logf,
 			QualityStatePath:       qualityStatePath(),
 			SelfUpdateMarker:       selfUpdateMarkerPath(),
+			SelfUpdateLog:          selfUpdateLogPath(),
+			SelfUpdateLock:         selfUpdateLockPath(),
 			SelfUpdateEvents:       selfUpdateFail,
 			AdaptiveRouteStatePath: adaptiveRouteStatePath(),
 		}

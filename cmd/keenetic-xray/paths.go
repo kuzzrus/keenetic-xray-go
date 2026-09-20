@@ -124,6 +124,28 @@ func logDir() string {
 	return envOr("KEENETIC_XRAY_LOG_DIR", defaultLogDir)
 }
 
+// selfUpdateLogPath is where selfUpdate's detached install.sh run writes
+// its stdout/stderr -- a real file, not the in-process bytes.Buffer pipe
+// this replaced (see the change's own commit message for why that pipe
+// was the actual cause of "the update button kills everything": prerm
+// stops the agent mid-update, which closes the pipe's read end held by a
+// goroutine in that exact process, SIGPIPE-killing whichever part of the
+// install chain writes next). A real file's fd stays valid regardless of
+// whether this process is still alive to read it.
+func selfUpdateLogPath() string {
+	return envOr("KEENETIC_XRAY_SELFUPDATE_LOG", logDir()+"/self-update.log")
+}
+
+// selfUpdateLockPath's mtime marks a self-update as in progress -- see
+// selfUpdate's own doc comment. Freshness (not existence) is what
+// matters: a lock left over from a run that never got to clean up after
+// itself (the detached chain crashing outright, a full power loss) ages
+// out on its own after selfUpdateOverallTimeout instead of wedging every
+// future update attempt.
+func selfUpdateLockPath() string {
+	return envOr("KEENETIC_XRAY_SELFUPDATE_LOCK", logDir()+"/self-update.lock")
+}
+
 // watchdogLogPath is where the watchdog cron entry appends a line each
 // time it actually restarts the daemon (not on every routine check) --
 // see install.SetWatchdogCron. Under logDir so `menu`'s existing log

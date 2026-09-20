@@ -1388,6 +1388,142 @@ func TestRouterHandler_SelfUpdate_LogsFailure(t *testing.T) {
 	}
 }
 
+// TestRouterHandler_SelfUpdate_WritesRealLogFile is the regression test
+// for the actual root cause behind "жмёшь Обновить агент и всё умирает"
+// (2026-09-20 audit): the detached run's stdout/stderr used to go to an
+// in-process bytes.Buffer, which needs a pipe + a copy goroutine *in this
+// process* -- once packaging/ipk/prerm kills this exact process mid-update
+// (it's the same "keenetic-xray daemon" prerm stops), that pipe's read
+// end closes and the next write anywhere in the chain gets SIGPIPE,
+// aborting the update before postinst ever restarts the daemon. A real
+// file's fd stays valid regardless of this process's fate. This test
+// checks the file actually receives the child's output, not just that
+// the field plumbing compiles.
+func TestRouterHandler_SelfUpdate_WritesRealLogFile(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh on PATH to exercise the update spawn")
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "echo SELFUPDATE_TEST_MARKER\n")
+	}))
+	t.Cleanup(srv.Close)
+
+	logPath := filepath.Join(t.TempDir(), "self-update.log")
+	logged := make(chan string, 1)
+	h := &RouterHandler{
+		Config:        config.Default(),
+		InstallURL:    srv.URL,
+		SelfUpdateLog: logPath,
+		Logf:          func(format string, a ...any) { logged <- fmt.Sprintf(format, a...) },
+	}
+	if _, err := h.Handle(context.Background(), Command{Action: ActionSelfUpdate}); err != nil {
+		t.Fatalf("self_update: %v", err)
+	}
+	select {
+	case <-logged:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Logf was never called")
+	}
+	b, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("reading self-update log: %v", err)
+	}
+	if !strings.Contains(string(b), "SELFUPDATE_TEST_MARKER") {
+		t.Errorf("log file content = %q, want it to contain the downloaded script's own output", string(b))
+	}
+}
+
+// TestRouterHandler_SelfUpdate_LockBlocksConcurrentRun covers the
+// double-click case: a second selfUpdate while one is already in flight
+// must not race it (two overlapping opkg installs).
+func TestRouterHandler_SelfUpdate_LockBlocksConcurrentRun(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh on PATH to exercise the update spawn")
+	}
+	lock := filepath.Join(t.TempDir(), "self-update.lock")
+	if err := os.WriteFile(lock, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h := &RouterHandler{
+		Config:         config.Default(),
+		InstallURL:     "http://127.0.0.1:1/definitely-not-listening",
+		SelfUpdateLock: lock,
+	}
+	_, err := h.Handle(context.Background(), Command{Action: ActionSelfUpdate})
+	if err == nil || !strings.Contains(err.Error(), "уже выполняется") {
+		t.Fatalf("expected a busy error mentioning уже выполняется, got %v", err)
+	}
+}
+
+// TestRouterHandler_SelfUpdate_StaleLockDoesNotBlock covers the
+// self-healing half: a lock left over from a run that never reached its
+// own cleanup (crashed outright, power loss) must age out on its own
+// rather than wedging every future update attempt.
+func TestRouterHandler_SelfUpdate_StaleLockDoesNotBlock(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh on PATH to exercise the update spawn")
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	lock := filepath.Join(t.TempDir(), "self-update.lock")
+	if err := os.WriteFile(lock, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stale := time.Now().Add(-selfUpdateOverallTimeout - time.Minute)
+	if err := os.Chtimes(lock, stale, stale); err != nil {
+		t.Fatal(err)
+	}
+	h := &RouterHandler{
+		Config:         config.Default(),
+		InstallURL:     srv.URL,
+		SelfUpdateLock: lock,
+	}
+	out, err := h.Handle(context.Background(), Command{Action: ActionSelfUpdate})
+	if err != nil {
+		t.Fatalf("a stale lock should not block a new run: %v", err)
+	}
+	if !strings.HasPrefix(out, "обновление агента запущено") {
+		t.Errorf("self_update output = %q", out)
+	}
+}
+
+// TestRouterHandler_SelfUpdate_LockClearedOnCompletion checks the
+// detached chain itself clears the lock (not this Go process after
+// c.Wait(), which -- per this whole fix -- can't be relied on to still
+// be around).
+func TestRouterHandler_SelfUpdate_LockClearedOnCompletion(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh on PATH to exercise the update spawn")
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	lock := filepath.Join(t.TempDir(), "self-update.lock")
+	logged := make(chan string, 1)
+	h := &RouterHandler{
+		Config:         config.Default(),
+		InstallURL:     srv.URL,
+		SelfUpdateLock: lock,
+		Logf:           func(format string, a ...any) { logged <- fmt.Sprintf(format, a...) },
+	}
+	if _, err := h.Handle(context.Background(), Command{Action: ActionSelfUpdate}); err != nil {
+		t.Fatalf("self_update: %v", err)
+	}
+	select {
+	case <-logged:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Logf was never called")
+	}
+	if _, err := os.Stat(lock); !os.IsNotExist(err) {
+		t.Errorf("lock file should be gone after a completed run, stat err = %v", err)
+	}
+}
+
 func TestRouterHandler_SelfUpdate_FailureAlsoPushesEvent(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("no sh on PATH to exercise the update spawn")

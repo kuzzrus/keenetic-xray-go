@@ -1,7 +1,6 @@
 package botcontrol
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -86,6 +85,19 @@ type RouterHandler struct {
 	// (selfupdate.Marker) before re-running install.sh. Empty -> no
 	// rollback point is recorded (the update still runs).
 	SelfUpdateMarker string
+
+	// SelfUpdateLog is where the detached install.sh run's stdout/stderr
+	// go -- a real file, unlike this project's own daemon log, so the
+	// detached process's writes never depend on this Go process staying
+	// alive to service a pipe. Empty -> the run's own output is
+	// discarded (still safe: /dev/null, not a pipe).
+	SelfUpdateLog string
+
+	// SelfUpdateLock's mtime marks a self-update run in progress, so a
+	// second click while one is already running gets turned away instead
+	// of racing it. Empty -> no lock is taken (a double-click can still
+	// race, same as before this existed).
+	SelfUpdateLock string
 
 	// AdaptiveRouteStatePath is where adaptiveRouteClassifyLoop persists
 	// its classifier state (cmd/keenetic-xray's adaptiveRouteStatePath) --
@@ -670,6 +682,7 @@ func (h *RouterHandler) restartDaemonDetached() error {
 		return fmt.Errorf("init-скрипт не задан")
 	}
 	c := exec.Command("sh", "-c", "sleep 2; "+h.InitScript+" restart")
+	detach(c)
 	if err := c.Start(); err != nil {
 		return fmt.Errorf("запуск перезапуска: %w", err)
 	}
@@ -1134,6 +1147,18 @@ func (h *RouterHandler) setPorts(ctx context.Context, args []string) (string, er
 const selfUpdateOverallTimeout = 15 * time.Minute
 
 func (h *RouterHandler) selfUpdate() (string, error) {
+	// A second click while one run is already in flight used to just
+	// race it -- two overlapping opkg installs, two prerm/postinst
+	// cycles. Lock freshness (not mere existence) so a run that crashed
+	// hard enough to never reach its own cleanup doesn't wedge every
+	// future attempt -- see selfUpdateLockPath's own doc comment.
+	if h.SelfUpdateLock != "" {
+		if fi, err := os.Stat(h.SelfUpdateLock); err == nil && time.Since(fi.ModTime()) < selfUpdateOverallTimeout {
+			return "", fmt.Errorf("обновление уже выполняется (начато %s назад) — дождитесь завершения", shortDur(time.Since(fi.ModTime())))
+		}
+		_ = os.WriteFile(h.SelfUpdateLock, nil, 0o644) // best-effort -- a write failure just means no lock, not a blocked update
+	}
+
 	url := h.InstallURL
 	if url == "" {
 		url = defaultInstallURL
@@ -1166,22 +1191,59 @@ func (h *RouterHandler) selfUpdate() (string, error) {
 	// never returns, nothing ever gets logged or reported, which is
 	// exactly the "goes silent" symptom this bounds. install.sh's own
 	// fetch() of the actual .ipk is bounded the same way, separately.
+	//
+	// The lock (if any) is cleared here, by the detached chain itself,
+	// not by this Go process after c.Wait() -- see the SIGPIPE reasoning
+	// below for why this process can't be relied on to still be around.
 	const tmpScript = "/tmp/keenetic-xray-selfupdate.$$.sh"
+	rmLock := ""
+	if h.SelfUpdateLock != "" {
+		// Single-quoted: this path is project-controlled (logDir(), or an
+		// operator's KEENETIC_XRAY_SELFUPDATE_LOCK override), but embedding
+		// any path into a shell string unquoted is worth avoiding on
+		// principle -- and single quotes are what actually made this
+		// portable enough for the Windows/Git-Bash dev environment's own
+		// backslash-heavy t.TempDir() paths in tests to work at all.
+		rmLock = "; rm -f '" + h.SelfUpdateLock + "'"
+	}
 	cmd := "sleep 2; curl -fsSL --connect-timeout 10 --max-time 60 " + url + " -o " + tmpScript +
-		" && sh " + tmpScript + "; rc=$?; rm -f " + tmpScript + "; exit $rc"
+		" && sh " + tmpScript + "; rc=$?; rm -f " + tmpScript + rmLock + "; exit $rc"
 	// See selfUpdateOverallTimeout's own doc comment for why this needs
 	// its own fresh, independent deadline rather than reusing whatever
 	// ctx Handle was called with (this detached child is meant to
 	// outlive the request that started it).
 	octx, cancel := context.WithTimeout(context.Background(), selfUpdateOverallTimeout)
 	c := exec.CommandContext(octx, "sh", "-c", cmd)
-	var out bytes.Buffer
-	c.Stdout, c.Stderr = &out, &out
+	// Its own session: packaging/ipk/prerm stops *this* process
+	// (rc.func's name-matching `stop`, PROCS=keenetic-xray) partway
+	// through this exact chain (curl -> install.sh -> opkg install ->
+	// [prerm runs here] -> postinst -> S99 start). Without this, the
+	// child stays in this process's session/group -- one more thing that
+	// could reach back and disrupt it beyond the pipe issue below.
+	detach(c)
+	// Real file, not an in-process bytes.Buffer: with a Buffer, os/exec
+	// must open a pipe and run a copy goroutine *in this process*: once
+	// prerm kills this process mid-update, that pipe's read end closes,
+	// and the next write by anything still in the chain (install.sh,
+	// very plausibly opkg itself, both write-heavy) gets SIGPIPE --
+	// terminated by default, aborting the chain before postinst ever
+	// restarts the daemon. This is the confirmed mechanism behind "the
+	// update button kills everything" (2026-09-20 audit). A real file's
+	// fd stays valid no matter what happens to this process.
+	if h.SelfUpdateLog != "" {
+		if f, err := os.OpenFile(h.SelfUpdateLog, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644); err == nil {
+			c.Stdout, c.Stderr = f, f
+			defer f.Close() // our copy only -- Start() dups it into the child, which keeps its own independent fd
+		}
+		// Couldn't open it -- Stdout/Stderr stay nil, which os/exec
+		// connects to /dev/null. Still safe (unlike bytes.Buffer), just
+		// without a log this run.
+	}
 	if err := c.Start(); err != nil {
 		cancel()
 		return "", fmt.Errorf("запуск обновления: %w", err)
 	}
-	go h.logSelfUpdateOutcome(c, &out, cancel)
+	go h.logSelfUpdateOutcome(c, cancel)
 	// "~2с" used to describe the whole update here -- it's actually only
 	// the pause before the download even starts (c's own leading `sleep
 	// 2`), not the full cycle (fetch, opkg install/postinst, daemon
@@ -1205,16 +1267,25 @@ func (h *RouterHandler) selfUpdate() (string, error) {
 // on to restart the daemon is still separately reported by
 // watchPostUpdate's own "post-update:" lines on the next process's
 // startup -- this only covers the run itself, most usefully the failures
-// that never get that far.
-func (h *RouterHandler) logSelfUpdateOutcome(c *exec.Cmd, out *bytes.Buffer, cancel context.CancelFunc) {
+// that never get that far. Like the rest of this function's fate, this
+// goroutine only gets to run at all if this process survives long enough
+// to see the child finish -- if prerm kills it first, that's fine: the
+// child now keeps going regardless (see selfUpdate's own doc comment),
+// and the *next* process's watchPostUpdate takes over the reporting job.
+func (h *RouterHandler) logSelfUpdateOutcome(c *exec.Cmd, cancel context.CancelFunc) {
 	defer cancel() // releases selfUpdateOverallTimeout's context once c.Wait() returns, one way or another
 	err := c.Wait()
 	if h.Logf == nil {
 		return
 	}
-	tail := strings.TrimSpace(out.String())
-	if len(tail) > 4<<10 {
-		tail = "…" + tail[len(tail)-4<<10:]
+	tail := ""
+	if h.SelfUpdateLog != "" {
+		if b, rerr := os.ReadFile(h.SelfUpdateLog); rerr == nil {
+			tail = strings.TrimSpace(string(b))
+			if len(tail) > 4<<10 {
+				tail = "…" + tail[len(tail)-4<<10:]
+			}
+		}
 	}
 	if err != nil {
 		h.Logf("self-update: install.sh failed: %v\n%s", err, tail)

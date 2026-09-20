@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/kuzzrus/keenetic-xray-go/internal/botcontrol"
 	"github.com/kuzzrus/keenetic-xray-go/internal/failover"
 	"github.com/kuzzrus/keenetic-xray-go/internal/selfupdate"
+	"github.com/kuzzrus/keenetic-xray-go/internal/version"
 )
 
 func drainOne(t *testing.T, ch <-chan botcontrol.Event) (botcontrol.Event, bool) {
@@ -28,9 +30,16 @@ func fixedState(st failover.State) steadyStateFn {
 	return func(context.Context) (failover.State, bool) { return st, true }
 }
 
+// probeOK/probeFail stand in for watchPostUpdate's real xrayctl.Probe-based
+// check in tests that don't need a real SOCKS listener.
+func probeOK(context.Context) error   { return nil }
+func probeFail(context.Context) error { return errProbeUnreachable }
+
+var errProbeUnreachable = errors.New("probe: connection refused")
+
 func TestWatchPostUpdate_NoMarker(t *testing.T) {
 	out := make(chan botcontrol.Event, 1)
-	watchPostUpdate(context.Background(), fixedState(failover.StateCooldown),
+	watchPostUpdate(context.Background(), fixedState(failover.StateCooldown), probeOK,
 		filepath.Join(t.TempDir(), "none.json"), out, func(string, ...any) {})
 	if _, ok := <-out; ok {
 		t.Error("no marker -> no event, channel just closes")
@@ -45,7 +54,7 @@ func TestWatchPostUpdate_Healthy(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := make(chan botcontrol.Event, 1)
-	watchPostUpdate(context.Background(), fixedState(failover.StateActivePrimary), path, out, func(string, ...any) {})
+	watchPostUpdate(context.Background(), fixedState(failover.StateActivePrimary), probeOK, path, out, func(string, ...any) {})
 
 	ev, ok := drainOne(t, out)
 	if !ok || !strings.Contains(ev.Text, "✅") || !strings.Contains(ev.Text, "0.26.6") {
@@ -65,7 +74,7 @@ func TestWatchPostUpdate_Unhealthy_KeepsMarkerAndWarns(t *testing.T) {
 		PrevVersion: "0.26.6", IPKURL: "https://h/x.ipk", Arch: "aarch64-3.10", StartedAt: time.Now(),
 	})
 	out := make(chan botcontrol.Event, 1)
-	watchPostUpdate(context.Background(), fixedState(failover.StateCooldown), path, out, func(string, ...any) {})
+	watchPostUpdate(context.Background(), fixedState(failover.StateCooldown), probeOK, path, out, func(string, ...any) {})
 
 	ev, ok := drainOne(t, out)
 	if !ok || !strings.Contains(ev.Text, "⚠️") || !strings.Contains(ev.Text, "self-rollback") {
@@ -73,6 +82,57 @@ func TestWatchPostUpdate_Unhealthy_KeepsMarkerAndWarns(t *testing.T) {
 	}
 	if _, present := selfupdate.ReadMarker(path); !present {
 		t.Error("marker must be kept so `internal self-rollback` can use it")
+	}
+}
+
+// TestWatchPostUpdate_StateSaysActiveButProbeNeverPasses_KeepsMarkerAndWarns
+// is the regression test for the actual gap found by the 2026-09-20 audit:
+// State() alone can report a false ActivePrimary indefinitely (most
+// concretely in a single-profile setup, which runs with no health-check
+// ticker at all -- if the very first SwitchLiveTo at daemon startup
+// silently failed, nothing ever re-evaluates the Machine's state again).
+// A state that never leaves ActivePrimary must NOT be declared healthy
+// while the independent probe keeps failing.
+func TestWatchPostUpdate_StateSaysActiveButProbeNeverPasses_KeepsMarkerAndWarns(t *testing.T) {
+	defer func(w, p time.Duration) { postUpdateWindow, postUpdatePoll = w, p }(postUpdateWindow, postUpdatePoll)
+	postUpdateWindow, postUpdatePoll = 40*time.Millisecond, 10*time.Millisecond
+
+	path := filepath.Join(t.TempDir(), "self-update.json")
+	_ = selfupdate.WriteMarker(path, selfupdate.Marker{
+		PrevVersion: "0.26.6", IPKURL: "https://h/x.ipk", Arch: "aarch64-3.10", StartedAt: time.Now(),
+	})
+	out := make(chan botcontrol.Event, 1)
+	watchPostUpdate(context.Background(), fixedState(failover.StateActivePrimary), probeFail, path, out, func(string, ...any) {})
+
+	ev, ok := drainOne(t, out)
+	if !ok || !strings.Contains(ev.Text, "⚠️") || !strings.Contains(ev.Text, "self-rollback") {
+		t.Errorf("want a ⚠️ warning despite State()==ActivePrimary, got %+v ok=%v", ev, ok)
+	}
+	if _, present := selfupdate.ReadMarker(path); !present {
+		t.Error("marker must be kept -- a state that never leaves ActivePrimary must not clear it")
+	}
+}
+
+// TestWatchPostUpdate_SameVersionReinstall_NotifiesAndClears covers the
+// third UPD-02 gap: before this, a same-version reinstall's marker was
+// silently cleared with no event at all, indistinguishable from the
+// marker just having gotten lost -- real work happened (opkg genuinely
+// reinstalled, the daemon genuinely restarted) and deserves its own
+// confirmation, distinct from the stale-leftover case.
+func TestWatchPostUpdate_SameVersionReinstall_NotifiesAndClears(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "self-update.json")
+	_ = selfupdate.WriteMarker(path, selfupdate.Marker{
+		PrevVersion: trimV(version.Version), IPKURL: "https://h/x.ipk", Arch: "aarch64-3.10", StartedAt: time.Now(),
+	})
+	out := make(chan botcontrol.Event, 1)
+	watchPostUpdate(context.Background(), fixedState(failover.StateActivePrimary), probeOK, path, out, func(string, ...any) {})
+
+	ev, ok := drainOne(t, out)
+	if !ok || !strings.Contains(ev.Text, "переустановка") || !strings.Contains(ev.Text, trimV(version.Version)) {
+		t.Errorf("want a same-version reinstall confirmation, got %+v ok=%v", ev, ok)
+	}
+	if _, present := selfupdate.ReadMarker(path); present {
+		t.Error("marker should be cleared after a confirmed same-version reinstall")
 	}
 }
 
@@ -146,7 +206,7 @@ func TestWatchPostUpdate_StaleMarkerTidiedSilently(t *testing.T) {
 		StartedAt: time.Now().Add(-30 * time.Minute),
 	})
 	out := make(chan botcontrol.Event, 1)
-	watchPostUpdate(context.Background(), fixedState(failover.StateCooldown), path, out, func(string, ...any) {})
+	watchPostUpdate(context.Background(), fixedState(failover.StateCooldown), probeOK, path, out, func(string, ...any) {})
 
 	if _, ok := <-out; ok {
 		t.Error("a stale marker should be tidied without an event")

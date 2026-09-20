@@ -10,10 +10,33 @@ import (
 	"time"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/botcontrol"
+	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 	"github.com/kuzzrus/keenetic-xray-go/internal/failover"
 	"github.com/kuzzrus/keenetic-xray-go/internal/selfupdate"
 	"github.com/kuzzrus/keenetic-xray-go/internal/version"
+	"github.com/kuzzrus/keenetic-xray-go/internal/xrayctl"
 )
+
+// postUpdateProbe builds watchPostUpdate's independent liveness check: a
+// real HTTP GET through the production SOCKS inbound, same target/
+// fallback/retry config the failover daemon's own health checks already
+// use (see cmd/keenetic-xray/adaptiveroute.go's adaptiveRouteHealthCheck
+// for the identical pattern). A single attempt per call -- watchPostUpdate
+// itself is what retries, on its own postUpdatePoll cadence.
+func postUpdateProbe(cfg *config.Config) func(context.Context) error {
+	return func(ctx context.Context) error {
+		pctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+		defer cancel()
+		return xrayctl.Probe(pctx, xrayctl.ProbeOptions{
+			SOCKSAddr:    fmt.Sprintf("127.0.0.1:%d", cfg.Failover.SOCKSPort),
+			URL:          cfg.Failover.HealthCheckURL,
+			FallbackURLs: cfg.Failover.HealthCheckFallbackURLs,
+			Retries:      cfg.Failover.CheckRetries,
+			RetryDelay:   time.Duration(cfg.Failover.CheckRetryDelaySeconds) * time.Second,
+			Timeout:      8 * time.Second,
+		})
+	}
+}
 
 // postUpdateWindow is how long the daemon waits for itself to reach a
 // steady state after a self-update before declaring the update bad.
@@ -28,21 +51,51 @@ type steadyStateFn func(context.Context) (failover.State, bool)
 
 // watchPostUpdate runs once at daemon startup. If a self-update marker is
 // present and fresh, it waits for the daemon to reach ActivePrimary/
-// ActiveBackup within postUpdateWindow and emits a single event either
-// way: a confirmation (marker cleared), or a loud "didn't come up --
-// откат: keenetic-xray internal self-rollback" (marker kept so the
-// command can use it). Closes out when done.
-func watchPostUpdate(ctx context.Context, state steadyStateFn, markerPath string, out chan<- botcontrol.Event, logf func(string, ...any)) {
+// ActiveBackup *and* pass an independent live probe within
+// postUpdateWindow, and emits a single event either way: a confirmation
+// (marker cleared), or a loud "didn't come up -- откат: keenetic-xray
+// internal self-rollback" (marker kept so the command can use it).
+// Closes out when done.
+//
+// The probe matters on its own, not just as a slower way to confirm what
+// state already says: State() alone was found (2026-09-20 audit) to be
+// able to report a false ActivePrimary indefinitely in a single-profile
+// setup (no backup configured) -- that mode runs with no health-check
+// ticker at all (see internal/failover's own doc comment), so if the
+// *very first* SwitchLiveTo at daemon startup silently failed (its error
+// is deliberately not fatal to Run -- FAIL-02, still open), nothing ever
+// re-evaluates the Machine's state again, and it just sits at its
+// initial ActivePrimary value forever with no working xray process
+// behind it at all. A real probe through the actual SOCKS/HTTP inbound
+// can't be fooled by that.
+func watchPostUpdate(ctx context.Context, state steadyStateFn, probe func(context.Context) error, markerPath string, out chan<- botcontrol.Event, logf func(string, ...any)) {
 	defer close(out)
 
 	m, ok := selfupdate.ReadMarker(markerPath)
 	if !ok {
 		return
 	}
-	// Not a fresh update we're supervising -- a leftover, or a build that
-	// somehow didn't swap. Either way don't nag; just tidy up.
-	if time.Since(m.StartedAt) > 15*time.Minute || m.PrevVersion == trimV(version.Version) {
+	// A leftover from something else entirely (this build somehow didn't
+	// swap, or the marker is just old) -- don't nag about it, just tidy up.
+	if time.Since(m.StartedAt) > 15*time.Minute {
 		_ = selfupdate.ClearMarker(markerPath)
+		return
+	}
+	// A fresh marker whose PrevVersion already matches what's running:
+	// a same-version reinstall (`update` re-run with nothing new to
+	// install). Real work happened -- opkg genuinely reinstalled and
+	// restarted the daemon -- so this gets its own confirmation instead
+	// of silently vanishing the way a stale leftover does; before this,
+	// the operator had no way to tell "reinstalled cleanly" apart from
+	// "the marker just got lost" (2026-09-20 audit, UPD-02).
+	if m.PrevVersion == trimV(version.Version) {
+		_ = selfupdate.ClearMarker(markerPath)
+		logf("post-update: переустановка версии %s завершена", trimV(version.Version))
+		send(ctx, out, botcontrol.Event{
+			Kind: "self_update",
+			Text: fmt.Sprintf("✅ переустановка %s завершена", trimV(version.Version)),
+			Time: time.Now(),
+		})
 		return
 	}
 
@@ -50,14 +103,22 @@ func watchPostUpdate(ctx context.Context, state steadyStateFn, markerPath string
 	deadline := time.Now().Add(postUpdateWindow)
 	for {
 		if st, ran := state(ctx); ran && (st == failover.StateActivePrimary || st == failover.StateActiveBackup) {
-			_ = selfupdate.ClearMarker(markerPath)
-			logf("post-update: демон в эфире (%s)", st)
-			send(ctx, out, botcontrol.Event{
-				Kind: "self_update",
-				Text: fmt.Sprintf("✅ обновление %s → %s: демон в эфире", m.PrevVersion, trimV(version.Version)),
-				Time: time.Now(),
-			})
-			return
+			perr := probe(ctx)
+			if perr == nil {
+				_ = selfupdate.ClearMarker(markerPath)
+				logf("post-update: демон в эфире (%s), живой пробник прошёл", st)
+				send(ctx, out, botcontrol.Event{
+					Kind: "self_update",
+					Text: fmt.Sprintf("✅ обновление %s → %s: демон в эфире", m.PrevVersion, trimV(version.Version)),
+					Time: time.Now(),
+				})
+				return
+			}
+			// A freshly-restarted xray may just need another moment to
+			// actually start accepting connections -- same reasoning as
+			// StateConfirmingRecovery not probing in the switching tick.
+			// Keep polling rather than treating one failed probe as final.
+			logf("post-update: состояние %s, но живой пробник пока не проходит (%v)", st, perr)
 		}
 		if !time.Now().Before(deadline) {
 			break

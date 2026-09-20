@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/adaptiveroute"
@@ -104,6 +105,21 @@ const (
 	healthCheckInterval = 15 * time.Second
 	healthFailThreshold = 2
 )
+
+// adaptiveRouteFailedOpen mirrors adaptiveRouteHealthCheck's loop-local
+// failedOpen for the one consumer outside adaptiveRouteClassifyLoop's own
+// goroutine: reconcileAdaptiveRoute (driven by routerReconcileLoop, a
+// separate goroutine, every couple of minutes and on-demand via the ndm
+// SIGUSR1 hook). AR-09: reconcile's own "is REDIRECT in place" check
+// can't distinguish a deliberate fail-open clear from the firmware having
+// just dropped the rule on its own -- without this, reconcile silently
+// undid an active emergency fail-open within its own next cycle (at most
+// ~2 minutes, or immediately if SIGUSR1 fires in between), re-redirecting
+// traffic into a tunnel already confirmed dead. Package-level and atomic
+// since the two goroutines have no other shared state today; the
+// loop-local bool stays as the classify loop's own fast, no-atomic-needed
+// check for its own single-goroutine use.
+var adaptiveRouteFailedOpen atomic.Bool
 
 // adaptiveRouteOpTimeout bounds every individual ipset/iptables/conntrack
 // call adaptiveRouteClassifyLoop's own goroutine makes directly
@@ -524,6 +540,7 @@ func adaptiveRouteHealthCheck(ctx context.Context, healthFails *int, failedOpen 
 			return
 		}
 		*failedOpen = true
+		adaptiveRouteFailedOpen.Store(true) // AR-09: tell reconcileAdaptiveRoute not to undo this
 		// 30s, not adaptiveRouteOpTimeout -- same budget as the recovery
 		// sequence below and applyAdaptiveRouteAtStartup/
 		// reconcileAdaptiveRoute's own equivalent calls, all of which run
@@ -545,6 +562,7 @@ func adaptiveRouteHealthCheck(ctx context.Context, healthFails *int, failedOpen 
 		return
 	}
 	*failedOpen = false
+	adaptiveRouteFailedOpen.Store(false) // AR-09: reconcileAdaptiveRoute may re-assert again now
 
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -605,6 +623,18 @@ func applyAdaptiveRouteActions(ctx context.Context, actions []classifier.Action,
 // without this. Same cheap-check-then-fix shape as the other reconcile
 // steps in this file's neighbors (reconcileMSSClamp, reconcileWGTransport).
 func reconcileAdaptiveRoute(ctx context.Context, cfg *config.Config, logf func(string, ...any)) {
+	// AR-09: a missing REDIRECT rule isn't always the firmware having
+	// dropped it -- adaptiveRouteHealthCheck clears it on purpose when
+	// the live egress is confirmed dead, and re-asserting it here would
+	// silently send traffic straight back into a tunnel that's still
+	// down. Wait for the health check's own recovery probe to confirm
+	// egress is healthy and clear this flag instead. Checked first, ahead
+	// of Enabled/Available() below, since it's the cheapest possible
+	// guard (an atomic load, no syscall) and the outcome (skip entirely)
+	// is the same regardless of check order.
+	if adaptiveRouteFailedOpen.Load() {
+		return
+	}
 	if !cfg.AdaptiveRoute.Enabled || !keenetic.Available() {
 		return
 	}

@@ -24,6 +24,7 @@ func (c *fakeClock) Advance(d time.Duration) { c.now = c.now.Add(d) }
 type fakeActions struct {
 	liveErr     error
 	isolatedErr error
+	switchErr   error // returned by SwitchLiveTo; nil (default) = every switch succeeds
 
 	switchCalls   []Role
 	startPretestN int
@@ -47,7 +48,7 @@ func (f *fakeActions) RotateBackupCandidate() bool {
 
 func (f *fakeActions) SwitchLiveTo(_ context.Context, role Role) error {
 	f.switchCalls = append(f.switchCalls, role)
-	return nil
+	return f.switchErr
 }
 
 func (f *fakeActions) StartIsolatedPretest(context.Context) error {
@@ -142,6 +143,94 @@ func TestMachine_NormalFailoverAndRecovery(t *testing.T) {
 	assertState(t, m, StateCooldown)
 	m.Tick(ctx)
 	assertState(t, m, StateActivePrimary)
+}
+
+// TestMachine_FailoverSwitchFailure_StaysActivePrimary is FAIL-02's
+// regression test for tickActivePrimary: when the switch away from a
+// known-bad primary itself fails, the state machine used to advance to
+// TESTING_RECOVERY anyway -- Snapshot().LiveRole never lied (realActions
+// only sets it after a successful Restart), but Snapshot().State did,
+// telling the operator "testing a return to primary" while there was no
+// working connection on either side. It must stay ACTIVE_PRIMARY instead.
+func TestMachine_FailoverSwitchFailure_StaysActivePrimary(t *testing.T) {
+	actions := &fakeActions{switchErr: errors.New("switch failed")}
+	m := NewMachine(testConfig(), actions, newFakeClock(), StateActivePrimary)
+	ctx := context.Background()
+
+	actions.liveErr = errProbe
+	m.Tick(ctx) // failure 1
+	m.Tick(ctx) // failure 2
+	m.Tick(ctx) // failure 3 -> attempts the switch, which fails
+
+	assertState(t, m, StateActivePrimary)
+	if len(actions.switchCalls) != 1 || actions.switchCalls[0] != RoleBackup {
+		t.Fatalf("switchCalls = %v, want exactly one attempted switch to RoleBackup", actions.switchCalls)
+	}
+	if actions.startPretestN != 0 {
+		t.Errorf("startPretestN = %d, want 0 -- no pretest should start for a switch that never happened", actions.startPretestN)
+	}
+
+	// The failed attempt must not wedge future retries: once the counter
+	// re-accumulates FailuresRequired failures, it tries again.
+	actions.switchErr = nil
+	m.Tick(ctx)
+	m.Tick(ctx)
+	m.Tick(ctx)
+	assertState(t, m, StateCooldown)
+	if len(actions.switchCalls) != 2 {
+		t.Fatalf("switchCalls = %v, want a second attempt once failures re-accumulated", actions.switchCalls)
+	}
+}
+
+// TestMachine_ConfirmingRecoveryRollbackFailure_StaysConfirming is
+// FAIL-02's regression test for tickConfirmingRecovery: when the rollback
+// switch to backup itself fails, the state machine used to claim
+// ACTIVE_BACKUP (and arm the rollback backoff) regardless. Must stay
+// CONFIRMING_RECOVERY and leave backoffUntil untouched instead.
+func TestMachine_ConfirmingRecoveryRollbackFailure_StaysConfirming(t *testing.T) {
+	actions := &fakeActions{switchErr: errors.New("switch failed")}
+	clock := newFakeClock()
+	m := NewMachine(testConfig(), actions, clock, StateConfirmingRecovery)
+	ctx := context.Background()
+
+	actions.liveErr = errProbe
+	m.Tick(ctx) // failure 1
+	m.Tick(ctx) // failure 2
+	m.Tick(ctx) // failure 3 -> attempts the rollback switch, which fails
+
+	assertState(t, m, StateConfirmingRecovery)
+	if !m.backoffUntil.IsZero() {
+		t.Errorf("backoffUntil = %v, want zero -- no backoff should arm for a rollback that never happened", m.backoffUntil)
+	}
+	if len(actions.switchCalls) != 1 || actions.switchCalls[0] != RoleBackup {
+		t.Fatalf("switchCalls = %v, want exactly one attempted switch to RoleBackup", actions.switchCalls)
+	}
+}
+
+// TestMachine_TestingRecoveryRotateSwitchFailure_StaysTestingRecovery is
+// FAIL-02's regression test for tickTestingRecovery's rotate-and-switch
+// path: when the switch to a newly-rotated backup candidate fails, the
+// state machine used to enter a cooldown and return to TESTING_RECOVERY
+// regardless (RotateBackupCandidate's own pool bookkeeping is separate
+// and correctly stays marked "tried" either way). No cooldown should
+// happen for a switch that never took effect.
+func TestMachine_TestingRecoveryRotateSwitchFailure_StaysTestingRecovery(t *testing.T) {
+	actions := &fakeActions{switchErr: errors.New("switch failed"), rotateResult: true}
+	m := NewMachine(testConfig(), actions, newFakeClock(), StateTestingRecovery)
+	ctx := context.Background()
+
+	actions.liveErr = errProbe
+	m.Tick(ctx) // failure 1
+	m.Tick(ctx) // failure 2
+	m.Tick(ctx) // failure 3 -> rotates, attempts the switch, which fails
+
+	assertState(t, m, StateTestingRecovery) // never dipped into StateCooldown
+	if actions.rotateCalls != 1 {
+		t.Fatalf("rotateCalls = %d, want 1", actions.rotateCalls)
+	}
+	if len(actions.switchCalls) != 1 || actions.switchCalls[0] != RoleBackup {
+		t.Fatalf("switchCalls = %v, want exactly one attempted switch to RoleBackup", actions.switchCalls)
+	}
 }
 
 func TestMachine_FlapResistance_IsolatedFailureResetsCounter(t *testing.T) {

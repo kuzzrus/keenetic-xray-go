@@ -180,7 +180,22 @@ func (m *Machine) tickActivePrimary(ctx context.Context) {
 		// known-bad path, so a pre-test would only double detection
 		// latency for no safety benefit.
 		m.consecutiveFailures = 0
-		_ = m.actions.SwitchLiveTo(ctx, RoleBackup)
+		if err := m.actions.SwitchLiveTo(ctx, RoleBackup); err != nil {
+			// FAIL-02: don't advance the state machine past a switch that
+			// didn't actually happen. Snapshot().LiveRole never lied here
+			// (realActions only sets it after a successful Restart), but
+			// Snapshot().State used to move to TESTING_RECOVERY
+			// regardless -- telling the operator "testing a return to
+			// primary" while there was, in fact, no working connection on
+			// either side (primary just failed FailuresRequired checks;
+			// the switch away from it also failed). Stay in
+			// ActivePrimary and let the normal failure-counting retry the
+			// switch once FailuresRequired probes fail again -- same
+			// "couldn't even switch, try again next tick" shape
+			// tickTestingRecovery's own SwitchLiveTo(RolePrimary) call
+			// below already uses.
+			return
+		}
 		_ = m.actions.StartIsolatedPretest(ctx)
 		m.enterCooldown(StateTestingRecovery)
 		return
@@ -210,7 +225,16 @@ func (m *Machine) tickTestingRecovery(ctx context.Context) {
 		if m.backupFailures >= m.cfg.FailuresRequired {
 			m.backupFailures = 0
 			if m.actions.RotateBackupCandidate() {
-				_ = m.actions.SwitchLiveTo(ctx, RoleBackup)
+				if err := m.actions.SwitchLiveTo(ctx, RoleBackup); err != nil {
+					// FAIL-02: RotateBackupCandidate already marked this
+					// candidate tried regardless (its own bookkeeping, a
+					// separate concern), but don't spend a cooldown cycle
+					// on a switch that didn't happen -- stay in
+					// TestingRecovery (already the current state, so
+					// nothing here was misreported) and let backupFailures
+					// (already reset above) accumulate again naturally.
+					return
+				}
 				m.enterCooldown(StateTestingRecovery)
 			}
 			// Pool exhausted (or nothing to rotate to): RotateBackupCandidate
@@ -254,7 +278,14 @@ func (m *Machine) tickConfirmingRecovery(ctx context.Context) {
 		// Primary really isn't holding. A known-good backup beats a
 		// flapping primary; roll back and back off before retrying.
 		m.confirmFailures = 0
-		_ = m.actions.SwitchLiveTo(ctx, RoleBackup)
+		if err := m.actions.SwitchLiveTo(ctx, RoleBackup); err != nil {
+			// FAIL-02: same reasoning as tickActivePrimary's own switch
+			// above -- don't claim ACTIVE_BACKUP (and arm the rollback
+			// backoff) if the switch didn't actually happen. Stay in
+			// ConfirmingRecovery; the next FailuresRequired failures
+			// retry.
+			return
+		}
 		m.backoffUntil = m.clock.Now().Add(m.rollbackBackoff())
 		m.transitionTo(StateActiveBackup)
 		return

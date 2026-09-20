@@ -15,12 +15,27 @@ import (
 // RouterState is one router's queued commands and most recent result, as
 // tracked by the control server.
 type RouterState struct {
-	Pending      []Command `json:"pending,omitempty"`
-	LastResult   *Result   `json:"last_result,omitempty"`
-	LastPollAt   time.Time `json:"last_poll_at,omitempty"`
-	LastStatus   string    `json:"last_status,omitempty"`    // rendered snapshot from the agent's heartbeat
-	LastStatusAt time.Time `json:"last_status_at,omitempty"` // when that snapshot was received
+	Pending    []Command `json:"pending,omitempty"`
+	LastResult *Result   `json:"last_result,omitempty"`
+	// RecentResults is a small, newest-last, size-bounded history
+	// (maxRecentResults) alongside LastResult -- so a command whose
+	// caller is still polling AwaitResult for it (bot's own
+	// enqueueAndWait, wizard steps, ...) can still be found by CommandID
+	// even after a *different*, faster-answering command's result has
+	// since become LastResult. Before this, two commands landing close
+	// together could make the first one's own wait time out despite the
+	// router having genuinely answered it (BOT-01).
+	RecentResults []Result  `json:"recent_results,omitempty"`
+	LastPollAt    time.Time `json:"last_poll_at,omitempty"`
+	LastStatus    string    `json:"last_status,omitempty"`    // rendered snapshot from the agent's heartbeat
+	LastStatusAt  time.Time `json:"last_status_at,omitempty"` // when that snapshot was received
 }
+
+// maxRecentResults bounds RouterState.RecentResults -- generous for how
+// many commands could plausibly overlap in flight for one router on this
+// low-traffic personal control server, without letting the store file
+// grow without bound.
+const maxRecentResults = 8
 
 type storeState struct {
 	Routers  map[string]*RouterState  `json:"routers"`
@@ -109,8 +124,15 @@ func (s *Store) Dequeue(routerID string) (*Command, error) {
 		return nil, s.saveLocked()
 	}
 	cmd := rs.Pending[0]
+	// Pop only provisionally -- if the removal doesn't durably save, the
+	// command must still be queued for the next poll to retry, not
+	// vanish from both memory and disk at once (BOT-01: this used to pop
+	// first and return the save error after, leaving the command
+	// nowhere -- worse than just "not yet delivered").
+	prevPending := rs.Pending
 	rs.Pending = rs.Pending[1:]
 	if err := s.saveLocked(); err != nil {
+		rs.Pending = prevPending
 		return nil, err
 	}
 	return &cmd, nil
@@ -127,7 +149,8 @@ func (s *Store) SetStatus(routerID, status string) error {
 	return s.saveLocked()
 }
 
-// RecordResult stores result as routerID's most recent result. Called
+// RecordResult stores result as routerID's most recent result, and adds
+// it to the bounded recent-results history ResultFor searches. Called
 // from the /agent/result handler.
 func (s *Store) RecordResult(routerID string, result Result) error {
 	s.mu.Lock()
@@ -136,6 +159,10 @@ func (s *Store) RecordResult(routerID string, result Result) error {
 	rs := s.routerLocked(routerID)
 	r := result
 	rs.LastResult = &r
+	rs.RecentResults = append(rs.RecentResults, r)
+	if len(rs.RecentResults) > maxRecentResults {
+		rs.RecentResults = rs.RecentResults[len(rs.RecentResults)-maxRecentResults:]
+	}
 	return s.saveLocked()
 }
 
@@ -149,6 +176,26 @@ func (s *Store) LastResult(routerID string) *Result {
 		return nil
 	}
 	return rs.LastResult
+}
+
+// ResultFor returns the recorded result for commandID if it's still
+// within routerID's recent-results window, or nil. Unlike LastResult,
+// this finds an earlier command's result even after a later command's
+// has also been recorded -- see RecentResults' own doc comment.
+func (s *Store) ResultFor(routerID, commandID string) *Result {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rs, ok := s.state.Routers[routerID]
+	if !ok {
+		return nil
+	}
+	for i := len(rs.RecentResults) - 1; i >= 0; i-- {
+		if rs.RecentResults[i].CommandID == commandID {
+			r := rs.RecentResults[i]
+			return &r
+		}
+	}
+	return nil
 }
 
 // LastPollAt returns when routerID last polled, or the zero time if it
@@ -196,7 +243,7 @@ func (s *Store) RouterIDs() []string {
 func (s *Store) AwaitResult(ctx context.Context, routerID, commandID string, timeout time.Duration) (*Result, bool) {
 	deadline := time.Now().Add(timeout)
 	for {
-		if r := s.LastResult(routerID); r != nil && r.CommandID == commandID {
+		if r := s.ResultFor(routerID, commandID); r != nil {
 			return r, true
 		}
 		if !time.Now().Before(deadline) {

@@ -2,6 +2,8 @@ package botcontrol
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -91,6 +93,97 @@ func TestStore_RecordResultAndLastResult(t *testing.T) {
 	got = s.LastResult("router-1")
 	if got == nil || got.CommandID != "def" {
 		t.Errorf("LastResult after second record = %+v, want CommandID=def", got)
+	}
+}
+
+// TestStore_ResultFor_SurvivesLaterCommandsResult is the regression test
+// for BOT-01's result-clobbering gap: a second command's result used to
+// replace LastResult before the first command's own AwaitResult had a
+// chance to observe it, timing that caller out despite the router having
+// genuinely answered. ResultFor must still find the first result even
+// after the second has also been recorded.
+func TestStore_ResultFor_SurvivesLaterCommandsResult(t *testing.T) {
+	s, err := LoadStore("")
+	if err != nil {
+		t.Fatalf("LoadStore: %v", err)
+	}
+	first := Result{CommandID: "first", Output: "did status", Completed: time.Now()}
+	if err := s.RecordResult("router-1", first); err != nil {
+		t.Fatalf("RecordResult(first): %v", err)
+	}
+	second := Result{CommandID: "second", Output: "did switch_primary", Completed: time.Now()}
+	if err := s.RecordResult("router-1", second); err != nil {
+		t.Fatalf("RecordResult(second): %v", err)
+	}
+
+	if got := s.ResultFor("router-1", "first"); got == nil || got.Output != "did status" {
+		t.Errorf("ResultFor(first) = %+v, want the first command's own result, not lost to the second's", got)
+	}
+	if got := s.ResultFor("router-1", "second"); got == nil || got.Output != "did switch_primary" {
+		t.Errorf("ResultFor(second) = %+v", got)
+	}
+	// LastResult keeps its existing "most recent" meaning.
+	if got := s.LastResult("router-1"); got == nil || got.CommandID != "second" {
+		t.Errorf("LastResult = %+v, want the second (most recent) result", got)
+	}
+}
+
+// TestStore_ResultFor_BoundedHistory checks RecentResults' size cap: old
+// entries fall off once more than maxRecentResults have been recorded, so
+// the store file can't grow without bound.
+func TestStore_ResultFor_BoundedHistory(t *testing.T) {
+	s, err := LoadStore("")
+	if err != nil {
+		t.Fatalf("LoadStore: %v", err)
+	}
+	for i := 0; i < maxRecentResults+3; i++ {
+		id := fmt.Sprintf("cmd-%d", i)
+		if err := s.RecordResult("router-1", Result{CommandID: id, Completed: time.Now()}); err != nil {
+			t.Fatalf("RecordResult(%s): %v", id, err)
+		}
+	}
+	if got := s.ResultFor("router-1", "cmd-0"); got != nil {
+		t.Errorf("ResultFor(cmd-0) = %+v, want nil -- it should have aged out of the bounded history", got)
+	}
+	if got := s.ResultFor("router-1", fmt.Sprintf("cmd-%d", maxRecentResults+2)); got == nil {
+		t.Error("ResultFor for the most recent command should still be found")
+	}
+}
+
+// TestStore_Dequeue_RollsBackOnSaveFailure is the regression test for the
+// gap the audit found worse than its own framing: Dequeue used to pop
+// the command from memory *first*, and only then try to save -- a save
+// failure returned an error but left the command permanently gone from
+// both memory and disk, not merely "not yet delivered". A failed save
+// must leave the command queued for the next poll to retry.
+func TestStore_Dequeue_RollsBackOnSaveFailure(t *testing.T) {
+	dir := t.TempDir()
+	// A file where saveLocked's own MkdirAll(filepath.Dir(s.path), ...)
+	// expects a directory -- makes every save fail deterministically,
+	// cross-platform, without needing OS-specific permission tricks.
+	blocker := filepath.Join(dir, "blocker")
+	if err := os.WriteFile(blocker, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := &Store{path: filepath.Join(blocker, "queue.json"), state: newStoreState()}
+
+	if _, err := s.Enqueue("router-1", ActionStatus, nil); err == nil {
+		t.Fatal("Enqueue should fail too (same broken path), got nil error")
+	}
+	// Enqueue's own save failure aside, force a command into Pending
+	// directly so Dequeue has something to (fail to) pop.
+	rs := s.routerLocked("router-1")
+	rs.Pending = []Command{{ID: "c1", Action: ActionStatus}}
+
+	cmd, err := s.Dequeue("router-1")
+	if err == nil {
+		t.Fatal("Dequeue should have failed to save, got nil error")
+	}
+	if cmd != nil {
+		t.Errorf("Dequeue = %+v, want nil on a save failure", cmd)
+	}
+	if len(rs.Pending) != 1 || rs.Pending[0].ID != "c1" {
+		t.Errorf("Pending after a failed Dequeue = %+v, want the command still queued for retry", rs.Pending)
 	}
 }
 

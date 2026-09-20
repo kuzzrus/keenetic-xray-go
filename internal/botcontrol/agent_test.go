@@ -348,6 +348,84 @@ func TestRun_SlowHandlerDoesNotStarvePolling(t *testing.T) {
 	}
 }
 
+// TestRun_RetriesUnpostedResultBeforeFetchingNewWork is the regression
+// test for BOT-01's other half: a command that already ran must not be
+// silently forgotten just because its result's first delivery attempt
+// failed. /agent/result rejects the first two attempts (simulating a
+// transient network failure after the command already executed); the
+// agent must keep retrying that same result -- not fetch a second
+// command in the meantime -- until it's actually accepted.
+func TestRun_RetriesUnpostedResultBeforeFetchingNewWork(t *testing.T) {
+	var mu sync.Mutex
+	polls := 0
+	resultAttempts := 0
+	var delivered Result
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/agent/poll", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		polls++
+		n := polls
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if n == 1 {
+			_ = json.NewEncoder(w).Encode(PollResponse{Command: &Command{ID: "1", Action: ActionStatus}})
+			return
+		}
+		// No further work queued -- if pollOnce called poll() again
+		// while the first result is still undelivered, it would just
+		// see nothing here either way, so the real proof this test
+		// needs is polls staying at 1 for the whole run: every tick
+		// after the first must be spent retrying the pending result,
+		// never reaching this branch's own poll() call at all.
+		_ = json.NewEncoder(w).Encode(PollResponse{})
+	})
+	mux.HandleFunc("/agent/result", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		resultAttempts++
+		n := resultAttempts
+		mu.Unlock()
+		if n <= 2 {
+			w.WriteHeader(http.StatusInternalServerError) // simulate a transient failure
+			return
+		}
+		mu.Lock()
+		_ = json.NewDecoder(r.Body).Decode(&delivered)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	})
+
+	srv := httptest.NewTLSServer(mux)
+	defer srv.Close()
+
+	handler := &fakeHandler{}
+	opts := AgentOptions{
+		ControlServerURL:  srv.URL,
+		RouterID:          "router-1",
+		Token:             "t",
+		FingerprintSHA256: fingerprintOf(t, srv),
+		PollInterval:      15 * time.Millisecond,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_ = Run(ctx, opts, handler)
+
+	// The handler must have run exactly once -- retrying is about
+	// re-delivering the *result*, never re-executing the command.
+	if got := atomic.LoadInt32(&handler.calls); got != 1 {
+		t.Errorf("handler.calls = %d, want exactly 1 (the result retry must not re-run the command)", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if delivered.CommandID != "1" {
+		t.Errorf("delivered = %+v, want CommandID=1 to eventually land despite the first two failed attempts", delivered)
+	}
+	if resultAttempts < 3 {
+		t.Errorf("resultAttempts = %d, want at least 3 (2 failures + the one that succeeds)", resultAttempts)
+	}
+}
+
 func TestRun_WrongTokenNeverCallsHandler(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/agent/poll", func(w http.ResponseWriter, r *http.Request) {

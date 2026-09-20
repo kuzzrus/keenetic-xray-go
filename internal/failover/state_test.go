@@ -28,10 +28,22 @@ type fakeActions struct {
 	switchCalls   []Role
 	startPretestN int
 	stopPretestN  int
+
+	// rotateResult is what RotateBackupCandidate returns; rotateCalls
+	// counts how many times it was called. Defaults to false (pool
+	// exhausted / nothing to rotate to) so a test that doesn't care about
+	// this behaves like today: a backup failure just keeps retrying.
+	rotateResult bool
+	rotateCalls  int
 }
 
 func (f *fakeActions) ProbeLive(context.Context) error     { return f.liveErr }
 func (f *fakeActions) ProbeIsolated(context.Context) error { return f.isolatedErr }
+
+func (f *fakeActions) RotateBackupCandidate() bool {
+	f.rotateCalls++
+	return f.rotateResult
+}
 
 func (f *fakeActions) SwitchLiveTo(_ context.Context, role Role) error {
 	f.switchCalls = append(f.switchCalls, role)
@@ -181,6 +193,97 @@ func TestMachine_FlapResistance_LiveFailureResetsCounter(t *testing.T) {
 	}
 }
 
+// TestMachine_TestingRecovery_BackupFailureRotatesCandidate covers the
+// new "backup itself is also unhealthy" path: before this, TestingRecovery
+// never checked the live connection at all (only the isolated pretest
+// testing primary's own recovery) -- see this project's own audit doc for
+// how that gap was found.
+func TestMachine_TestingRecovery_BackupFailureRotatesCandidate(t *testing.T) {
+	actions := &fakeActions{rotateResult: true}
+	m := NewMachine(testConfig(), actions, newFakeClock(), StateTestingRecovery)
+	ctx := context.Background()
+
+	actions.liveErr = errProbe
+	m.Tick(ctx) // failure 1
+	assertState(t, m, StateTestingRecovery)
+	m.Tick(ctx) // failure 2
+	assertState(t, m, StateTestingRecovery)
+	if actions.rotateCalls != 0 {
+		t.Fatalf("rotateCalls = %d before the 3rd failure, want 0", actions.rotateCalls)
+	}
+	m.Tick(ctx) // failure 3 -> rotate, switch to the new candidate, cooldown
+	if actions.rotateCalls != 1 {
+		t.Fatalf("rotateCalls = %d, want 1", actions.rotateCalls)
+	}
+	if len(actions.switchCalls) != 1 || actions.switchCalls[0] != RoleBackup {
+		t.Fatalf("switchCalls = %v, want [RoleBackup]", actions.switchCalls)
+	}
+	assertState(t, m, StateCooldown)
+	m.Tick(ctx)
+	assertState(t, m, StateCooldown)
+	m.Tick(ctx)
+	assertState(t, m, StateTestingRecovery)
+}
+
+// TestMachine_TestingRecovery_BackupFailureExhaustedPoolJustKeepsRetrying
+// covers the other branch: no untried candidate left in the pool. Nothing
+// dramatic happens -- it just keeps retrying the same (still broken)
+// connection on the normal cadence, exactly like before this feature
+// existed, rather than looping forever calling SwitchLiveTo on a pool
+// that's already exhausted.
+func TestMachine_TestingRecovery_BackupFailureExhaustedPoolJustKeepsRetrying(t *testing.T) {
+	actions := &fakeActions{rotateResult: false}
+	m := NewMachine(testConfig(), actions, newFakeClock(), StateTestingRecovery)
+	ctx := context.Background()
+
+	actions.liveErr = errProbe
+	m.Tick(ctx)
+	m.Tick(ctx)
+	m.Tick(ctx) // 3rd failure -> tries to rotate, pool is exhausted
+
+	if actions.rotateCalls != 1 {
+		t.Fatalf("rotateCalls = %d, want 1", actions.rotateCalls)
+	}
+	if len(actions.switchCalls) != 0 {
+		t.Fatalf("switchCalls = %v, want none -- an exhausted pool must not call SwitchLiveTo", actions.switchCalls)
+	}
+	assertState(t, m, StateTestingRecovery) // stayed put, no cooldown detour
+
+	// The counter must have reset, not gotten stuck -- a 4th consecutive
+	// failure right after must not immediately try to rotate again.
+	m.Tick(ctx)
+	if actions.rotateCalls != 1 {
+		t.Fatalf("rotateCalls = %d after one more failure, want still 1 (counter should have reset)", actions.rotateCalls)
+	}
+}
+
+// TestMachine_TestingRecovery_BackupFlapResistance mirrors the existing
+// flap-resistance tests for the other counters: an intervening success
+// must reset the streak, not let failures accumulate across it.
+func TestMachine_TestingRecovery_BackupFlapResistance(t *testing.T) {
+	actions := &fakeActions{rotateResult: true}
+	m := NewMachine(testConfig(), actions, newFakeClock(), StateTestingRecovery)
+	ctx := context.Background()
+
+	actions.liveErr = errProbe
+	m.Tick(ctx) // failure 1
+	m.Tick(ctx) // failure 2
+	actions.liveErr = nil
+	actions.isolatedErr = errProbe // stay in TestingRecovery -- don't also trip the isolated-success path
+	m.Tick(ctx)                    // success -> resets backupFailures
+	actions.liveErr = errProbe
+	m.Tick(ctx) // failure 1 (again)
+	m.Tick(ctx) // failure 2 (again)
+
+	if actions.rotateCalls != 0 {
+		t.Fatalf("rotateCalls = %d, want 0 -- the intervening success should have reset the streak", actions.rotateCalls)
+	}
+	m.Tick(ctx) // failure 3 -> now rotates
+	if actions.rotateCalls != 1 {
+		t.Fatalf("rotateCalls = %d, want exactly 1", actions.rotateCalls)
+	}
+}
+
 func TestMachine_RollbackOnFailedRecoveryConfirmation(t *testing.T) {
 	actions := &fakeActions{}
 	clock := newFakeClock()
@@ -189,12 +292,12 @@ func TestMachine_RollbackOnFailedRecoveryConfirmation(t *testing.T) {
 	ctx := context.Background()
 
 	actions.isolatedErr = nil
-	actions.liveErr = errProbe // the post-switch confirmation will keep failing
 	m.Tick(ctx)
 	m.Tick(ctx)
 	m.Tick(ctx) // 3rd isolated success -> switch to primary, start confirming
 	assertState(t, m, StateConfirmingRecovery)
 
+	actions.liveErr = errProbe // the post-switch confirmation will keep failing
 	// Confirmation must fail FailuresRequired times in a row before rollback
 	// -- a freshly restarted xray gets a few ticks to come up.
 	m.Tick(ctx)

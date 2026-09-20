@@ -52,6 +52,75 @@ type realActions struct {
 	// the probes; Snapshot copies this) so it needs no lock, same as
 	// Daemon.transitions.
 	probes []ProbeResult
+
+	// backupOverride, when non-nil, is what SwitchLiveTo(RoleBackup) binds
+	// to instead of cfg.Backup() -- an ephemeral substitute picked by
+	// RotateBackupCandidate when the *configured* backup itself goes
+	// unhealthy while live and a subscription's pool has an untried
+	// alternative. Never persisted to config: cleared back to nil the
+	// moment SwitchLiveTo(RolePrimary) succeeds (the "both configured
+	// slots are down" episode is over) or an operator/config action
+	// takes explicit control (Daemon.ForceSwitch, Daemon.ReloadConfig) --
+	// so a transient substitution can never silently outlive the failure
+	// that caused it, or fight a deliberate choice the operator just made.
+	backupOverride *config.Profile
+	// backupTried remembers which profiles (by ImportKey) have already
+	// been tried as the ephemeral backup this episode, so
+	// RotateBackupCandidate doesn't immediately retry one that just
+	// failed, and can report the pool exhausted once every candidate has
+	// had a turn. Reset alongside backupOverride.
+	backupTried map[string]bool
+	// OnBackupRotate, if set, is called by RotateBackupCandidate whenever
+	// it changes the backup candidate (from, to both non-nil) or gives up
+	// because the pool is exhausted (to == nil). Wired by Daemon to emit
+	// a chat-facing event -- realActions itself stays free of UX
+	// concerns, same as everywhere else in this file.
+	OnBackupRotate func(from, to *config.Profile)
+}
+
+// currentBackup is whichever profile RoleBackup resolves to right now:
+// the ephemeral pool override if one is active, otherwise the configured
+// backup.
+func (a *realActions) currentBackup() *config.Profile {
+	if a.backupOverride != nil {
+		return a.backupOverride
+	}
+	return a.cfg.Backup()
+}
+
+// RotateBackupCandidate implements Actions.RotateBackupCandidate --
+// called when the live connection currently playing backup has failed
+// its own health checks. Picks the first profile in cfg.Profiles (a
+// subscription's full pool, or just primary+backup for a two-link setup)
+// that isn't primary and hasn't been tried as backup yet this episode.
+func (a *realActions) RotateBackupCandidate() bool {
+	if a.backupTried == nil {
+		a.backupTried = map[string]bool{}
+	}
+	current := a.currentBackup()
+	if current != nil {
+		a.backupTried[current.ImportKey()] = true
+	}
+	var primaryKey string
+	if p := a.cfg.Primary(); p != nil {
+		primaryKey = p.ImportKey()
+	}
+	for i := range a.cfg.Profiles {
+		p := &a.cfg.Profiles[i]
+		key := p.ImportKey()
+		if key == primaryKey || a.backupTried[key] {
+			continue
+		}
+		a.backupOverride = p
+		if a.OnBackupRotate != nil {
+			a.OnBackupRotate(current, p)
+		}
+		return true
+	}
+	if a.OnBackupRotate != nil {
+		a.OnBackupRotate(current, nil)
+	}
+	return false
 }
 
 func newRealActions(paths Paths, cfg *config.Config) *realActions {
@@ -252,7 +321,14 @@ func (a *realActions) stopProdNaive() {
 func (a *realActions) SwitchLiveTo(ctx context.Context, role Role) error {
 	profile := a.cfg.Primary()
 	if role == RoleBackup {
-		profile = a.cfg.Backup()
+		profile = a.currentBackup()
+	} else {
+		// Back on primary -- whatever "both configured slots are down"
+		// episode RotateBackupCandidate might have been mid-way through
+		// is over; the next time backup is needed it should start fresh
+		// from the actually-configured one, not a stale substitute.
+		a.backupOverride = nil
+		a.backupTried = nil
 	}
 	if profile == nil {
 		return fmt.Errorf("no %s profile configured", role)
@@ -433,6 +509,13 @@ const (
 	// been restarted too many times in a short window. Detail carries the
 	// count/window.
 	EventXrayCrashLoop
+	// EventBackupRotated: the ephemeral pool fallback (see realActions'
+	// own doc comment) changed which profile plays backup because the
+	// previous one failed its own live health check, or gave up because
+	// every pool candidate has already been tried this episode. Detail
+	// carries a ready Russian description either way, same as
+	// EventXrayCrashLoop.
+	EventBackupRotated
 )
 
 // Event is a noteworthy daemon occurrence, for out-of-band notification
@@ -499,6 +582,7 @@ func NewDaemon(paths Paths, cfg *config.Config) *Daemon {
 	// lock.
 	machine.onTransition = d.recordTransition
 	actions.prod.OnRestart = d.noteXrayCrash
+	actions.OnBackupRotate = d.noteBackupRotate
 	return d
 }
 
@@ -529,6 +613,25 @@ func (d *Daemon) noteXrayCrash() {
 			Detail: fmt.Sprintf("%d раз за %s", len(d.crashes), shortWindow(crashLoopWindow)),
 		})
 	}
+}
+
+// noteBackupRotate emits a chat-facing event whenever the ephemeral pool
+// fallback (see realActions.RotateBackupCandidate) changes which profile
+// plays backup, or runs out of untried candidates. Called directly from
+// RotateBackupCandidate, itself only ever called from Tick -- so, like
+// recordTransition, this runs on the Run goroutine and needs no lock.
+func (d *Daemon) noteBackupRotate(from, to *config.Profile) {
+	fromName := "backup"
+	if from != nil {
+		fromName = from.Remark
+	}
+	if to == nil {
+		d.emit(Event{At: time.Now(), Kind: EventBackupRotated,
+			Detail: fmt.Sprintf("%s недоступен, весь пул подписки уже испробован — остаюсь на нём", fromName)})
+		return
+	}
+	d.emit(Event{At: time.Now(), Kind: EventBackupRotated,
+		Detail: fmt.Sprintf("%s недоступен, пробую %s из пула подписки", fromName, to.Remark)})
 }
 
 func shortWindow(d time.Duration) string {
@@ -633,6 +736,13 @@ func (d *Daemon) State(ctx context.Context) (State, bool) {
 func (d *Daemon) ForceSwitch(ctx context.Context, role Role) error {
 	var switchErr error
 	ran := d.do(ctx, func(ctx context.Context) {
+		if role == RoleBackup {
+			// An explicit operator "run on backup now" always means the
+			// actually-configured backup, never a leftover pool
+			// substitute from an earlier automatic episode.
+			d.actions.backupOverride = nil
+			d.actions.backupTried = nil
+		}
 		if switchErr = d.actions.SwitchLiveTo(ctx, role); switchErr != nil {
 			return
 		}
@@ -688,6 +798,12 @@ func (d *Daemon) ReloadConfig(ctx context.Context, fresh *config.Config) bool {
 		*d.cfg = *fresh
 		d.actions.socks = fmt.Sprintf("127.0.0.1:%d", d.cfg.Failover.SOCKSPort)
 		d.machine.cfg = failoverConfig(d.cfg.Failover)
+		// Fresh config always wins over an ephemeral pool substitute --
+		// if the operator just repointed backup (🔗 Источники, sub_set*),
+		// that new choice should apply immediately, not the profile a
+		// prior "both slots down" episode happened to land on.
+		d.actions.backupOverride = nil
+		d.actions.backupTried = nil
 		if d.cfg.Primary() != nil {
 			_ = d.actions.SwitchLiveTo(ctx, d.actions.liveRole)
 		}

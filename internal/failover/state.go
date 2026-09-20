@@ -1,7 +1,11 @@
 // Package failover implements the primary/backup VLESS failover state
 // machine: fail away from primary on 3 consecutive live-probe failures,
 // and fail back only after 3 consecutive successes against an isolated,
-// zero-risk pretest instance plus a live confirmation check.
+// zero-risk pretest instance plus a live confirmation check. While
+// backup itself is carrying traffic, its own live health is checked too
+// (not just primary's recovery) -- FailuresRequired consecutive failures
+// there rotate to a different pool candidate instead of just sitting on
+// a dead connection, see realActions.RotateBackupCandidate.
 package failover
 
 import (
@@ -36,8 +40,10 @@ const (
 	// RollbackBackoffSeconds timer must elapse before recovery testing
 	// (re)starts.
 	StateActiveBackup
-	// StateTestingRecovery: backup is live; an isolated throwaway
-	// instance is probing primary in the background.
+	// StateTestingRecovery: backup is live -- its own health is probed
+	// every tick, same as primary's while ActivePrimary -- and an
+	// isolated throwaway instance is separately probing primary's
+	// recovery in the background.
 	StateTestingRecovery
 	// StateCooldown: transient, entered right after any switch; no new
 	// switch is evaluated until it elapses.
@@ -82,6 +88,17 @@ type Actions interface {
 	StartIsolatedPretest(ctx context.Context) error
 	// StopIsolatedPretest tears the throwaway instance down.
 	StopIsolatedPretest(ctx context.Context) error
+	// RotateBackupCandidate is called when the live backup connection
+	// itself has failed FailuresRequired consecutive checks while backup
+	// is the one carrying traffic -- picks a different profile from the
+	// configured pool that hasn't been tried yet this episode, for the
+	// next SwitchLiveTo(RoleBackup) to use instead of the configured
+	// backup. Ephemeral: never persisted, and reset the moment primary
+	// recovers or the operator/config takes explicit action (see
+	// realActions' own doc comment). Returns false once every pool
+	// candidate has already been tried, so the caller knows there's
+	// nothing left to switch to.
+	RotateBackupCandidate() bool
 }
 
 // Clock abstracts time so tests can control it deterministically.
@@ -116,6 +133,7 @@ type Machine struct {
 
 	consecutiveFailures int       // ActivePrimary: consecutive live-probe failures
 	isolatedSuccesses   int       // TestingRecovery: consecutive isolated-probe successes
+	backupFailures      int       // TestingRecovery: consecutive live-probe failures against whatever's currently playing backup
 	confirmFailures     int       // ConfirmingRecovery: consecutive live-probe failures since the recovery switch
 	cooldownRemaining   int       // Cooldown: ticks left
 	cooldownNext        State     // Cooldown: state to enter once it elapses
@@ -180,6 +198,31 @@ func (m *Machine) tickActiveBackup(ctx context.Context) {
 }
 
 func (m *Machine) tickTestingRecovery(ctx context.Context) {
+	// Backup is what's actually carrying traffic right now -- check it's
+	// still alive before (and independent of) whether primary has
+	// recovered. Unlike ActivePrimary's equivalent check, a failure here
+	// doesn't just count and wait: once it hits FailuresRequired, there's
+	// somewhere useful to go (a different pool candidate, if one hasn't
+	// been tried yet this episode) rather than only ever retrying the
+	// same connection that just failed.
+	if err := m.actions.ProbeLive(ctx); err != nil {
+		m.backupFailures++
+		if m.backupFailures >= m.cfg.FailuresRequired {
+			m.backupFailures = 0
+			if m.actions.RotateBackupCandidate() {
+				_ = m.actions.SwitchLiveTo(ctx, RoleBackup)
+				m.enterCooldown(StateTestingRecovery)
+			}
+			// Pool exhausted (or nothing to rotate to): RotateBackupCandidate
+			// already reported that on its own (see realActions.
+			// OnBackupRotate) -- nothing left to do here but keep retrying
+			// the same still-broken connection on the normal cadence,
+			// exactly like before this rotation existed.
+		}
+		return
+	}
+	m.backupFailures = 0
+
 	if err := m.actions.ProbeIsolated(ctx); err != nil {
 		m.isolatedSuccesses = 0
 		return

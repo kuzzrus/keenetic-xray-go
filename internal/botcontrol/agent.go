@@ -120,12 +120,20 @@ func Run(ctx context.Context, opts AgentOptions, handle Handler) error {
 		runBounded(ctx, cmdTimeout, func(c context.Context) { sendHeartbeat(c, client, opts) }) // one right away so the card isn't blank
 	}
 
+	// unposted is a result pollOnce computed but couldn't deliver last
+	// time (the command already ran -- re-running it is not an option,
+	// only re-trying the delivery is). Single-slot, not a queue: Run's
+	// own select loop only ever has one pollOnce in flight at a time, so
+	// there's never more than one outcome waiting to be confirmed
+	// delivered (BOT-01).
+	var unposted *Result
+
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			runBounded(ctx, cmdTimeout, func(c context.Context) { pollOnce(c, client, opts, handle) })
+			runBounded(ctx, cmdTimeout, func(c context.Context) { unposted = pollOnce(c, client, opts, handle, unposted) })
 		case <-hbTicker.C:
 			if opts.StatusFunc != nil {
 				runBounded(ctx, cmdTimeout, func(c context.Context) { sendHeartbeat(c, client, opts) })
@@ -171,10 +179,32 @@ func postEvent(ctx context.Context, client *http.Client, opts AgentOptions, ev E
 	_ = doJSON(ctx, client, opts, "/agent/event", body, nil)
 }
 
-func pollOnce(ctx context.Context, client *http.Client, opts AgentOptions, handle Handler) {
+// pollOnce delivers a still-unposted result (if unposted is non-nil, from
+// a previous call's failed postResult) before asking for new work, then
+// executes at most one newly-dequeued command. It returns the result
+// that still needs delivering on the *next* call -- nil once everything
+// in flight has actually reached the control server.
+//
+// Retrying the delivery, not the command: a command that already ran
+// must never run a second time just because its result got lost in
+// transit (BOT-01) -- re-sending the same already-computed Result is
+// always safe, re-executing an arbitrary command (self-update, a daemon
+// restart, ...) usually isn't.
+func pollOnce(ctx context.Context, client *http.Client, opts AgentOptions, handle Handler, unposted *Result) *Result {
+	if unposted != nil {
+		if err := postResult(ctx, client, opts, *unposted); err != nil {
+			return unposted // still not delivered -- retry again next tick
+		}
+		// Delivered. New work waits for the next regular tick rather than
+		// also polling in this same call -- keeps each call to one round
+		// trip, well inside runBounded's timeout budget, and PollInterval
+		// is short enough that the wait costs nothing worth avoiding it for.
+		return nil
+	}
+
 	cmd, err := poll(ctx, client, opts)
 	if err != nil || cmd == nil {
-		return
+		return nil
 	}
 
 	output, err := handle.Handle(ctx, *cmd)
@@ -182,7 +212,10 @@ func pollOnce(ctx context.Context, client *http.Client, opts AgentOptions, handl
 	if err != nil {
 		result.Err = err.Error()
 	}
-	_ = postResult(ctx, client, opts, result) // best-effort; the next poll proceeds regardless
+	if perr := postResult(ctx, client, opts, result); perr != nil {
+		return &result
+	}
+	return nil
 }
 
 func poll(ctx context.Context, client *http.Client, opts AgentOptions) (*Command, error) {

@@ -191,26 +191,36 @@ func installVendored(ctx context.Context, opts Options, dest string, smoke func(
 		return fmt.Errorf("checksum for %s: %w", name, err)
 	}
 
-	tmp := dest + ".keenetic-xray.tmp"
-	_ = os.Remove(tmp)
+	// Directory first, then a guaranteed-unique temp name inside it --
+	// INST-02: the old fixed `dest + ".keenetic-xray.tmp"` let two
+	// concurrent ensure/update calls for the same dest (a second
+	// install.sh run before the first finishes, a manual CLI invocation
+	// racing the daemon's own reconcile) corrupt each other's download by
+	// writing the same file; and MkdirAll used to run *after* the
+	// download attempt, so a not-yet-existing destination directory made
+	// the very first write fail before MkdirAll ever got a chance to
+	// create it.
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return err
+	}
+	tmpFile, err := os.CreateTemp(filepath.Dir(dest), filepath.Base(dest)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := tmpFile.Name()
+	_ = tmpFile.Close()  // downloadVerified reopens it -- CreateTemp only reserves the unique name
+	defer os.Remove(tmp) // no-op once the rename below succeeds; covers every early return below in one place
+
 	if err := downloadVerified(ctx, hc, assetURL, tmp, wantSum); err != nil {
-		_ = os.Remove(tmp)
 		return err
 	}
 	if err := os.Chmod(tmp, 0o755); err != nil {
-		_ = os.Remove(tmp)
 		return err
 	}
 	if err := smoke(tmp); err != nil {
-		_ = os.Remove(tmp)
 		return fmt.Errorf("%s downloaded and verified but does not run (packed binary may be incompatible with this router): %w", name, err)
 	}
-	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
 	if err := os.Rename(tmp, dest); err != nil {
-		_ = os.Remove(tmp)
 		return err
 	}
 	return nil

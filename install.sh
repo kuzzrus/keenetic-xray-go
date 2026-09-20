@@ -39,13 +39,18 @@
 set -eu
 
 REPO="kuzzrus/keenetic-xray-go"
-TMP_IPK="/opt/keenetic-xray-install.ipk"
-# A fixed path, not mktemp: it needs to live on /opt (the Entware
-# overlay, real flash) rather than a router's often tiny /tmp tmpfs,
-# which a several-MB download could exhaust. Cleaned up on every exit
-# path -- set -e above means a failed `opkg install` would otherwise
-# skip a plain trailing `rm`, leaving it behind on the router's limited
-# flash (same reasoning as packaging/build-ipk.sh's own trap).
+# Suffixed with this shell's own PID ($$, POSIX-guaranteed, no mktemp
+# dependency needed) rather than a bare fixed name: a second install.sh
+# run starting before a first one finishes (a manual re-run racing the
+# bot's own self_update, or two terminals) used to download into and
+# `rm -f` the very same path, corrupting whichever's `opkg install` lost
+# the race. Still on /opt (the Entware overlay, real flash), not /tmp --
+# a router's /tmp tmpfs is often too small for a several-MB download.
+TMP_IPK="/opt/keenetic-xray-install.$$.ipk"
+# Cleaned up on every exit path -- set -e above means a failed `opkg
+# install` would otherwise skip a plain trailing `rm`, leaving it behind
+# on the router's limited flash (same reasoning as packaging/build-ipk.sh's
+# own trap). Only ever removes this invocation's own file.
 trap 'rm -f "$TMP_IPK"' EXIT
 
 for arg in "$@"; do

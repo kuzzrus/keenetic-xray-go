@@ -11,7 +11,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // fakeRelease serves a vendored-asset layout: naive-<version>-linux-<goarch>
@@ -97,6 +99,98 @@ func TestEnsure_InstallsVendored(t *testing.T) {
 	}
 }
 
+// TestEnsure_InstallsVendored_CreatesDestDirIfMissing is the regression
+// test for INST-02's ordering half: MkdirAll used to run *after* the
+// download attempt, so installing to a not-yet-existing directory (a
+// fresh /opt/sbin, say) failed the very first write before MkdirAll ever
+// got a chance to create it.
+func TestEnsure_InstallsVendored_CreatesDestDirIfMissing(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "not-yet-created", "nested", "naive")
+	base, _ := fakeRelease(t, PinnedVersion, "PACKED-NAIVE-BINARY")
+
+	src, err := Ensure(context.Background(), Options{
+		Dest:    dest,
+		BaseURL: base,
+		smoke: func(bin string) error {
+			if _, statErr := os.Stat(bin); statErr != nil {
+				return statErr
+			}
+			return nil
+		},
+	})
+	if err != nil || src != "vendored" {
+		t.Fatalf("Ensure = (%q, %v), want (vendored, nil) even though the destination directory didn't exist yet", src, err)
+	}
+	if got, rerr := os.ReadFile(dest); rerr != nil || string(got) != "PACKED-NAIVE-BINARY" {
+		t.Fatalf("installed file = %q (%v)", got, rerr)
+	}
+}
+
+// TestEnsure_ConcurrentForceInstalls_DoNotCorruptEachOther is the
+// regression test for INST-02's collision half: the old fixed
+// `dest + ".keenetic-xray.tmp"` name meant two concurrent installs for
+// the same dest (a second install.sh run before the first finishes, a
+// manual CLI invocation racing the daemon's own reconcile) wrote through
+// the *same* temp file, risking a torn/corrupted result for whichever
+// renamed last. Both calls use Force so neither short-circuits on the
+// other's not-yet-written dest; the asset handler sleeps briefly so the
+// two downloads genuinely overlap rather than happening to run back to
+// back.
+func TestEnsure_ConcurrentForceInstalls_DoNotCorruptEachOther(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "naive")
+	assetName := fmt.Sprintf("naive-%s-linux-%s", PinnedVersion, runtime.GOARCH)
+	payload := "PACKED-NAIVE-BINARY-CONTENT-FOR-CONCURRENCY-TEST"
+	sum := sha256.Sum256([]byte(payload))
+	sha := fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), assetName)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/"+PinnedVersion+"/"+assetName, func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(50 * time.Millisecond) // hold both downloads open long enough to genuinely overlap
+		fmt.Fprint(w, payload)
+	})
+	mux.HandleFunc("/"+PinnedVersion+"/"+assetName+".sha256", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, sha)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	opts := Options{
+		Dest: dest, BaseURL: srv.URL, Force: true,
+		smoke: func(bin string) error {
+			if _, statErr := os.Stat(bin); statErr != nil {
+				return statErr
+			}
+			return nil
+		},
+	}
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[i] = Ensure(context.Background(), opts)
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("concurrent Ensure call %d: %v", i, err)
+		}
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("reading final dest: %v", err)
+	}
+	if string(got) != payload {
+		t.Errorf("final installed content = %q, want the complete payload %q -- concurrent installs must not share a temp file", got, payload)
+	}
+}
+
 func TestEnsure_ForceReinstallsOverRunningBinary(t *testing.T) {
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "naive")
@@ -167,8 +261,8 @@ func TestEnsure_ChecksumMismatchErrorsAndCleansUp(t *testing.T) {
 	if _, statErr := os.Stat(dest); !os.IsNotExist(statErr) {
 		t.Error("dest should not exist after a failed install")
 	}
-	if _, statErr := os.Stat(dest + ".keenetic-xray.tmp"); !os.IsNotExist(statErr) {
-		t.Error("temp file left behind after a failed install")
+	if leftover, _ := filepath.Glob(filepath.Join(dir, filepath.Base(dest)+".*.tmp")); len(leftover) != 0 {
+		t.Errorf("temp file(s) left behind after a failed install: %v", leftover)
 	}
 }
 

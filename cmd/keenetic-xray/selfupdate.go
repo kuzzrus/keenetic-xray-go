@@ -23,18 +23,29 @@ import (
 // use (see cmd/keenetic-xray/adaptiveroute.go's adaptiveRouteHealthCheck
 // for the identical pattern). A single attempt per call -- watchPostUpdate
 // itself is what retries, on its own postUpdatePoll cadence.
+//
+// The Failover fields cfg points at are read once, here, synchronously --
+// not from inside the returned closure, which watchPostUpdate calls
+// repeatedly on its own goroutine over the post-update window (up to
+// postUpdateWindow). cfg is the same *config.Config the daemon holds, so
+// re-reading it on every probe would race a concurrent bot-triggered
+// mutation or Daemon.ReloadConfig (CFG-01); this closure only ever cares
+// about the config as of the moment the self-update that triggered it
+// completed, so a one-time snapshot is the correct behavior, not just the
+// safe one.
 func postUpdateProbe(cfg *config.Config) func(context.Context) error {
+	opts := xrayctl.ProbeOptions{
+		SOCKSAddr:    fmt.Sprintf("127.0.0.1:%d", cfg.Failover.SOCKSPort),
+		URL:          cfg.Failover.HealthCheckURL,
+		FallbackURLs: cfg.Failover.HealthCheckFallbackURLs,
+		Retries:      cfg.Failover.CheckRetries,
+		RetryDelay:   time.Duration(cfg.Failover.CheckRetryDelaySeconds) * time.Second,
+		Timeout:      8 * time.Second,
+	}
 	return func(ctx context.Context) error {
 		pctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 		defer cancel()
-		return xrayctl.Probe(pctx, xrayctl.ProbeOptions{
-			SOCKSAddr:    fmt.Sprintf("127.0.0.1:%d", cfg.Failover.SOCKSPort),
-			URL:          cfg.Failover.HealthCheckURL,
-			FallbackURLs: cfg.Failover.HealthCheckFallbackURLs,
-			Retries:      cfg.Failover.CheckRetries,
-			RetryDelay:   time.Duration(cfg.Failover.CheckRetryDelaySeconds) * time.Second,
-			Timeout:      8 * time.Second,
-		})
+		return xrayctl.Probe(pctx, opts)
 	}
 }
 

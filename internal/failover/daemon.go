@@ -760,11 +760,16 @@ func (d *Daemon) ForceSwitch(ctx context.Context, role Role) error {
 }
 
 // ReloadConfig copies fresh's fields into the daemon's live config in
-// place -- the *same pointer* every consumer already holds (Daemon,
-// realActions, and, when the bot-control agent is enabled, RouterHandler
-// all share one *config.Config, wired once in cmd/keenetic-xray's
-// cmdDaemon), so nothing needs telling separately. Two derived fields
-// that are otherwise only computed at startup get refreshed too:
+// place. fresh is always an independent object -- never the same pointer
+// as d.cfg -- whether it came from a CLI command's own config.Load after a
+// SIGHUP, or (CFG-01) from RouterHandler's own independently-loaded copy
+// via rebindXray. RouterHandler used to share d.cfg's literal pointer, so
+// its direct field writes (setPorts and ~25 others) raced this method's
+// *d.cfg = *fresh on this goroutine -- a real data race, go test -race
+// catchable. De-aliasing them was the fix; this method's own shallow-copy
+// contract didn't need to change, since it was always written to accept
+// an independent fresh in the first place. Two derived fields that are
+// otherwise only computed at startup get refreshed too:
 // realActions.socks (the SOCKS address ProbeLive/ProbeIsolated dial,
 // cached from Failover.SOCKSPort) and Machine's own copy of the tunable
 // failure/recovery counts. Then, as long as a primary is configured

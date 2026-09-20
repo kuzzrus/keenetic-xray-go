@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/applog"
@@ -24,18 +25,50 @@ import (
 	"github.com/kuzzrus/keenetic-xray-go/internal/xraycore"
 )
 
-// RouterHandler implements Handler against a live failover.Daemon and
-// the *config.Config it shares with it (both run in the same process --
-// see the `daemon` subcommand). Mutating commands persist to ConfigPath
-// so changes survive a restart; read-only commands don't write anything.
-// Every command here is a thin wrapper over the same internal/config,
-// internal/subscription, and internal/failover calls the CLI itself
-// uses -- this is deliberately not a second implementation of any of
-// that logic.
+// RouterHandler implements Handler against a live failover.Daemon (both
+// run in the same process -- see the `daemon` subcommand). Mutating
+// commands persist to ConfigPath so changes survive a restart; read-only
+// commands don't write anything. Every command here is a thin wrapper
+// over the same internal/config, internal/subscription, and
+// internal/failover calls the CLI itself uses -- this is deliberately not
+// a second implementation of any of that logic.
+//
+// Config is this handler's own independently-loaded *config.Config --
+// CFG-01: it used to be the literal same pointer as Daemon's own cfg
+// (cmd/keenetic-xray's cmdDaemon loaded config once and handed the one
+// pointer to both), which meant every direct field write here (setPorts
+// and ~25 others across this file and adaptiveroute.go/dns.go/l7sni.go/
+// routes.go/routes_preset.go) raced Daemon.ReloadConfig's *d.cfg = *fresh
+// on the daemon's own goroutine -- a real, go-test-race-catchable data
+// race, since Handle only ever runs on this handler's own goroutine
+// (agent.go's Run loop) while ReloadConfig runs on the daemon's Run
+// goroutine. De-aliasing them is race-free for free: nothing in this file
+// needs to change, since Config is now private to Handle's one goroutine.
+// The one thing that de-aliasing costs is that a CLI-triggered reload
+// (SSH + SIGHUP) no longer updates this copy for free -- see
+// ConfigReload below for how that gap is closed.
 type RouterHandler struct {
 	Daemon     *failover.Daemon
 	Config     *config.Config
 	ConfigPath string
+
+	// ConfigReload delivers an independently-loaded *config.Config
+	// whenever cmd/keenetic-xray's SIGHUP handler applies a config change
+	// this handler didn't originate itself (a setup/subscription/proxy0/
+	// failover-set CLI command run over SSH while the bot is also live).
+	// Handle adopts it (Swap, not Load+Store, to avoid a second SIGHUP
+	// landing in the gap between the two) as its very first step, on its
+	// own goroutine -- so the next command dispatched after such a
+	// reload sees it. Deliberately not the same *config.Config object
+	// ReloadConfig itself consumed: ReloadConfig's *d.cfg = *fresh is a
+	// shallow copy, so reusing fresh here would leave d.cfg and this
+	// handler's adopted copy sharing sub-object memory (the same
+	// Profiles backing array, the same *Subscription) -- a narrower
+	// version of the exact race de-aliasing Config was meant to remove.
+	// Zero value is a no-op: never Store()d -> the bot simply never
+	// learns of a CLI-only change until its own next handler-triggered
+	// Save overwrites the file anyway.
+	ConfigReload atomic.Pointer[config.Config]
 
 	// XrayBinary and OptPath enrich status/doctor with the xray-core
 	// version and free-disk lines. Empty -> that line is skipped. Set by
@@ -124,12 +157,25 @@ const defaultInstallURL = "https://raw.githubusercontent.com/kuzzrus/keenetic-xr
 // output and any error before they leave the router for the control
 // server (and from there, the chat).
 func (h *RouterHandler) Handle(ctx context.Context, cmd Command) (string, error) {
+	h.adoptReloadedConfig()
 	out, err := h.handle(ctx, cmd)
 	out = h.scrubSecrets(out)
 	if err != nil {
 		err = errors.New(h.scrubSecrets(err.Error()))
 	}
 	return out, err
+}
+
+// adoptReloadedConfig picks up a config change from the CLI/SIGHUP path
+// (see ConfigReload's own doc comment), if one arrived since the last
+// command. A no-op the overwhelming majority of the time (SIGHUP-triggered
+// reloads are rare -- an operator running a CLI command over SSH while
+// the bot is also live), so an unconditional Swap on every Handle call is
+// cheap enough not to need a fast-path check first.
+func (h *RouterHandler) adoptReloadedConfig() {
+	if fresh := h.ConfigReload.Swap(nil); fresh != nil {
+		h.Config = fresh
+	}
 }
 
 // scrubSecrets removes values that must never reach the chat: right now
@@ -654,9 +700,9 @@ func (h *RouterHandler) rebindXray(ctx context.Context) bool {
 	if h.Daemon == nil {
 		return false
 	}
-	// h.Config is the exact *config.Config the Daemon already holds
-	// (wired once in cmd/keenetic-xray's cmdDaemon), so this reloads the
-	// daemon's own state from itself -- refreshing the two fields only
+	// h.Config is this handler's own independently-loaded copy (CFG-01 --
+	// see its own doc comment), so this is a real field-by-field copy
+	// into the daemon's separate object, refreshing the two fields only
 	// computed at startup (realActions.socks, Machine's tunable counts)
 	// in addition to re-applying the current live role, unlike a bare
 	// ForceSwitch. Matters here specifically because a bot action can
@@ -1104,11 +1150,10 @@ func (h *RouterHandler) setPorts(ctx context.Context, args []string) (string, er
 	h.Config.Failover.HTTPPort = httpPort
 	// Roll back on a Save failure -- most commonly now Config.Validate's
 	// own port-conflict check (CFG-02: e.g. HTTP landing on the naive
-	// sidecar's port), not just a disk error. h.Config is the same
-	// shared pointer the running daemon reads (CFG-01), so leaving the
-	// rejected values in memory here -- even though they were never
-	// written to disk -- could still leak into what the daemon actually
-	// uses next.
+	// sidecar's port), not just a disk error. Leaving the rejected values
+	// in memory here, even though they were never written to disk, would
+	// leave this handler's own subsequent reads (e.g. a later status
+	// command) showing ports that were never actually accepted.
 	if err := h.Config.Save(h.ConfigPath); err != nil {
 		h.Config.Failover.SOCKSPort, h.Config.Failover.HTTPPort = prevSOCKS, prevHTTP
 		return "", err

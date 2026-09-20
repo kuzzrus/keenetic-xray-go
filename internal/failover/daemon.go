@@ -476,6 +476,17 @@ type Daemon struct {
 	cfg      *config.Config
 	commands chan daemonCommand
 
+	// ticker is the health-check ticker Run creates in its full
+	// (primary+backup) loop -- nil in single-profile mode, before Run
+	// reaches that branch, or for the process's whole life if it never
+	// does. FAIL-01: ReloadConfig resets it when CheckIntervalSeconds
+	// changed; without this, a live-reloaded interval updated
+	// d.machine.cfg but the ticker itself kept firing on the old
+	// schedule until a process restart. Set only in Run, Reset only from
+	// a do()-routed closure -- both always on Run's own goroutine, same
+	// as transitions below, so this needs no lock.
+	ticker *time.Ticker
+
 	startedAt   time.Time
 	transitions []Transition // bounded history, oldest first; appended on the Run goroutine only
 	events      chan Event   // buffered; non-blocking sends, dropped if full
@@ -803,6 +814,14 @@ func (d *Daemon) ReloadConfig(ctx context.Context, fresh *config.Config) bool {
 		*d.cfg = *fresh
 		d.actions.socks = fmt.Sprintf("127.0.0.1:%d", d.cfg.Failover.SOCKSPort)
 		d.machine.cfg = failoverConfig(d.cfg.Failover)
+		// FAIL-01: d.machine.cfg above already picked up a changed
+		// CheckIntervalSeconds, but the health-check ticker Run created
+		// at startup keeps firing on its old schedule until reset --
+		// nil whenever Run hasn't reached its full (primary+backup) loop
+		// yet, or never will (single-profile mode has no ticker at all).
+		if d.ticker != nil {
+			d.ticker.Reset(d.actions.probeTimeout())
+		}
 		// Fresh config always wins over an ephemeral pool substitute --
 		// if the operator just repointed backup (🔗 Источники, sub_set*),
 		// that new choice should apply immediately, not the profile a
@@ -835,8 +854,28 @@ func (d *Daemon) ReloadConfig(ctx context.Context, fresh *config.Config) bool {
 func (d *Daemon) Run(ctx context.Context) error {
 	if d.cfg.Primary() == nil {
 		fmt.Println("failover: no primary profile configured yet -- run `keenetic-xray setup`, then restart this daemon")
-		<-ctx.Done()
-		return ctx.Err()
+		// FAIL-01: still serve do()-routed commands here instead of a bare
+		// <-ctx.Done() -- Snapshot/ForceSwitch/ReloadConfig used to hang
+		// until the caller's own timeout whenever they arrived before a
+		// primary was configured (rebindXray already has a
+		// restartDaemonDetached fallback for exactly this gap, so it was
+		// needless latency, not a true deadlock). This is also what lets
+		// a ReloadConfig that brings in a primary for the first time
+		// actually call SwitchLiveTo (its own existing `if
+		// d.cfg.Primary() != nil` branch) and start production right
+		// away, rather than only taking effect after a manual restart --
+		// still without the full ticker/failover loop below, which is
+		// the documented, still-accurate "needs a restart" limitation for
+		// the rest of this function's behavior.
+		for {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case cmd := <-d.commands:
+				cmd.fn(ctx)
+				close(cmd.done)
+			}
+		}
 	}
 
 	if err := d.actions.SwitchLiveTo(ctx, RolePrimary); err != nil {
@@ -866,7 +905,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 
 	ticker := time.NewTicker(d.actions.probeTimeout())
-	defer ticker.Stop()
+	d.ticker = ticker
+	defer func() { d.ticker = nil; ticker.Stop() }()
 
 	for {
 		select {

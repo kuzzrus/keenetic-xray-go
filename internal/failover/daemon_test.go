@@ -73,6 +73,11 @@ func TestMain(m *testing.M) {
 // init.d's post-start "is it still running" check report failure and
 // the whole opkg installation register as failed (confirmed on real
 // hardware). It must instead idle until ctx is cancelled.
+//
+// FAIL-01: while idling here, Run must still service do()-routed
+// commands (Snapshot/ForceSwitch/ReloadConfig) -- the old code's bare
+// <-ctx.Done() didn't read d.commands at all, so any such call hung
+// until the caller's own timeout instead of returning promptly.
 func TestDaemon_Run_IdlesWithoutProfiles(t *testing.T) {
 	d := NewDaemon(Paths{}, config.Default()) // no profiles at all
 
@@ -87,6 +92,12 @@ func TestDaemon_Run_IdlesWithoutProfiles(t *testing.T) {
 	case err := <-runErr:
 		t.Fatalf("Run returned early (%v) instead of idling without a primary configured", err)
 	case <-time.After(100 * time.Millisecond):
+	}
+
+	snapCtx, snapCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer snapCancel()
+	if _, ran := d.Snapshot(snapCtx); !ran {
+		t.Error("Snapshot did not run while Run was idling without a primary -- FAIL-01 regression")
 	}
 
 	cancel()
@@ -617,6 +628,75 @@ func TestDaemon_ReloadConfig(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "backup2.invalid") {
 		t.Errorf("production config = %s, want it regenerated for the reloaded backup profile (backup2.invalid)", data)
+	}
+
+	cancel()
+	select {
+	case <-runErr:
+	case <-time.After(20 * time.Second):
+		t.Fatal("Run did not return after ctx cancellation")
+	}
+}
+
+// TestDaemon_ReloadConfig_ResetsHealthCheckTicker is the regression test
+// for FAIL-01's second part: the health-check ticker Run creates at
+// startup used to keep firing on its original CheckIntervalSeconds
+// forever, even after ReloadConfig changed it -- d.machine.cfg picked up
+// the new value, but the real time.Ticker never did, until a process
+// restart. Starts on a slow interval (nothing should tick on its own
+// during setup), reloads to a fast one, and confirms a probe actually
+// happens soon after -- proof the ticker itself was reset, not just the
+// config it reads from.
+func TestDaemon_ReloadConfig_ResetsHealthCheckTicker(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.Profiles = []config.Profile{
+		{UUID: "p", Address: "primary.invalid", Port: 443, Network: "tcp", Security: "none", Encryption: "none", Remark: "primary"},
+		{UUID: "b", Address: "backup.invalid", Port: 443, Network: "tcp", Security: "none", Encryption: "none", Remark: "backup"},
+	}
+	cfg.PrimaryIndex, cfg.BackupIndex = 0, 1
+	cfg.Failover.CheckIntervalSeconds = 60 // slow -- must not tick on its own within this test's window
+
+	paths := Paths{
+		XrayBinary:       os.Args[0],
+		ProductionConfig: filepath.Join(dir, "production.json"),
+		PretestConfig:    filepath.Join(dir, "pretest.json"),
+		Env:              []string{"FAILOVER_TEST_HELPER=1"},
+	}
+	d := NewDaemon(paths, cfg)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runErr := make(chan error, 1)
+	go func() { runErr <- d.Run(ctx) }()
+
+	before, ran := d.Snapshot(ctx)
+	if !ran {
+		t.Fatal("daemon did not become ready")
+	}
+	baseline := len(before.Probes)
+
+	fresh := config.Default()
+	fresh.Profiles = cfg.Profiles
+	fresh.PrimaryIndex, fresh.BackupIndex = 0, 1
+	fresh.Failover = cfg.Failover
+	fresh.Failover.CheckIntervalSeconds = 1 // fast -- the ticker itself must adopt this
+
+	if !d.ReloadConfig(ctx, fresh) {
+		t.Fatal("ReloadConfig reported the daemon not running")
+	}
+
+	ticked := false
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if snap, _ := d.Snapshot(ctx); len(snap.Probes) > baseline {
+			ticked = true
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !ticked {
+		t.Error("no probe happened within 5s of reloading to a 1s check interval -- the ticker was not reset")
 	}
 
 	cancel()

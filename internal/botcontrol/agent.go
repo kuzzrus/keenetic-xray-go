@@ -133,7 +133,7 @@ func Run(ctx context.Context, opts AgentOptions, handle Handler) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			runBounded(ctx, cmdTimeout, func(c context.Context) { unposted = pollOnce(c, client, opts, handle, unposted) })
+			unposted = pollOnce(ctx, client, opts, handle, unposted, cmdTimeout)
 		case <-hbTicker.C:
 			if opts.StatusFunc != nil {
 				runBounded(ctx, cmdTimeout, func(c context.Context) { sendHeartbeat(c, client, opts) })
@@ -179,6 +179,45 @@ func postEvent(ctx context.Context, client *http.Client, opts AgentOptions, ev E
 	_ = doJSON(ctx, client, opts, "/agent/event", body, nil)
 }
 
+// resultTimeout bounds delivering one Result -- a small JSON POST, never
+// a genuinely slow operation, so it gets its own short, fixed budget
+// rather than sharing whatever's left of a slow command's own timeout.
+// Separate from cmdTimeout on purpose (BOT-02): before this, Handle and
+// postResult ran under the *same* bounded context, so an expensive
+// Handle call could leave postResult little or no time of its own to
+// actually deliver an already-computed result.
+const resultTimeout = 15 * time.Second
+
+// pollFetchTimeout bounds the /agent/poll round trip itself -- also
+// small and fixed, independent of whatever the fetched command's own
+// execution budget turns out to be.
+const pollFetchTimeout = 15 * time.Second
+
+// coreUpdateTimeout is the real execution budget for ActionEnsureCore/
+// ActionUpdateCore -- fetching, verifying and installing a multi-MB
+// xray-core binary over a possibly slow router WAN. Both handlers
+// already derived their own `context.WithTimeout(ctx, 5*time.Minute)`
+// expecting this -- but a child context can never outlive its parent's
+// deadline, and ctx there was always the same cmdTimeout-bounded (60s
+// default) context every other command got, so that "5 minutes" was
+// pure fiction, silently capped at whatever cmdTimeout actually was
+// (BOT-02). Handle now gets a context genuinely bounded by this for
+// just these two actions, derived fresh rather than nested inside a
+// tighter one.
+const coreUpdateTimeout = 5 * time.Minute
+
+// commandTimeout picks Handle's execution budget for action -- the
+// default for ordinary (fast) commands, coreUpdateTimeout for the two
+// genuinely slow ones. See coreUpdateTimeout's own doc comment.
+func commandTimeout(action string, def time.Duration) time.Duration {
+	switch action {
+	case ActionEnsureCore, ActionUpdateCore:
+		return coreUpdateTimeout
+	default:
+		return def
+	}
+}
+
 // pollOnce delivers a still-unposted result (if unposted is non-nil, from
 // a previous call's failed postResult) before asking for new work, then
 // executes at most one newly-dequeued command. It returns the result
@@ -190,32 +229,49 @@ func postEvent(ctx context.Context, client *http.Client, opts AgentOptions, ev E
 // transit (BOT-01) -- re-sending the same already-computed Result is
 // always safe, re-executing an arbitrary command (self-update, a daemon
 // restart, ...) usually isn't.
-func pollOnce(ctx context.Context, client *http.Client, opts AgentOptions, handle Handler, unposted *Result) *Result {
+//
+// Each phase gets its own runBounded call rather than one call covering
+// this whole function, so a slow Handle can't eat into postResult's own
+// budget (BOT-02) and a genuinely slow command (see commandTimeout) can
+// get more room than an ordinary one without also loosening the ceiling
+// on poll/postResult, which never need it.
+func pollOnce(ctx context.Context, client *http.Client, opts AgentOptions, handle Handler, unposted *Result, cmdTimeout time.Duration) *Result {
 	if unposted != nil {
-		if err := postResult(ctx, client, opts, *unposted); err != nil {
-			return unposted // still not delivered -- retry again next tick
+		var stillUnposted *Result
+		runBounded(ctx, resultTimeout, func(c context.Context) {
+			if err := postResult(c, client, opts, *unposted); err != nil {
+				stillUnposted = unposted // still not delivered -- retry again next tick
+			}
+		})
+		// Delivered (or not): either way, new work waits for the next
+		// regular tick rather than also polling in this same call.
+		return stillUnposted
+	}
+
+	var cmd *Command
+	runBounded(ctx, pollFetchTimeout, func(c context.Context) {
+		cmd, _ = poll(c, client, opts) // an error here just means nothing to do this tick
+	})
+	if cmd == nil {
+		return nil
+	}
+
+	var result Result
+	runBounded(ctx, commandTimeout(cmd.Action, cmdTimeout), func(c context.Context) {
+		output, err := handle.Handle(c, *cmd)
+		result = Result{CommandID: cmd.ID, Output: output, Completed: time.Now()}
+		if err != nil {
+			result.Err = err.Error()
 		}
-		// Delivered. New work waits for the next regular tick rather than
-		// also polling in this same call -- keeps each call to one round
-		// trip, well inside runBounded's timeout budget, and PollInterval
-		// is short enough that the wait costs nothing worth avoiding it for.
-		return nil
-	}
+	})
 
-	cmd, err := poll(ctx, client, opts)
-	if err != nil || cmd == nil {
-		return nil
-	}
-
-	output, err := handle.Handle(ctx, *cmd)
-	result := Result{CommandID: cmd.ID, Output: output, Completed: time.Now()}
-	if err != nil {
-		result.Err = err.Error()
-	}
-	if perr := postResult(ctx, client, opts, result); perr != nil {
-		return &result
-	}
-	return nil
+	var unpostedResult *Result
+	runBounded(ctx, resultTimeout, func(c context.Context) {
+		if perr := postResult(c, client, opts, result); perr != nil {
+			unpostedResult = &result
+		}
+	})
+	return unpostedResult
 }
 
 func poll(ctx context.Context, client *http.Client, opts AgentOptions) (*Command, error) {

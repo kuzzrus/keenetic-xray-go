@@ -426,6 +426,136 @@ func TestRun_RetriesUnpostedResultBeforeFetchingNewWork(t *testing.T) {
 	}
 }
 
+// slowThenDoneHandler.Handle sleeps for delay (unless ctx expires first,
+// which it respects like a real handler would) then returns normally.
+type slowThenDoneHandler struct {
+	delay time.Duration
+	calls int32
+}
+
+func (h *slowThenDoneHandler) Handle(ctx context.Context, cmd Command) (string, error) {
+	atomic.AddInt32(&h.calls, 1)
+	select {
+	case <-time.After(h.delay):
+		return "did " + cmd.Action, nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+// TestPollOnce_ResultDeliveryGetsItsOwnBudget is the regression test for
+// BOT-02's first gap: Handle and postResult used to share one bounded
+// context, so an expensive Handle call could leave postResult little or
+// no time to actually deliver an already-computed result. cmdTimeout is
+// set so short that Handle's own ctx expires before it finishes (it
+// returns a ctx.Err(), same as any real handler would) -- but the mock
+// /agent/result endpoint deliberately takes longer than that same short
+// cmdTimeout (40ms > 20ms) while still comfortably inside resultTimeout.
+// If postResult were still bound by Handle's spent-down context, this
+// delivery would fail; with its own fresh budget, it must succeed.
+func TestPollOnce_ResultDeliveryGetsItsOwnBudget(t *testing.T) {
+	var mu sync.Mutex
+	var delivered Result
+	resultCalls := 0
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/agent/poll", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(PollResponse{Command: &Command{ID: "1", Action: ActionStatus}})
+	})
+	mux.HandleFunc("/agent/result", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		resultCalls++
+		mu.Unlock()
+		time.Sleep(40 * time.Millisecond) // longer than cmdTimeout below, shorter than resultTimeout
+		mu.Lock()
+		_ = json.NewDecoder(r.Body).Decode(&delivered)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	})
+	srv := httptest.NewTLSServer(mux)
+	defer srv.Close()
+
+	client, err := newAgentClient(fingerprintOf(t, srv))
+	if err != nil {
+		t.Fatalf("newAgentClient: %v", err)
+	}
+	opts := AgentOptions{ControlServerURL: srv.URL, RouterID: "router-1", Token: "t", FingerprintSHA256: fingerprintOf(t, srv)}
+	handler := &slowThenDoneHandler{delay: time.Hour} // never finishes on its own -- cmdTimeout must be what cuts it off
+
+	got := pollOnce(context.Background(), client, opts, handler, nil, 20*time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if resultCalls == 0 {
+		t.Fatal("postResult was never even attempted")
+	}
+	if got != nil {
+		t.Errorf("pollOnce returned an unposted result %+v, want nil -- delivery should have succeeded on its own fresh budget", got)
+	}
+	if delivered.CommandID != "1" {
+		t.Errorf("delivered = %+v, want CommandID=1", delivered)
+	}
+	if delivered.Err == "" {
+		t.Error("delivered.Err should carry Handle's own ctx-deadline-exceeded error -- it really was cut off by cmdTimeout")
+	}
+}
+
+// TestPollOnce_CoreUpdateGetsALongerBudget is the regression test for
+// BOT-02's second gap: ensureCore/updateCore each derived their own
+// `context.WithTimeout(ctx, 5*time.Minute)`, but ctx was already bounded
+// to cmdTimeout (60s default) by the caller -- a child context can never
+// outlive its parent's deadline, so that "5 minutes" was pure fiction,
+// silently capped at cmdTimeout. cmdTimeout here is far shorter (20ms)
+// than the handler's own delay (60ms) -- an ordinary action would get
+// cut off; ActionEnsureCore/ActionUpdateCore must not.
+func TestPollOnce_CoreUpdateGetsALongerBudget(t *testing.T) {
+	for _, action := range []string{ActionEnsureCore, ActionUpdateCore} {
+		t.Run(action, func(t *testing.T) {
+			var mu sync.Mutex
+			var delivered Result
+
+			mux := http.NewServeMux()
+			mux.HandleFunc("/agent/poll", func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(PollResponse{Command: &Command{ID: "1", Action: action}})
+			})
+			mux.HandleFunc("/agent/result", func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				_ = json.NewDecoder(r.Body).Decode(&delivered)
+				mu.Unlock()
+				w.WriteHeader(http.StatusOK)
+			})
+			srv := httptest.NewTLSServer(mux)
+			defer srv.Close()
+
+			client, err := newAgentClient(fingerprintOf(t, srv))
+			if err != nil {
+				t.Fatalf("newAgentClient: %v", err)
+			}
+			opts := AgentOptions{ControlServerURL: srv.URL, RouterID: "router-1", Token: "t", FingerprintSHA256: fingerprintOf(t, srv)}
+			handler := &slowThenDoneHandler{delay: 60 * time.Millisecond}
+
+			got := pollOnce(context.Background(), client, opts, handler, nil, 20*time.Millisecond)
+
+			if got != nil {
+				t.Errorf("pollOnce returned an unposted result %+v, want nil", got)
+			}
+			if atomic.LoadInt32(&handler.calls) != 1 {
+				t.Fatalf("handler.calls = %d, want 1", handler.calls)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if delivered.Err != "" {
+				t.Errorf("delivered.Err = %q, want empty -- the 60ms handler should have completed well within coreUpdateTimeout despite cmdTimeout being only 20ms", delivered.Err)
+			}
+			if delivered.Output != "did "+action {
+				t.Errorf("delivered.Output = %q, want %q", delivered.Output, "did "+action)
+			}
+		})
+	}
+}
+
 func TestRun_WrongTokenNeverCallsHandler(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/agent/poll", func(w http.ResponseWriter, r *http.Request) {

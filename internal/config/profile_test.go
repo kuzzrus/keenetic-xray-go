@@ -207,6 +207,85 @@ func TestConfigValidate_ProfileIndicesOutOfRange(t *testing.T) {
 	}
 }
 
+func TestConfigValidate_PortsOutOfRange(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		apply func(*Config)
+	}{
+		{"socks too low", func(c *Config) { c.Failover.SOCKSPort = 0 }},
+		{"http too high", func(c *Config) { c.Failover.HTTPPort = 65536 }},
+		{"pretest negative", func(c *Config) { c.Failover.PretestPort = -1 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := Default()
+			tc.apply(c)
+			if err := c.Validate(); err == nil {
+				t.Error("expected an out-of-range port error")
+			}
+		})
+	}
+}
+
+func TestConfigValidate_SOCKSAndHTTPMustDiffer(t *testing.T) {
+	c := Default()
+	c.Failover.HTTPPort = c.Failover.SOCKSPort
+	if err := c.Validate(); err == nil {
+		t.Error("expected an error when socks_port == http_port")
+	}
+}
+
+// TestConfigValidate_PortConflictsWithNaiveSidecar is the regression
+// test for CFG-02's concrete example: HTTP=11082 colliding with the
+// naive production sidecar's port at the default pretest_port=11080
+// (PretestPort+2) -- previously accepted outright by setPorts, which
+// only checked the 1-65535 range and SOCKS != HTTP.
+func TestConfigValidate_PortConflictsWithNaiveSidecar(t *testing.T) {
+	c := Default()
+	if c.Failover.PretestPort != 11080 {
+		t.Fatalf("test assumes the default pretest_port is 11080, got %d", c.Failover.PretestPort)
+	}
+	c.Failover.HTTPPort = c.Failover.PretestPort + 2 // 11082, the naive production sidecar's own port
+	if err := c.Validate(); err == nil {
+		t.Error("expected a conflict error for http_port landing on the naive production sidecar's port")
+	}
+
+	c2 := Default()
+	c2.Failover.SOCKSPort = c2.Failover.PretestPort + 3 // the naive pretest sidecar's own port
+	if err := c2.Validate(); err == nil {
+		t.Error("expected a conflict error for socks_port landing on the naive pretest sidecar's port")
+	}
+}
+
+// TestConfigValidate_PortConflictsWithAdaptiveRouting covers the other
+// concrete audit example: SOCKS colliding with the adaptive-routing
+// dokodemo-door inbound, but only while adaptive routing is actually on
+// -- an unused port isn't a real conflict.
+func TestConfigValidate_PortConflictsWithAdaptiveRouting(t *testing.T) {
+	c := Default()
+	c.AdaptiveRoute.Enabled = true
+	c.Failover.SOCKSPort = DefaultAdaptiveRoutePort
+	if err := c.Validate(); err == nil {
+		t.Error("expected a conflict error for socks_port landing on the enabled adaptive-routing port")
+	}
+
+	c.AdaptiveRoute.Enabled = false
+	if err := c.Validate(); err != nil {
+		t.Errorf("the same port number should not conflict once adaptive routing is off: %v", err)
+	}
+}
+
+// TestConfigValidate_WGTransportPortDoesNotFalselyConflict confirms
+// WGTransport's port is excluded from the TCP conflict check -- it's a
+// UDP inbound, so sharing a number with SOCKS/HTTP (both TCP) is not
+// actually a collision at the OS level.
+func TestConfigValidate_WGTransportPortDoesNotFalselyConflict(t *testing.T) {
+	c := Default()
+	c.WGTransport.Port = c.Failover.SOCKSPort
+	if err := c.Validate(); err != nil {
+		t.Errorf("a UDP WGTransport port matching the TCP SOCKS port should not be flagged as a conflict: %v", err)
+	}
+}
+
 func TestConfigValidate_Proxy0Protocol(t *testing.T) {
 	c := Default()
 	for _, ok := range []string{"", "socks5", "http"} {

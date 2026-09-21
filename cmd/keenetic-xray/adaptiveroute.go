@@ -266,24 +266,32 @@ func adaptiveRouteOff(cfg *config.Config) error {
 // susanin.md) needs clearing right now instead of waiting out each
 // entry's own TTL.
 //
-// Also removes the classifier's own persisted state and restarts the
-// daemon -- found live (2026-09-15) that a bare ipset flush isn't
-// enough on its own: the *running* classifier's in-memory state (loaded
-// once, at daemon startup, into adaptiveRouteClassifyLoop's own local
-// variable -- see that function) still believes every flushed address
-// is confirmed, and JUDGE only re-adds a confirmed address to the ipset
-// once it's close to its own TTL expiry (up to AdaptiveRoute.
-// EffectiveOKTTL(), 6h by default, for an individual address; up to 30
-// minutes for a block). Left alone, that mismatch silently suppresses
-// re-promotion of exactly the ranges that were working fine before the
-// flush, for as long as each one's own TTL allows -- observed live as
-// "nothing loads" even though individual addresses were visibly being
-// caught fresh in the log. Deleting the file alone doesn't help either
-// while the daemon keeps running: its own periodic save (every 5
-// minutes, see adaptiveRouteClassifyLoop) just writes the same stale
-// in-memory state straight back. Only a real restart clears the
-// in-memory copy and makes classifier.LoadState fall back to a truly
-// empty classifier.NewState().
+// Also marks the classifier's own persisted state for a reset and
+// restarts the daemon -- found live (2026-09-15) that a bare ipset
+// flush isn't enough on its own: the *running* classifier's in-memory
+// state (loaded once, at daemon startup, into
+// adaptiveRouteClassifyLoop's own local variable -- see that function)
+// still believes every flushed address is confirmed, and JUDGE only
+// re-adds a confirmed address to the ipset once it's close to its own
+// TTL expiry (up to AdaptiveRoute.EffectiveOKTTL(), 6h by default, for
+// an individual address; up to 30 minutes for a block). Left alone,
+// that mismatch silently suppresses re-promotion of exactly the ranges
+// that were working fine before the flush, for as long as each one's
+// own TTL allows -- observed live as "nothing loads" even though
+// individual addresses were visibly being caught fresh in the log.
+//
+// AR-10: the state file itself is handled via
+// adaptiveRouteResetMarkerPath, not a direct os.Remove here, for the
+// same reason internal/botcontrol's own adaptiveRouteFlush already
+// uses that marker instead (see its doc comment) -- this process's own
+// os.Remove would race the still-running daemon's periodic save (every
+// 5 minutes, see adaptiveRouteClassifyLoop): offerDaemonRestart below
+// waits on an interactive confirmation, and a save landing in that
+// window would silently recreate the very file this call just deleted,
+// with the same stale state, before the restart the operator is about
+// to confirm ever happens. adaptiveRouteClassifyLoop's own startup
+// already honors this marker (added for the bot's path, reused here
+// unchanged) -- only the writer needed to change.
 func adaptiveRouteFlush() error {
 	if !keenetic.Available() {
 		return fmt.Errorf("ndmc не найден — адаптивная маршрутизация работает только на роутере Keenetic")
@@ -293,8 +301,8 @@ func adaptiveRouteFlush() error {
 	if err := adaptiveroute.Flush(ctx, adaptiveRouteIPSet); err != nil {
 		return fmt.Errorf("очистка ipset: %w", err)
 	}
-	if err := os.Remove(adaptiveRouteStatePath()); err != nil && !os.IsNotExist(err) {
-		fmt.Printf("предупреждение: не удалось удалить сохранённое состояние классификатора: %v\n", err)
+	if err := os.WriteFile(adaptiveRouteResetMarkerPath(), nil, 0o644); err != nil {
+		fmt.Printf("предупреждение: не удалось пометить состояние классификатора на сброс: %v\n", err)
 	}
 	fmt.Println("адаптивная маршрутизация: список перенаправляемых адресов и состояние классификатора очищены")
 	// Not applyDaemonChange: its first try (SIGHUP -> live xray/failover
@@ -395,10 +403,12 @@ func adaptiveRouteClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 	statePath := adaptiveRouteStatePath()
 	var state *classifier.State
 	if _, err := os.Stat(adaptiveRouteResetMarkerPath()); err == nil {
-		// adaptiveRouteFlush asked for a clean start -- see its own doc
-		// comment (internal/botcontrol/adaptiveroute.go) for why this
-		// can't just rely on it having deleted statePath directly before
-		// triggering the restart that leads here: the *previous*
+		// adaptiveRouteFlush (this package's own, or internal/
+		// botcontrol's -- both write this same marker, see either one's
+		// doc comment) asked for a clean start -- see its own doc
+		// comment for why this can't just rely on it having deleted
+		// statePath directly before triggering the restart that leads
+		// here: the *previous*
 		// process's own shutdown save (this same select loop's own
 		// ctx.Done() case, below) can silently recreate that file from
 		// its still-stale in-memory state after the delete already ran.

@@ -76,10 +76,13 @@ func adaptiveRouteStatePath() string {
 
 // adaptiveRouteResetMarkerPath flags that adaptiveRouteClassifyLoop's
 // next startup should discard whatever adaptiveRouteStatePath currently
-// holds, even if a file is sitting there -- see adaptiveRouteFlush's own
-// doc comment (internal/botcontrol/adaptiveroute.go) for why a plain
-// os.Remove of the state file alone, done while the daemon carrying the
-// state to be cleared is still running, isn't reliable on its own.
+// holds, even if a file is sitting there -- written by both this
+// package's own adaptiveRouteFlush and internal/botcontrol's (AR-10:
+// the two used to differ here, this package's own version doing a
+// direct os.Remove instead); see either one's doc comment for why a
+// plain os.Remove of the state file alone, done while the daemon
+// carrying the state to be cleared is still running, isn't reliable on
+// its own.
 func adaptiveRouteResetMarkerPath() string {
 	return adaptiveRouteStatePath() + ".reset"
 }

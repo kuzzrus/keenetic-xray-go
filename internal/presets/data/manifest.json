@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated": "2026-09-15",
+  "generated": "2026-09-21",
   "categories": [
     "Мессенджеры",
     "Видео",
@@ -381,7 +381,7 @@
       "category": "Соцсети",
       "kind": "domains",
       "count": 200,
-      "rev": "a1b11b8bc7a5",
+      "rev": "017e8ef1b043",
       "sources": [
         "Geo-Aggregator: facebook"
       ]
@@ -476,8 +476,8 @@
       "title": "Google Gemini",
       "category": "Искусственный интеллект",
       "kind": "domains",
-      "count": 41,
-      "rev": "e48e969eeabb",
+      "count": 43,
+      "rev": "fc91eee8469c",
       "sources": [
         "Geo-Aggregator: google-gemini"
       ]

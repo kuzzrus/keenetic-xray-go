@@ -26,8 +26,12 @@ func TestApplyBindsDomainAndCIDR(t *testing.T) {
 	if dom.Interface != "Wireguard4" || !dom.Exclusive {
 		t.Errorf("modifiers not applied to domain list: %+v", *dom)
 	}
-	if ip.Interface == "Wireguard4" {
-		t.Errorf("modifiers leaked onto the -ip list: %+v", *ip)
+	// PRE-01: iface/exclusive must land on the IP companion too, not
+	// just the domain list -- a caller asking for a specific interface
+	// or exclusive routing means it for the whole preset, CIDR half
+	// included.
+	if ip.Interface != "Wireguard4" || !ip.Exclusive {
+		t.Errorf("modifiers not applied to the -ip companion list: %+v", *ip)
 	}
 	wantDom, _ := Entries("youtube")
 	if len(dom.Entries) != len(wantDom) {

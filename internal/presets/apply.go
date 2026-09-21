@@ -100,10 +100,13 @@ func lowerSet(xs []string) map[string]struct{} {
 
 // Apply seeds or refreshes the route list(s) for preset `name` in cfg.
 // With withIP it also binds the "<name>-ip" CIDR companion. iface and
-// exclusive, when set, land on the domain list. Returns the list ids
-// touched. A pre-existing list with that name that was made by hand (no
-// Preset) or bound to a different preset is an error -- the caller should
-// surface it.
+// exclusive, when set, land on every list touched -- the domain list
+// and, when withIP binds one, its IP companion too (PRE-01: these used
+// to land on the domain list only, silently leaving the companion on
+// the default interface/non-exclusive regardless of what the caller
+// asked for). Returns the list ids touched. A pre-existing list with
+// that name that was made by hand (no Preset) or bound to a different
+// preset is an error -- the caller should surface it.
 func Apply(cfg *config.Config, name string, withIP bool, iface string, exclusive bool) ([]string, error) {
 	name = strings.ToLower(strings.TrimSpace(name))
 	p, ok := Find(name)
@@ -144,13 +147,11 @@ func Apply(cfg *config.Config, name string, withIP bool, iface string, exclusive
 		l.Entries = sorted
 		l.Preset = pr.Name
 		l.PresetRev = pr.Rev
-		if id == p.Name {
-			if iface != "" {
-				l.Interface = iface
-			}
-			if exclusive {
-				l.Exclusive = true
-			}
+		if iface != "" {
+			l.Interface = iface
+		}
+		if exclusive {
+			l.Exclusive = true
 		}
 		touched = append(touched, id)
 	}

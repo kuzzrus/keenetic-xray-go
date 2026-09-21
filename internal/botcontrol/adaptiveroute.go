@@ -308,11 +308,24 @@ func (h *RouterHandler) adaptiveRouteSetBlockThreshold(args []string) (string, e
 	if err != nil {
 		return "", fmt.Errorf("порог должен быть целым числом, получено %q", args[0])
 	}
+	if n == 0 {
+		// AR-08: 0 is ambiguous with "unset" -- EffectiveBlockThreshold
+		// treats a stored 0 as "fall back to DefaultBlockThreshold" (the
+		// same JSON zero-value problem EffectivePort/EffectiveOKTTL
+		// solve the same way), not as "disabled". Saving a literal 0
+		// here would report block-widening as off while it silently
+		// kept running at the default threshold. -1 is the value the
+		// bot's own button already sends for "disabled" and the only
+		// one EffectiveBlockThreshold actually honors as such -- accept
+		// 0 as the same intent instead of storing a value this system
+		// reads differently from what was just told to the operator.
+		n = -1
+	}
 	h.Config.AdaptiveRoute.BlockThreshold = n
 	if err := h.Config.Save(h.ConfigPath); err != nil {
 		return "", err
 	}
-	if n <= 0 {
+	if n < 0 {
 		return "укрупнение блоков отключено — в туннель будут попадать только точные подтверждённые адреса", nil
 	}
 	return fmt.Sprintf("порог укрупнения блока: %d адресов", n), nil

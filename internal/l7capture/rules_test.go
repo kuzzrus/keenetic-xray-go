@@ -154,6 +154,65 @@ func TestClearRules_LeavesUnrelatedRulesAlone(t *testing.T) {
 	}
 }
 
+// TestClearRules_UnquotesCommentField is the regression test for the
+// same bug FW-01 found and fixed in internal/keenetic/mss.go's own
+// clearOurRules: real `iptables -S` wraps a string-valued match argument
+// (our own --comment) in double quotes so its own output round-trips as
+// a shell command, but iptablesRun execs iptables directly, no shell in
+// between -- a field passed through with its quotes still attached is a
+// value iptables never actually stored, so the delete silently fails to
+// match anything. installFakeIptables's own EnsureRules-then-ClearRules
+// round trip (see TestClearRules above) never exercises this, since
+// EnsureRules builds its -A args directly rather than round-tripping
+// through -S text -- this test feeds a realistic quoted -S line by hand
+// instead, bypassing that fake, matching internal/keenetic/mss_test.go's
+// own approach.
+func TestClearRules_UnquotesCommentField(t *testing.T) {
+	origRun, origList := iptablesRun, iptablesListFORWARD
+	defer func() { iptablesRun, iptablesListFORWARD = origRun, origList }()
+
+	iptablesListFORWARD = func(context.Context) (string, error) {
+		return "-A FORWARD -p tcp --dport 443 -o eth1 -m comment --comment \"" + l7RuleComment +
+			"\" -m connbytes --connbytes 1: --connbytes-dir original --connbytes-mode packets -j NFLOG --nflog-group 4210\n", nil
+	}
+	var sent []string
+	iptablesRun = func(_ context.Context, args ...string) error {
+		sent = append(sent, strings.Join(args, " "))
+		return nil
+	}
+
+	if err := ClearRules(context.Background()); err != nil {
+		t.Fatalf("ClearRules: %v", err)
+	}
+	if len(sent) != 1 {
+		t.Fatalf("iptables calls = %v, want exactly one -D", sent)
+	}
+	if strings.Contains(sent[0], `"`) {
+		t.Errorf("call = %q, want the comment unquoted -- iptablesRun execs directly, a literal quote in the field never matches what's actually stored", sent[0])
+	}
+	if !strings.Contains(sent[0], l7RuleComment) {
+		t.Errorf("call = %q, want it to still target our rule by comment", sent[0])
+	}
+}
+
+// TestClearRules_ReportsDeletionFailure is FW-01's other half applied
+// here: a failed -D used to be silently discarded
+// (`_ = iptablesRun(...)`) instead of surfacing anywhere. ClearRules must
+// now return it.
+func TestClearRules_ReportsDeletionFailure(t *testing.T) {
+	origRun, origList := iptablesRun, iptablesListFORWARD
+	defer func() { iptablesRun, iptablesListFORWARD = origRun, origList }()
+
+	iptablesListFORWARD = func(context.Context) (string, error) {
+		return "-A FORWARD -p tcp --dport 443 -m comment --comment " + l7RuleComment + " -j NFLOG --nflog-group 4210\n", nil
+	}
+	iptablesRun = func(context.Context, ...string) error { return fmt.Errorf("iptables: exit status 2") }
+
+	if err := ClearRules(context.Background()); err == nil {
+		t.Error("ClearRules = nil, want the -D failure to be reported")
+	}
+}
+
 func TestRuleOptions_ValidateRequiresInterfaceAndGroup(t *testing.T) {
 	if EnsureRules(context.Background(), RuleOptions{Group: 1}) == nil {
 		t.Error("EnsureRules with no WANInterface: want error")

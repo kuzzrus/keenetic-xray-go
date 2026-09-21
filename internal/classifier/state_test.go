@@ -83,6 +83,7 @@ func TestState_ExpireAcrossAllSets(t *testing.T) {
 	s.Watch[0].add("c", now, time.Second)
 	s.Cooldown[1].add("d", now, time.Second)
 	s.Blocks[0].add("1.2.3.0/24", now, time.Second)
+	s.OKSince[1]["b"] = now // AR-05: tracked alongside OK[1]'s own entry
 
 	later := now.Add(2 * time.Second)
 	s.Expire(later)
@@ -91,6 +92,25 @@ func TestState_ExpireAcrossAllSets(t *testing.T) {
 		if len(set) != 0 {
 			t.Errorf("set = %v, want empty after Expire", set)
 		}
+	}
+	if len(s.OKSince[1]) != 0 {
+		t.Errorf("OKSince[1] = %v, want empty once its OK[1] counterpart expired", s.OKSince[1])
+	}
+}
+
+// TestState_ExpireLeavesOKSinceForStillLiveEntries confirms Expire's new
+// OKSince cleanup (AR-05) only drops entries whose OK counterpart is
+// actually gone, not every OKSince entry indiscriminately.
+func TestState_ExpireLeavesOKSinceForStillLiveEntries(t *testing.T) {
+	now := time.Now()
+	s := NewState()
+	s.OK[0].add("still-live", now, time.Hour)
+	s.OKSince[0]["still-live"] = now
+
+	s.Expire(now.Add(time.Second))
+
+	if _, ok := s.OKSince[0]["still-live"]; !ok {
+		t.Error("OKSince entry for a still-live OK entry should not have been dropped")
 	}
 }
 

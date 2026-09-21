@@ -65,6 +65,17 @@ func (s ttlSet) expire(now time.Time) {
 type State struct {
 	Test, OK, Watch, Cooldown [2]ttlSet
 	Blocks                    [2]ttlSet
+
+	// OKSince tracks when each OK-tier entry first arrived there (AR-05),
+	// separately from ttlSet's own per-entry expiry -- see judgeOK's own
+	// doc comment for what this backs. Not persisted across a restart,
+	// for the same "not worth the complexity" reason persist.go already
+	// gives for Watch/Blocks: the cap this supports is measured in days,
+	// so losing a few hours of it to an occasional restart doesn't
+	// matter in practice, and an entry loaded from disk with no OKSince
+	// yet just lazily backfills its own the first time judgeOK's refresh
+	// path touches it.
+	OKSince [2]map[string]time.Time
 }
 
 // NewState returns an empty, ready-to-use State.
@@ -76,6 +87,7 @@ func NewState() *State {
 		s.Watch[i] = ttlSet{}
 		s.Cooldown[i] = ttlSet{}
 		s.Blocks[i] = ttlSet{}
+		s.OKSince[i] = map[string]time.Time{}
 	}
 	return s
 }
@@ -98,5 +110,10 @@ func (s *State) Expire(now time.Time) {
 		s.Watch[i].expire(now)
 		s.Cooldown[i].expire(now)
 		s.Blocks[i].expire(now)
+		for addr := range s.OKSince[i] {
+			if !s.OK[i].has(addr, now) {
+				delete(s.OKSince[i], addr)
+			}
+		}
 	}
 }

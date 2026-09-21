@@ -244,6 +244,52 @@ func TestClrSoft_TCPLateStall_RepliesResumingCancelsIt(t *testing.T) {
 	if len(got) != 0 {
 		t.Errorf("actions = %+v, want none once replies resumed", got)
 	}
+	// AR-04: this used to be the entire test -- it only checked that
+	// nothing was promoted, not that the watch entry itself was cleared.
+	// See TestAR04_ResumedRepliesDontLeaveAStaleWatchForALaterStall for
+	// why leaving it stale until its own WatchTTL is a real bug.
+	if state.Watch[0].has(blockedDst, t0.Add(4*time.Second)) {
+		t.Error("watch entry should have been cleared once replies resumed, not left to expire on its own")
+	}
+}
+
+// TestAR04_ResumedRepliesDontLeaveAStaleWatchForALaterStall is the full
+// regression scenario for AR-04: without clearing the watch entry when
+// replies resume, a later and genuinely unrelated stall to the same dst
+// -- arriving before the stale entry's own WatchTTL expires -- would be
+// mistaken by watchOrConfirmLateStall for the second half of a
+// two-observation confirmation and promoted off a single fresh sample.
+func TestAR04_ResumedRepliesDontLeaveAStaleWatchForALaterStall(t *testing.T) {
+	cfg, state, cache := testConfig(), NewState(), NewRateCache()
+	t0 := time.Now()
+
+	ClrSoft(cfg, state, cache, []Flow{tcpFlow("ESTABLISHED", 8, 0, 1, 0)}, t0)
+	ClrSoft(cfg, state, cache, []Flow{tcpFlow("ESTABLISHED", 12, 0, 1, 0)}, t0.Add(2*time.Second))
+	if !state.Watch[0].has(blockedDst, t0.Add(2*time.Second)) {
+		t.Fatal("expected watching to have started")
+	}
+
+	// Replies resume (rp: 1 -> 5) -- the stall is over.
+	ClrSoft(cfg, state, cache, []Flow{tcpFlow("ESTABLISHED", 16, 0, 5, 0)}, t0.Add(4*time.Second))
+	if state.Watch[0].has(blockedDst, t0.Add(4*time.Second)) {
+		t.Fatal("watch entry should have been cleared once replies resumed")
+	}
+
+	// +6s from t0: a new, unrelated stall (rp unchanged from the last
+	// sample) starts. Without AR-04, the stale watch entry from +2s
+	// (otherwise only cleared at +10s) would still be within
+	// WatchRetryBelow(4s) of expiring here, and this single fresh sample
+	// would be mistaken for the confirming second observation.
+	got := ClrSoft(cfg, state, cache, []Flow{tcpFlow("ESTABLISHED", 20, 0, 5, 0)}, t0.Add(6*time.Second))
+	if len(got) != 0 {
+		t.Fatalf("actions = %+v, want none -- this is only the first observation of the new stall", got)
+	}
+	if state.Test[0].has(blockedDst, t0.Add(6*time.Second)) {
+		t.Error("dst must not be promoted off a single fresh sample")
+	}
+	if !state.Watch[0].has(blockedDst, t0.Add(6*time.Second)) {
+		t.Error("the new stall should have started its own fresh watch")
+	}
 }
 
 // TestClrSoft_SilentNonQUICUDPNeverPromotes pins the 2026-09-16 policy

@@ -170,8 +170,25 @@ func ClrSoft(cfg *Config, state *State, cache *RateCache, flows []Flow, now time
 				continue
 			}
 			if f.OP >= 8 && f.RP > 0 {
-				if origActive, replSilent, hadPrev := cache.delta(f); hadPrev && origActive && replSilent {
-					actions = append(actions, watchOrConfirmLateStall(cfg, state, udp, f, now)...)
+				if origActive, replSilent, hadPrev := cache.delta(f); hadPrev {
+					switch {
+					case origActive && replSilent:
+						actions = append(actions, watchOrConfirmLateStall(cfg, state, udp, f, now)...)
+					case !replSilent:
+						// AR-04: replies resumed -- drop any pending
+						// watch entry now, on direct evidence, instead
+						// of leaving it to expire on its own WatchTTL.
+						// Otherwise a later, unrelated stall to the same
+						// dst arriving inside that window would find
+						// state.Watch already populated and
+						// watchOrConfirmLateStall could mistake it for
+						// the second half of a two-observation
+						// confirmation -- promoting off one fresh
+						// sample instead of the two genuinely
+						// independent ones the watch mechanism exists
+						// to require.
+						state.Watch[protoIndex(udp)].remove(f.Dst)
+					}
 				}
 			}
 		case f.L4Proto == 17:
@@ -183,8 +200,14 @@ func ClrSoft(cfg *Config, state *State, cache *RateCache, flows []Flow, now time
 			// DHT/uTP traffic. See promotableDst's own doc comment for
 			// the incident.
 			if f.HasReply && f.OP >= 8 {
-				if origActive, replSilent, hadPrev := cache.delta(f); hadPrev && origActive && replSilent {
-					actions = append(actions, watchOrConfirmLateStall(cfg, state, udp, f, now)...)
+				if origActive, replSilent, hadPrev := cache.delta(f); hadPrev {
+					switch {
+					case origActive && replSilent:
+						actions = append(actions, watchOrConfirmLateStall(cfg, state, udp, f, now)...)
+					case !replSilent:
+						// AR-04: see the TCP branch's own comment above.
+						state.Watch[protoIndex(udp)].remove(f.Dst)
+					}
 				}
 			}
 		}

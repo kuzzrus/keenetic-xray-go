@@ -59,10 +59,14 @@ func TestSetMSSClamp_AddsOurRule(t *testing.T) {
 
 func TestSetMSSClamp_ReplacesStaleValue(t *testing.T) {
 	// A previous run left a 1400 rule; asking for 1360 must delete the
-	// old one (matched by its live spec) before adding the new.
+	// old one (matched by its live spec) before adding the new. The
+	// comment is quoted here -- real `iptables -S` wraps a string-valued
+	// match argument in double quotes so its own output round-trips as a
+	// shell command (FW-01: a fixture that never quoted this is exactly
+	// why the bug went unnoticed by these tests before).
 	dump := "-P FORWARD ACCEPT\n" +
-		"-A FORWARD -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment " + mssComment +
-		" -j TCPMSS --set-mss 1400\n"
+		"-A FORWARD -p tcp -m tcp --tcp-flags SYN,RST SYN -m comment --comment \"" + mssComment +
+		"\" -j TCPMSS --set-mss 1400\n"
 	sent := fakeIptables(t, true, dump, nil)
 	if err := SetMSSClamp(context.Background(), 1360); err != nil {
 		t.Fatal(err)
@@ -72,6 +76,9 @@ func TestSetMSSClamp_ReplacesStaleValue(t *testing.T) {
 	}
 	if !strings.HasPrefix((*sent)[0], "-t mangle -D FORWARD ") || !strings.Contains((*sent)[0], "--set-mss 1400") {
 		t.Errorf("first call = %q, want -D of the stale 1400 rule", (*sent)[0])
+	}
+	if strings.Contains((*sent)[0], `"`) {
+		t.Errorf("first call = %q, want the comment unquoted -- iptablesRun execs directly, a literal quote in the field never matches what's actually stored", (*sent)[0])
 	}
 	if !strings.HasPrefix((*sent)[1], "-t mangle -A FORWARD ") || !strings.Contains((*sent)[1], "--set-mss 1360") {
 		t.Errorf("second call = %q, want -A of the 1360 rule", (*sent)[1])
@@ -103,13 +110,16 @@ func TestSetMSSClamp_FallsBackWithoutCommentMatch(t *testing.T) {
 }
 
 func TestSetMSSClamp_ZeroClears(t *testing.T) {
-	dump := "-A FORWARD -p tcp -m comment --comment " + mssComment + " -j TCPMSS --set-mss 1360\n"
+	dump := "-A FORWARD -p tcp -m comment --comment \"" + mssComment + "\" -j TCPMSS --set-mss 1360\n"
 	sent := fakeIptables(t, true, dump, nil)
 	if err := SetMSSClamp(context.Background(), 0); err != nil {
 		t.Fatal(err)
 	}
 	if len(*sent) != 1 || !strings.HasPrefix((*sent)[0], "-t mangle -D FORWARD ") {
 		t.Fatalf("calls = %v, want a single -D and no -A", *sent)
+	}
+	if strings.Contains((*sent)[0], `"`) {
+		t.Errorf("call = %q, want the comment unquoted", (*sent)[0])
 	}
 }
 
@@ -127,14 +137,31 @@ func TestClearOurRules_LeavesForeignRules(t *testing.T) {
 	dump := "-P FORWARD ACCEPT\n" +
 		"-A FORWARD -p tcp -j TCPMSS --clamp-mss-to-pmtu\n" + // PMTU-clamp, not ours
 		"-A FORWARD -p tcp -m tcp --tcp-flags FIN,SYN,RST,ACK SYN -j TCPMSS --set-mss 1500\n" + // --syn style, foreign
-		"-A FORWARD -p tcp -m comment --comment " + mssComment + " -j TCPMSS --set-mss 1360\n"
+		"-A FORWARD -p tcp -m comment --comment \"" + mssComment + "\" -j TCPMSS --set-mss 1360\n"
 	sent := fakeIptables(t, true, dump, nil)
-	clearOurRules(context.Background())
+	if err := clearOurRules(context.Background()); err != nil {
+		t.Fatalf("clearOurRules = %v, want nil (the delete succeeds against the fake)", err)
+	}
 	if len(*sent) != 1 {
 		t.Fatalf("calls = %v, want exactly one -D (ours only)", *sent)
 	}
 	if !strings.Contains((*sent)[0], mssComment) || !strings.Contains((*sent)[0], "--set-mss 1360") {
 		t.Errorf("deleted %q, want only our tagged rule", (*sent)[0])
+	}
+	if strings.Contains((*sent)[0], `"`) {
+		t.Errorf("deleted %q, want the comment unquoted (FW-01)", (*sent)[0])
+	}
+}
+
+// TestClearOurRules_ReportsDeletionFailure is FW-01's other half: a
+// failed -D used to be silently discarded (_ = iptablesRun(...)) instead
+// of surfacing anywhere. clearOurRules must now return it.
+func TestClearOurRules_ReportsDeletionFailure(t *testing.T) {
+	dump := "-A FORWARD -p tcp -m comment --comment \"" + mssComment + "\" -j TCPMSS --set-mss 1360\n"
+	fakeIptables(t, true, dump, nil)
+	iptablesRun = func(context.Context, ...string) error { return fmt.Errorf("iptables: exit status 2") }
+	if err := clearOurRules(context.Background()); err == nil {
+		t.Error("clearOurRules = nil, want the -D failure to be reported")
 	}
 }
 

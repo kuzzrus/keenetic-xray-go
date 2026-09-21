@@ -226,6 +226,28 @@ func watchOrConfirmLateStall(cfg *Config, state *State, udp bool, f Flow, now ti
 // and opportunistically refresh a healthy ok entry's TTL before it
 // expires. See the package doc comment for why this checks State
 // directly instead of a conntrack mark the way upstream does.
+//
+// AR-01: the caller (adaptiveRouteClassifyLoop) runs ClrFast, ClrSoft,
+// then ClrJudge back to back on one call with one shared flows slice and
+// one shared now, and only applies the whole batch of Actions to the
+// real ipset afterward. A destination ClrFast/ClrSoft just promoted to
+// Test earlier in that same call has its own REDIRECT Action still only
+// queued, not yet applied -- and f itself is still the pre-promotion
+// conntrack snapshot that triggered the promotion, not evidence of
+// anything that happened through the tunnel. Judging it right here would
+// score a connection that (as far as the kernel is concerned) never
+// actually went through the tunnel at all, on data that predates the
+// promotion decision -- confirmed reachable exactly as the audit
+// describes: a single ESTABLISHED flow with a couple of reply packets
+// already on it (RP>=2) satisfies both ClrSoft's TCP-STALL promotion and
+// judgeTest's "good" signal simultaneously, so the same flow that
+// triggers the promotion can also immediately confirm it, in one pass,
+// before REDIRECT exists. skipFreshTestPromotion below identifies that
+// case without any new state: a Test entry always expires at exactly
+// now+cfg.TestTTL at the moment promoteTest creates it, so an entry
+// whose expiry is still exactly that far out was necessarily created
+// with *this* now -- i.e. earlier in this very call, not on a previous
+// tick.
 func ClrJudge(cfg *Config, state *State, flows []Flow, now time.Time) []Action {
 	var actions []Action
 	for _, f := range flows {
@@ -247,12 +269,23 @@ func ClrJudge(cfg *Config, state *State, flows []Flow, now time.Time) []Action {
 
 		switch {
 		case state.Test[i].has(f.Dst, now):
+			if skipFreshTestPromotion(cfg, state, i, f.Dst, now) {
+				continue
+			}
 			actions = append(actions, judgeTest(cfg, state, udp, f, now)...)
 		case state.OK[i].has(f.Dst, now):
 			actions = append(actions, judgeOK(cfg, state, udp, f, now)...)
 		}
 	}
 	return actions
+}
+
+// skipFreshTestPromotion reports whether dst's Test-tier entry was
+// created with exactly this now -- see ClrJudge's own doc comment for
+// why that means "earlier in this same call," not "on a previous tick,"
+// and must not be judged yet.
+func skipFreshTestPromotion(cfg *Config, state *State, i int, dst string, now time.Time) bool {
+	return state.Test[i].at(dst, now).Sub(now) == cfg.TestTTL
 }
 
 func judgeTest(cfg *Config, state *State, udp bool, f Flow, now time.Time) []Action {

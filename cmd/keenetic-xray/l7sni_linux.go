@@ -264,7 +264,7 @@ func l7sniLoadSnapshot() l7sniSnapshot {
 		return l7sniSnapshot{}
 	}
 	return l7sniSnapshot{
-		enabled: cfg.L7SNI.Enabled,
+		enabled: l7sniEnabled(cfg),
 		ttl:     cfg.AdaptiveRoute.EffectiveOKTTL(),
 		domains: l7sniDomainsFrom(cfg),
 	}
@@ -335,7 +335,15 @@ func l7SNIHandlePacket(ctx context.Context, raw []byte, reasm *l7sni.Reassembler
 	}
 	actx, cancel := context.WithTimeout(ctx, adaptiveRouteOpTimeout)
 	defer cancel()
-	_ = adaptiveroute.AddIP(actx, adaptiveRouteIPSet, dstIP, ttl)
+	if err := adaptiveroute.AddIP(actx, adaptiveRouteIPSet, dstIP, ttl); err != nil {
+		// L7-01 (part 2/3): a failed AddIP means dst was never actually
+		// redirected -- deleting the conntrack entry anyway would just
+		// tear down a working connection for nothing, since the very
+		// next attempt has nowhere new to route to either and goes
+		// straight back out DIRECT, identically to the one just killed.
+		logf("l7sni: %s -> %s:%d matched a routes list, but redirecting failed: %v", host, dstIP, dport, err)
+		return
+	}
 	keenetic.DeleteConntrackFlow(actx, "tcp", net.IP(src[:]).String(), dstIP, uint(sport), uint(dport))
 	if shared {
 		logf("l7sni: %s -> %s:%d matched a routes list, but this IP also recently served %q -- "+

@@ -21,10 +21,28 @@ type l7sniDomainSet map[string]struct{}
 // config.RouteList); ClassifyRouteEntry is what tells them apart, same
 // validator the CLI itself uses when an entry is first added -- called
 // here, once per config read, rather than once per packet.
+//
+// L7-01 (part 3/3): only lists whose RouteIface() is "Proxy0" (the
+// default, and the only one a bare RouteList without an explicit
+// Interface resolves to) are included, even though RouteIface() exists
+// and every other consumer of Routing.Lists (internal/botcontrol,
+// cmd/keenetic-xray's own routes.go) already honors it. A match here
+// only ever feeds the one adaptive-routing ipset, which always rides
+// whatever profile is the current live egress (see
+// transportAdaptive's own doc comment) -- there's no dataplane hook
+// through which this could actually route a match through a specific
+// non-default Proxy<n>/Wireguard<n> interface the way RouteIface()
+// promises the rest of the system it will. Silently ignoring that
+// promise for a domain the operator explicitly pointed elsewhere would
+// be worse than not matching it here at all: NDM's own object-group
+// dataplane (see config.L7SNIConfig's own doc comment) still routes it
+// correctly whenever this router's own DNS actually resolves it, this
+// just declines to be a second, conflicting path for entries this
+// feature has no way to honor properly.
 func l7sniDomainsFrom(cfg *config.Config) l7sniDomainSet {
 	set := l7sniDomainSet{}
 	for _, rl := range cfg.Routing.Lists {
-		if rl.Disabled {
+		if rl.Disabled || rl.RouteIface() != "Proxy0" {
 			continue
 		}
 		for _, e := range rl.Entries {
@@ -60,6 +78,24 @@ func (s l7sniDomainSet) matches(host string) bool {
 		}
 		host = host[i+1:]
 	}
+}
+
+// l7sniEnabled reports whether L7 SNI matching should be active for cfg
+// (L7-01, part 1/3) -- pulled out as its own pure function, cross-
+// platform like l7sniMatchesRoutes above, so it's unit-testable without
+// the real capture loop l7sni_linux.go's own l7sniLoadSnapshot lives in
+// (Linux-only, and gated behind keenetic.Available() besides).
+//
+// Both L7SNI.Enabled and AdaptiveRoute.Enabled must be on: a match's
+// only real effect is adaptiveroute.AddIP into the adaptive-routing
+// ipset (see l7SNIHandlePacket), which is exactly what
+// AdaptiveRoute.Enabled governs. Without this, turning AdaptiveRoute
+// off (leaving L7SNI on, its own separate toggle) kept capturing and
+// matching every packet, and every match still tore down the
+// triggering connection's conntrack entry for an AddIP that could
+// never actually route anywhere.
+func l7sniEnabled(cfg *config.Config) bool {
+	return cfg.L7SNI.Enabled && cfg.AdaptiveRoute.Enabled
 }
 
 // l7sniMatchesRoutes reports whether host matches any enabled route

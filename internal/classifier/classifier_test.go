@@ -296,7 +296,11 @@ func TestRateCache_PruneDropsUnseenFlows(t *testing.T) {
 
 func TestClrJudge_TestToOK(t *testing.T) {
 	cfg, state, now := testConfig(), NewState(), time.Now()
-	state.Test[0].add(blockedDst, now, cfg.TestTTL)
+	// AR-01: promoted on an earlier tick, not this one -- ClrJudge skips
+	// judging a Test entry created with exactly this same now (see
+	// skipFreshTestPromotion), so seeding it with `now` here would make
+	// this test assert on a case the fix no longer reaches.
+	state.Test[0].add(blockedDst, now.Add(-time.Second), cfg.TestTTL)
 	f := tcpFlow("ESTABLISHED", 1, 0, 2, 0) // rp>=2 -> good
 
 	actions := ClrJudge(cfg, state, []Flow{f}, now)
@@ -313,8 +317,8 @@ func TestClrJudge_TestToOK(t *testing.T) {
 
 func TestClrJudge_TestToCooldown(t *testing.T) {
 	cfg, state, now := testConfig(), NewState(), time.Now()
-	state.Test[0].add(blockedDst, now, cfg.TestTTL)
-	f := tcpFlow("SYN_SENT", 3, 0, 0, 0) // even via the tunnel, no reply -> failed
+	state.Test[0].add(blockedDst, now.Add(-time.Second), cfg.TestTTL) // AR-01: earlier tick, see TestClrJudge_TestToOK
+	f := tcpFlow("SYN_SENT", 3, 0, 0, 0)                              // even via the tunnel, no reply -> failed
 
 	actions := ClrJudge(cfg, state, []Flow{f}, now)
 	if len(actions) != 2 || actions[0].Kind != ActionRemoveIP || actions[1].Kind != ActionDeleteConntrack {
@@ -330,8 +334,8 @@ func TestClrJudge_TestToCooldown(t *testing.T) {
 
 func TestClrJudge_TestUndecided(t *testing.T) {
 	cfg, state, now := testConfig(), NewState(), time.Now()
-	state.Test[0].add(blockedDst, now, cfg.TestTTL)
-	f := tcpFlow("ESTABLISHED", 2, 0, 0, 0) // neither threshold met yet
+	state.Test[0].add(blockedDst, now.Add(-time.Second), cfg.TestTTL) // AR-01: earlier tick, see TestClrJudge_TestToOK
+	f := tcpFlow("ESTABLISHED", 2, 0, 0, 0)                           // neither threshold met yet
 
 	actions := ClrJudge(cfg, state, []Flow{f}, now)
 	if len(actions) != 0 {
@@ -341,6 +345,67 @@ func TestClrJudge_TestUndecided(t *testing.T) {
 		t.Error("should remain in the test tier until judged one way or the other")
 	}
 }
+
+// TestAR01_SameTickPromotionNotImmediatelyJudged is the regression test
+// for the audit's own numerical example: adaptiveRouteClassifyLoop runs
+// ClrSoft then ClrJudge back to back, on the same flows slice and the
+// same now, applying the resulting Actions to the real ipset only
+// afterward. This flow satisfies both ClrSoft's TCP-STALL immediate-
+// promotion condition (OP>=5, OB>=1000, RP<=2, RB<256) and judgeTest's
+// own "good" signal (RP>=2) simultaneously -- without the fix, ClrJudge
+// would confirm it OK for cfg.OKTTL (hours) in the very same call that
+// promoted it, before REDIRECT/ipset for it has been applied to the
+// kernel at all, off a conntrack read that predates the promotion
+// decision.
+func TestAR01_SameTickPromotionNotImmediatelyJudged(t *testing.T) {
+	cfg, state, now := testConfig(), NewState(), time.Now()
+	f := tcpFlow("ESTABLISHED", 5, 1000, 2, 0)
+
+	promoted := ClrSoft(cfg, state, NewRateCache(), []Flow{f}, now)
+	if len(promoted) != 2 || promoted[0].Kind != ActionAddIP {
+		t.Fatalf("ClrSoft actions = %+v, want a TCP-STALL promotion", promoted)
+	}
+	if !state.Test[0].has(blockedDst, now) {
+		t.Fatal("precondition: dst should now be in the test tier")
+	}
+
+	judged := ClrJudge(cfg, state, []Flow{f}, now)
+	if len(judged) != 0 {
+		t.Errorf("ClrJudge actions = %+v, want none -- a same-tick promotion must not be judged before its own REDIRECT is even applied (AR-01)", judged)
+	}
+	if !state.Test[0].has(blockedDst, now) {
+		t.Error("dst should remain in the test tier until a later tick judges it")
+	}
+	if state.OK[0].has(blockedDst, now) {
+		t.Error("dst must not be confirmed OK on the same tick it was only just promoted")
+	}
+}
+
+// TestAR01_JudgedNormallyOnALaterTick confirms the fix only defers
+// judging by (at least) one tick, rather than making a promoted entry
+// unjudgeable altogether.
+func TestAR01_JudgedNormallyOnALaterTick(t *testing.T) {
+	cfg, state, promotedAt := testConfig(), NewState(), time.Now()
+	f := tcpFlow("ESTABLISHED", 5, 1000, 2, 0)
+	if promoted := ClrSoft(cfg, state, NewRateCache(), []Flow{f}, promotedAt); len(promoted) != 2 {
+		t.Fatalf("ClrSoft actions = %+v, want a TCP-STALL promotion", promoted)
+	}
+
+	laterNow := promotedAt.Add(classifyIntervalForTest)
+	judged := ClrJudge(cfg, state, []Flow{f}, laterNow)
+	if len(judged) != 1 || judged[0].Kind != ActionAddIP {
+		t.Fatalf("actions = %+v, want [AddIP] -- a later tick must still judge normally", judged)
+	}
+	if !state.OK[0].has(blockedDst, laterNow) {
+		t.Error("dst should have been confirmed OK on the later tick")
+	}
+}
+
+// classifyIntervalForTest mirrors cmd/keenetic-xray's own classifyInterval
+// (500ms) -- this package doesn't import that constant (leaf package, no
+// dependency on cmd/keenetic-xray), just needs *some* realistic gap
+// between two ticks for TestAR01_JudgedNormallyOnALaterTick.
+const classifyIntervalForTest = 500 * time.Millisecond
 
 func TestClrJudge_OKChurn(t *testing.T) {
 	cfg, state, now := testConfig(), NewState(), time.Now()

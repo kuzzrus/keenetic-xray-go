@@ -35,10 +35,16 @@ func TestProfileValidate(t *testing.T) {
 		{"port too large", func(p *Profile) { p.Port = 70000 }, true},
 		{"bad network", func(p *Profile) { p.Network = "kcp" }, true},
 		{"xhttp network valid", func(p *Profile) { p.Network = "xhttp" }, false},
-		{"http network valid", func(p *Profile) { p.Network = "http" }, false},
-		{"h2 network valid (alias)", func(p *Profile) { p.Network = "h2" }, false},
+		// XR-01: h2/http are network values this project's own ImportKey
+		// still treats as aliases of each other (TestProfile_ImportKey_
+		// ChangesOnMeaningfulFields below), but real Xray-core v26.9.9
+		// removed both as a transport entirely -- a profile using either
+		// must now fail local validation instead of saving cleanly and
+		// then refusing to start for real.
+		{"http network no longer valid (removed upstream)", func(p *Profile) { p.Network = "http" }, true},
+		{"h2 network no longer valid (removed upstream)", func(p *Profile) { p.Network = "h2" }, true},
 		{"bad security", func(p *Profile) { p.Security = "aes" }, true},
-		{"reality without pbk/sid", func(p *Profile) { p.Security = "reality" }, true},
+		{"reality without pbk", func(p *Profile) { p.Security = "reality" }, true},
 		{"reality without sni", func(p *Profile) {
 			p.Security = "reality"
 			p.PublicKey = "pk"
@@ -48,6 +54,19 @@ func TestProfileValidate(t *testing.T) {
 			p.Security = "reality"
 			p.PublicKey = "pk"
 			p.ShortID = "sid"
+			p.SNI = "www.example.com"
+		}, false},
+		// XR-01: verified against real Xray-core v26.9.9's own
+		// infra/conf/transport_security.go -- the client-side REALITY
+		// branch only bounds short_id's maximum length; hex.Decode on an
+		// empty string returns (0, nil), not an error, so an empty
+		// short_id decodes cleanly to 8 zero bytes and the real binary
+		// accepts it (REALITY servers commonly list "" among their own
+		// shortIds for exactly this). A profile with no short_id must be
+		// accepted, not rejected the way it used to be.
+		{"reality with pbk/sni but no short_id is valid", func(p *Profile) {
+			p.Security = "reality"
+			p.PublicKey = "pk"
 			p.SNI = "www.example.com"
 		}, false},
 	}

@@ -194,10 +194,14 @@ func TestGenerateXrayConfig_GRPCReality(t *testing.T) {
 	}
 }
 
-func TestGenerateXrayConfig_HTTP2(t *testing.T) {
-	// A profile stored as "h2" (an older share-link alias) must still
-	// produce an "http" transport -- the name Xray-core expects -- with
-	// httpSettings, not a config Xray rejects as an unknown network.
+// TestGenerateXrayConfig_HTTP2Rejected is XR-01's regression test: h2/http
+// used to be accepted and converted into an "http" streamSettings network
+// (Xray's own former name for the transport) -- but real Xray-core v26.9.9
+// removed that transport entirely and refuses to start with it, so
+// generating that config was never actually usable. GenerateXrayConfig
+// calls Profile.Validate first, which now rejects both up front instead of
+// producing a config the real binary would only reject later.
+func TestGenerateXrayConfig_HTTP2Rejected(t *testing.T) {
 	for _, network := range []string{"h2", "http"} {
 		t.Run(network, func(t *testing.T) {
 			p := validProfile()
@@ -207,28 +211,8 @@ func TestGenerateXrayConfig_HTTP2(t *testing.T) {
 			p.Path = "/h2"
 			p.Host = "cdn.example.com"
 
-			data, err := GenerateXrayConfig(XrayConfigOptions{SOCKSPort: 1080, Outbound: p})
-			if err != nil {
-				t.Fatalf("GenerateXrayConfig: %v", err)
-			}
-			var decoded map[string]any
-			if err := json.Unmarshal(data, &decoded); err != nil {
-				t.Fatalf("invalid JSON: %v", err)
-			}
-			stream := decoded["outbounds"].([]any)[0].(map[string]any)["streamSettings"].(map[string]any)
-
-			if stream["network"] != "http" {
-				t.Errorf("network = %v, want http", stream["network"])
-			}
-			httpSettings, ok := stream["httpSettings"].(map[string]any)
-			if !ok {
-				t.Fatalf("httpSettings missing: %#v", stream)
-			}
-			if httpSettings["path"] != "/h2" {
-				t.Errorf("httpSettings.path = %v, want /h2", httpSettings["path"])
-			}
-			if hosts, ok := httpSettings["host"].([]any); !ok || len(hosts) != 1 || hosts[0] != "cdn.example.com" {
-				t.Errorf("httpSettings.host = %#v, want [cdn.example.com]", httpSettings["host"])
+			if _, err := GenerateXrayConfig(XrayConfigOptions{SOCKSPort: 1080, Outbound: p}); err == nil {
+				t.Fatalf("GenerateXrayConfig with network=%q: want an error, real Xray-core removed this transport", network)
 			}
 		})
 	}

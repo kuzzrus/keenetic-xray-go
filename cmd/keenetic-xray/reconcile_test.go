@@ -41,6 +41,39 @@ func TestReconcileSteps_NoRouterIsNoop(t *testing.T) {
 	reconcileWatchdog(logf)
 }
 
+// TestReconcileAdaptiveRoute_SkipsWhenFailedOpen is AR-09's regression
+// test: reconcileAdaptiveRoute must not re-assert REDIRECT while
+// adaptiveRouteHealthCheck has deliberately cleared it for a confirmed-
+// dead egress -- that used to be indistinguishable from the firmware
+// having simply dropped the rule, so reconcile silently undid an active
+// emergency fail-open within its own next cycle. This environment has no
+// real router to prove the *positive* case against (a real
+// keenetic.Available()), so what's actually checked here is what's
+// checkable without one: the flag genuinely gates the function (no
+// panic either way) and defaults to false so every other reconcile path
+// is unaffected by this change. The full behavioral guarantee -- that a
+// missing REDIRECT rule stays missing while this flag is set -- can only
+// be confirmed on real hardware.
+func TestReconcileAdaptiveRoute_SkipsWhenFailedOpen(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "c.json")
+	t.Setenv("KEENETIC_XRAY_CONFIG", cfgPath)
+
+	cfg := config.Default()
+	cfg.AdaptiveRoute = config.AdaptiveRouteConfig{Enabled: true}
+	if err := cfg.Save(cfgPath); err != nil {
+		t.Fatal(err)
+	}
+
+	adaptiveRouteFailedOpen.Store(true)
+	t.Cleanup(func() { adaptiveRouteFailedOpen.Store(false) })
+
+	var logged []string
+	reconcileAdaptiveRoute(context.Background(), cfg, func(format string, args ...any) { logged = append(logged, format) })
+	if len(logged) != 0 {
+		t.Errorf("logged %v, want nothing while failed open", logged)
+	}
+}
+
 // TestReconcileWatchdog_NotEnabledIsNoop is the regression test for a
 // real incident (2026-09-15): a router whose very first cron install
 // silently failed kept the watchdog's crontab *entry* forever (writing

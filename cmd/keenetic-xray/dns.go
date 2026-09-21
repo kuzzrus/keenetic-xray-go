@@ -151,6 +151,11 @@ func dnsPreset(cfg *config.Config, args []string) error {
 		}
 	}
 
+	// DNS-01: capture what's currently owned *before* the reset below --
+	// a custom (non-catalogue) endpoint being replaced by this preset
+	// falls out of cfg.DNS the moment we overwrite it, so this is the
+	// only chance to still tell ApplyDNS it needs removing.
+	prev := managedSet(cfg)
 	cfg.DNS = config.DNSConfig{Provider: p.ID}
 	if mode == "dot" || mode == "both" {
 		for _, t := range p.DoT {
@@ -165,7 +170,7 @@ func dnsPreset(cfg *config.Config, args []string) error {
 	if !cfg.DNS.Configured() {
 		return fmt.Errorf("у провайдера %q нет эндпоинтов для режима %s", p.ID, mode)
 	}
-	return dnsApply(cfg, fmt.Sprintf("DNS: %s (%s)", p.Name, mode))
+	return dnsApply(cfg, prev, fmt.Sprintf("DNS: %s (%s)", p.Name, mode))
 }
 
 func dnsSet(cfg *config.Config, args []string) error {
@@ -190,16 +195,22 @@ func dnsSet(cfg *config.Config, args []string) error {
 	default:
 		return fmt.Errorf("dns set {dot|doh} …")
 	}
-	return dnsApply(cfg, "DNS: свои апстримы")
+	// Purely additive (appends to whatever cfg.DNS already had), so
+	// there's nothing being dropped that dnsApply's prev needs to protect.
+	return dnsApply(cfg, dnsOwned{}, "DNS: свои апстримы")
 }
 
+// dnsOff clears DNS on the router *before* persisting the emptied config
+// (DNS-01): saving first meant a failed ClearDNS left config.json with
+// nothing to clean up, so no future reconcile would ever retry removing
+// the now-orphaned upstreams still sitting on the router.
 func dnsOff(cfg *config.Config) error {
 	managed := managedSet(cfg)
-	cfg.DNS = config.DNSConfig{}
-	if err := cfg.Save(configPath()); err != nil {
-		return err
-	}
 	if !keenetic.Available() {
+		cfg.DNS = config.DNSConfig{}
+		if err := cfg.Save(configPath()); err != nil {
+			return err
+		}
 		fmt.Println("DNS выключен в конфиге (на роутере применится при следующем запуске демона)")
 		return nil
 	}
@@ -207,14 +218,24 @@ func dnsOff(cfg *config.Config) error {
 	defer cancel()
 	rep, err := keenetic.ClearDNS(ctx, keys(managed.tlsIP), keys(managed.dohURL))
 	if err != nil {
-		return fmt.Errorf("в конфиге выключено, но на роутере убрать не вышло: %w", err)
+		return fmt.Errorf("не удалось убрать DNS на роутере (конфиг не тронут, можно повторить): %w", err)
+	}
+	cfg.DNS = config.DNSConfig{}
+	if err := cfg.Save(configPath()); err != nil {
+		return fmt.Errorf("на роутере убрано, но не удалось сохранить конфиг: %w", err)
 	}
 	fmt.Printf("DNS выключен. убрано с роутера: DoT %d, DoH %d\n", len(rep.TLSRemoved), len(rep.HTTPSRemoved))
 	return nil
 }
 
 // dnsApply saves cfg (Validate runs in Save) and reconciles the router.
-func dnsApply(cfg *config.Config, okMsg string) error {
+// prev is whatever managedSet(cfg) reported *before* the caller
+// overwrote cfg.DNS (DNS-01): a custom (non-catalogue) endpoint that's
+// about to be replaced only appears here, never in cfg.DNS's new value,
+// so without folding it in ApplyDNS would never learn it needs removing.
+// Callers with nothing to protect (dnsSet, which only ever appends) pass
+// the zero value.
+func dnsApply(cfg *config.Config, prev dnsOwned, okMsg string) error {
 	if err := cfg.Save(configPath()); err != nil {
 		return err
 	}
@@ -224,7 +245,7 @@ func dnsApply(cfg *config.Config, okMsg string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	rep, err := keenetic.ApplyDNS(ctx, dnsDesired(cfg.DNS))
+	rep, err := keenetic.ApplyDNS(ctx, dnsDesired(cfg.DNS, prev))
 	if err != nil {
 		return fmt.Errorf("%s, но применить на роутере не вышло: %w", okMsg, err)
 	}
@@ -234,13 +255,20 @@ func dnsApply(cfg *config.Config, okMsg string) error {
 }
 
 // dnsDesired turns config.DNS into a keenetic reconcile request. The
-// managed set is the whole catalogue plus whatever custom endpoints the
-// config itself names -- so ApplyDNS can retire an endpoint we set last
-// time, but never one a person added by hand elsewhere.
-func dnsDesired(d config.DNSConfig) keenetic.DNSDesired {
+// managed set is the whole catalogue, plus extraManaged (see dnsApply's
+// own doc comment), plus whatever custom endpoints the config itself
+// names -- so ApplyDNS can retire an endpoint we set last time, but never
+// one a person added by hand elsewhere.
+func dnsDesired(d config.DNSConfig, extraManaged dnsOwned) keenetic.DNSDesired {
 	des := keenetic.DNSDesired{
 		ManagedTLSIPs:    dnsupstream.AllTLSIPs(),
 		ManagedHTTPSURLs: dnsupstream.AllDoHURLs(),
+	}
+	for ip := range extraManaged.tlsIP {
+		des.ManagedTLSIPs = append(des.ManagedTLSIPs, ip)
+	}
+	for u := range extraManaged.dohURL {
+		des.ManagedHTTPSURLs = append(des.ManagedHTTPSURLs, u)
 	}
 	for _, t := range d.DoT {
 		des.TLS = append(des.TLS, keenetic.DNSUpstreamTLS{IP: t.IP, SNI: t.SNI})
@@ -293,7 +321,7 @@ func applyDNSAtStartup(cfg *config.Config, logf func(string, ...any)) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	rep, err := keenetic.ApplyDNS(ctx, dnsDesired(cfg.DNS))
+	rep, err := keenetic.ApplyDNS(ctx, dnsDesired(cfg.DNS, dnsOwned{}))
 	if err != nil {
 		logf("dns: apply failed: %v", err)
 		return
@@ -310,7 +338,7 @@ func reconcileDNS(ctx context.Context, cfg *config.Config, logf func(string, ...
 	if !cfg.DNS.Configured() {
 		return
 	}
-	rep, err := keenetic.ApplyDNS(ctx, dnsDesired(cfg.DNS))
+	rep, err := keenetic.ApplyDNS(ctx, dnsDesired(cfg.DNS, dnsOwned{}))
 	if err != nil {
 		logf("dns: reconcile failed: %v", err)
 		return

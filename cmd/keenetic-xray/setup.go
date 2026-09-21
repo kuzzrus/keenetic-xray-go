@@ -296,16 +296,15 @@ func promptTelegramRoute(reader *bufio.Reader, cfg *config.Config) {
 	}
 
 	presets.SetOverlay(presetsOverlayDir())
+	// PRE-01: presets.Apply now lands iface on every list it touches --
+	// the domain list and, since withIP is true here, its telegram-ip
+	// CIDR companion too -- so no separate fixup is needed for the
+	// companion the way there used to be.
 	names, err := presets.Apply(cfg, "telegram", true, iface, false)
 	if err != nil {
 		fmt.Println("  список telegram не применился:", err)
 		fmt.Println("  позже:  keenetic-xray routes preset add telegram --ip --iface=" + iface)
 		return
-	}
-	// presets.Apply lands the interface on the domain list only; Telegram's
-	// CIDR ranges are tight and service-specific, so send them the same way.
-	if ip := presets.BoundList(cfg, "telegram-ip"); ip != nil {
-		ip.Interface = iface
 	}
 	if err := routesApply(cfg, fmt.Sprintf("Telegram → %s (%s)", iface, strings.Join(names, ", "))); err != nil {
 		fmt.Println(" ", err)

@@ -152,8 +152,13 @@ func (h *RouterHandler) dnsPreset(ctx context.Context, args []string) (string, e
 	if !next.Configured() {
 		return "", fmt.Errorf("у %q нет эндпоинтов для режима %s", p.ID, mode)
 	}
+	// DNS-01: capture what's currently owned *before* overwriting
+	// h.Config.DNS -- a custom (non-catalogue) endpoint being replaced by
+	// this preset falls out of h.Config.DNS the moment we overwrite it,
+	// so this is the only chance to still tell ApplyDNS it needs removing.
+	prev := dnsManaged(h.Config)
 	h.Config.DNS = next
-	return h.dnsApply(ctx, fmt.Sprintf("DNS → %s (%s)", p.Name, mode))
+	return h.dnsApply(ctx, prev, fmt.Sprintf("DNS → %s (%s)", p.Name, mode))
 }
 
 func (h *RouterHandler) dnsSet(ctx context.Context, args []string) (string, error) {
@@ -183,28 +188,42 @@ func (h *RouterHandler) dnsSet(ctx context.Context, args []string) (string, erro
 	default:
 		return "", fmt.Errorf("dns_set <dot|doh> …")
 	}
-	return h.dnsApply(ctx, "DNS → свои апстримы")
+	// Purely additive (appends to whatever h.Config.DNS already had), so
+	// there's nothing being dropped that dnsApply's prev needs to protect.
+	return h.dnsApply(ctx, dnsOwnedSet{}, "DNS → свои апстримы")
 }
 
+// dnsOff clears DNS on the router *before* persisting the emptied config
+// (DNS-01): saving first meant a failed ClearDNS left config.json with
+// nothing to clean up, so no future reconcile would ever retry removing
+// the now-orphaned upstreams still sitting on the router.
 func (h *RouterHandler) dnsOff(ctx context.Context) (string, error) {
 	managed := dnsManaged(h.Config)
-	h.Config.DNS = config.DNSConfig{}
-	if err := h.Config.Save(h.ConfigPath); err != nil {
-		return "", err
-	}
 	if !keenetic.Available() {
+		h.Config.DNS = config.DNSConfig{}
+		if err := h.Config.Save(h.ConfigPath); err != nil {
+			return "", err
+		}
 		return "DNS выключен в конфиге (применится при следующем запуске демона)", nil
 	}
 	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	rep, err := keenetic.ClearDNS(cctx, dnsKeys(managed.ip), dnsKeys(managed.url))
 	if err != nil {
-		return "в конфиге выключено, но на роутере убрать не вышло: " + err.Error(), nil
+		return "не удалось убрать DNS на роутере (конфиг не тронут, можно повторить): " + err.Error(), nil
+	}
+	h.Config.DNS = config.DNSConfig{}
+	if err := h.Config.Save(h.ConfigPath); err != nil {
+		return "", fmt.Errorf("на роутере убрано, но не удалось сохранить конфиг: %w", err)
 	}
 	return fmt.Sprintf("DNS выключен. убрано с роутера: DoT %d, DoH %d", len(rep.TLSRemoved), len(rep.HTTPSRemoved)), nil
 }
 
-func (h *RouterHandler) dnsApply(ctx context.Context, okMsg string) (string, error) {
+// dnsApply saves h.Config (Validate runs in Save) and reconciles the
+// router. prev is whatever dnsManaged(h.Config) reported *before* the
+// caller overwrote h.Config.DNS -- see dnsPreset's own comment for why.
+// Callers with nothing to protect pass the zero value.
+func (h *RouterHandler) dnsApply(ctx context.Context, prev dnsOwnedSet, okMsg string) (string, error) {
 	if err := h.Config.Save(h.ConfigPath); err != nil {
 		return "", err
 	}
@@ -213,7 +232,7 @@ func (h *RouterHandler) dnsApply(ctx context.Context, okMsg string) (string, err
 	}
 	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	rep, err := keenetic.ApplyDNS(cctx, botDNSDesired(h.Config.DNS))
+	rep, err := keenetic.ApplyDNS(cctx, botDNSDesired(h.Config.DNS, prev))
 	if err != nil {
 		return okMsg + fmt.Sprintf("\n⚠️ на роутере: %v", err), nil
 	}
@@ -221,10 +240,21 @@ func (h *RouterHandler) dnsApply(ctx context.Context, okMsg string) (string, err
 		len(rep.TLSAdded), len(rep.TLSRemoved), len(rep.HTTPSAdded), len(rep.HTTPSRemoved)), nil
 }
 
-func botDNSDesired(d config.DNSConfig) keenetic.DNSDesired {
+// botDNSDesired turns config.DNS into a keenetic reconcile request. The
+// managed set is the whole catalogue, plus extraManaged (see dnsApply's
+// own doc comment), plus whatever custom endpoints the config itself
+// names -- so ApplyDNS can retire an endpoint we set last time, but never
+// one a person added by hand elsewhere.
+func botDNSDesired(d config.DNSConfig, extraManaged dnsOwnedSet) keenetic.DNSDesired {
 	des := keenetic.DNSDesired{
 		ManagedTLSIPs:    dnsupstream.AllTLSIPs(),
 		ManagedHTTPSURLs: dnsupstream.AllDoHURLs(),
+	}
+	for ip := range extraManaged.ip {
+		des.ManagedTLSIPs = append(des.ManagedTLSIPs, ip)
+	}
+	for u := range extraManaged.url {
+		des.ManagedHTTPSURLs = append(des.ManagedHTTPSURLs, u)
 	}
 	for _, t := range d.DoT {
 		des.TLS = append(des.TLS, keenetic.DNSUpstreamTLS{IP: t.IP, SNI: t.SNI})

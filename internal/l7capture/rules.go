@@ -10,6 +10,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -250,23 +251,48 @@ func isOurRule(line, comment string) bool {
 
 // ClearRules removes this file's NFLOG rules. A no-op when none exist.
 func ClearRules(ctx context.Context) error {
-	clearOurRules(ctx)
-	return nil
+	return clearOurRules(ctx)
+}
+
+// unquote strips one layer of surrounding double quotes -- real
+// `iptables -S` wraps a string-valued match argument (our own --comment)
+// in double quotes so its own output round-trips as a shell command, but
+// iptablesRun execs iptables directly, no shell in between, so a field
+// passed through with its quotes still attached is a value iptables
+// never actually stored and the delete silently fails to match anything.
+// Duplicated from internal/keenetic/wireguard.go's own unquote (same
+// project convention as runLoggedCmd above, a package boundary rather
+// than a 5-line import) -- internal/keenetic/mss.go had the identical bug
+// for the exact same reason (FW-01), found and fixed first; this is the
+// same fix applied here.
+func unquote(s string) string {
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		return s[1 : len(s)-1]
+	}
+	return s
 }
 
 // clearOurRules deletes every filter/FORWARD rule that is ours (see
 // isOurRule), reading the live spec back with `-S` so the `-D` matches
 // byte-for-byte whatever is actually there.
-func clearOurRules(ctx context.Context) {
+func clearOurRules(ctx context.Context) error {
 	out, err := iptablesListFORWARD(ctx)
 	if err != nil {
-		return
+		return nil // nothing to list; not a cleanup failure worth reporting
 	}
+	var errs []error
 	for _, line := range strings.Split(out, "\n") {
 		if !strings.HasPrefix(line, "-A FORWARD ") || !isOurRule(line, l7RuleComment) {
 			continue
 		}
-		spec := strings.Fields(strings.TrimPrefix(line, "-A "))
-		_ = iptablesRun(ctx, append([]string{"-D"}, spec...)...)
+		fields := strings.Fields(strings.TrimPrefix(line, "-A "))
+		spec := make([]string, len(fields))
+		for i, f := range fields {
+			spec[i] = unquote(f)
+		}
+		if err := iptablesRun(ctx, append([]string{"-D"}, spec...)...); err != nil {
+			errs = append(errs, fmt.Errorf("removing stale rule %q: %w", line, err))
+		}
 	}
+	return errors.Join(errs...)
 }

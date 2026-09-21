@@ -79,12 +79,20 @@ func TestCmdInternal_PostinstSetupThenPrermCleanup(t *testing.T) {
 	t.Setenv("KEENETIC_XRAY_NO_PROXY0", "")
 	t.Setenv("KEENETIC_XRAY_CONFIG", configFile)
 
-	// prerm-cleanup without --purge leaves everything alone.
+	// prerm-cleanup without --purge leaves everything alone -- except the
+	// watchdog cron entry (INST-05), which comes off unconditionally: a
+	// plain `opkg remove` used to leave it firing forever at a
+	// now-deleted binary, and it's harmless to clear even on an upgrade
+	// since postinst-setup above already proved it force-installs the
+	// entry regardless of prior state.
 	if err := run([]string{"internal", "prerm-cleanup"}); err != nil {
 		t.Fatalf("prerm-cleanup: %v", err)
 	}
 	if _, err := os.Stat(configFile); err != nil {
 		t.Errorf("config.json should survive a non-purge prerm-cleanup: %v", err)
+	}
+	if enabled, err := install.WatchdogEnabled(cronFilePath()); err != nil || enabled {
+		t.Errorf("watchdog should be disabled after prerm-cleanup (even non-purge): enabled=%v err=%v", enabled, err)
 	}
 
 	// prerm-cleanup --purge removes it.

@@ -8,10 +8,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kuzzrus/keenetic-xray-go/internal/adaptiveroute"
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 	"github.com/kuzzrus/keenetic-xray-go/internal/dnsupstream"
 	"github.com/kuzzrus/keenetic-xray-go/internal/install"
 	"github.com/kuzzrus/keenetic-xray-go/internal/keenetic"
+	"github.com/kuzzrus/keenetic-xray-go/internal/l7capture"
 	"github.com/kuzzrus/keenetic-xray-go/internal/xraycore"
 )
 
@@ -159,6 +161,17 @@ func cmdPrermCleanup(args []string) error {
 	for _, h := range ndmHookPaths() {
 		_ = os.Remove(h)
 	}
+	// INST-05: same "explicitly on any prerm" reasoning as the ndm hooks
+	// above, not gated on --purge -- a plain (non-purge) `opkg remove`
+	// used to leave the watchdog cron entry (*/2 * * * *) invoking a now-
+	// deleted binary forever. Safe unconditionally because postinst
+	// already force-installs this entry on every install/upgrade
+	// regardless of prior state ("on by default"), so removing it here
+	// is a harmless tear-down-and-rebuild for an upgrade, and the actual
+	// fix for a real removal. Local cron file, no ndmc/purge needed.
+	if err := install.SetWatchdogCron(cronFilePath(), watchdogScriptPath(), initScript, watchdogLogPath(), false); err != nil {
+		fmt.Println("warning: could not remove the watchdog cron entry:", err)
+	}
 	if purge && keenetic.Available() {
 		// Remove this project's DNS-route object-groups + routes (only the
 		// keenetic-xray-* prefixed ones -- the operator's own web-UI lists
@@ -183,6 +196,19 @@ func cmdPrermCleanup(args []string) error {
 		// a hand-added upstream is untouched).
 		if _, err := keenetic.ClearDNS(ctx, dnsupstream.AllTLSIPs(), dnsupstream.AllDoHURLs()); err != nil {
 			fmt.Println("warning: could not clear secure-DNS upstreams:", err)
+		}
+		// INST-05: adaptive routing's REDIRECT/ipset rule and L7 SNI's
+		// NFLOG capture rule were never wired into any cleanup path at
+		// all -- only the CLI/bot's own on/off commands touched them.
+		// Left in place, they'd keep matching traffic and feeding it
+		// (or a now-nonexistent NFLOG listener) after the package -- and
+		// the xray-core dokodemo-door inbound they redirect into -- is
+		// gone.
+		if err := adaptiveroute.ClearRedirect(ctx); err != nil {
+			fmt.Println("warning: could not clear the adaptive-route REDIRECT rule:", err)
+		}
+		if err := l7capture.ClearRules(ctx); err != nil {
+			fmt.Println("warning: could not clear the L7 SNI capture rule:", err)
 		}
 	}
 	return install.PrermCleanup(installPaths(), purge)

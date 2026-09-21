@@ -929,3 +929,54 @@ func TestAdaptiveRouteConfig_EffectiveBlockThreshold(t *testing.T) {
 		}
 	}
 }
+
+// TestAWGAddressList_UnmarshalJSON_AcceptsBothShapes is AWG-02's
+// backward-compatibility test: AmneziaWGParams.Address changed from a
+// plain string to AWGAddressList ([]string) so a dual-stack address can
+// be stored as two real entries instead of one comma-joined string. A
+// config.json saved by a build from before this fix has "address" as a
+// single JSON string, not an array -- UnmarshalJSON must keep loading
+// that correctly (comma-split, same as a fresh dual-stack parse would
+// produce) rather than failing to parse the whole file.
+func TestAWGAddressList_UnmarshalJSON_AcceptsBothShapes(t *testing.T) {
+	cases := []struct {
+		name string
+		json string
+		want []string
+	}{
+		{"array (current format)", `["10.8.1.2/32","fd00::2/128"]`, []string{"10.8.1.2/32", "fd00::2/128"}},
+		{"single string (pre-fix format)", `"10.8.1.2/32"`, []string{"10.8.1.2/32"}},
+		{"comma-joined string (pre-fix dual-stack)", `"10.8.1.2/32, fd00::2/128"`, []string{"10.8.1.2/32", "fd00::2/128"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var got AWGAddressList
+			if err := json.Unmarshal([]byte(c.json), &got); err != nil {
+				t.Fatalf("Unmarshal(%s): %v", c.json, err)
+			}
+			if len(got) != len(c.want) {
+				t.Fatalf("got %v, want %v", got, c.want)
+			}
+			for i := range c.want {
+				if got[i] != c.want[i] {
+					t.Errorf("got[%d] = %q, want %q", i, got[i], c.want[i])
+				}
+			}
+		})
+	}
+}
+
+// TestAmneziaWGParams_UnmarshalJSON_LoadsPreFixConfig confirms the whole
+// struct (not just the isolated type) round-trips a real pre-fix
+// config.json fragment -- the concrete scenario this compatibility
+// shim exists for.
+func TestAmneziaWGParams_UnmarshalJSON_LoadsPreFixConfig(t *testing.T) {
+	data := `{"private_key":"AAAA=","address":"10.8.1.2/32","peer_public_key":"BBBB="}`
+	var a AmneziaWGParams
+	if err := json.Unmarshal([]byte(data), &a); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if len(a.Address) != 1 || a.Address[0] != "10.8.1.2/32" {
+		t.Errorf("Address = %v, want [10.8.1.2/32]", a.Address)
+	}
+}

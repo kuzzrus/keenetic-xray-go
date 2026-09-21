@@ -319,8 +319,8 @@ func buildAmneziaWGOutbound(p Profile) (xrayOutbound, error) {
 		"secretKey": a.PrivateKey,
 		"peers":     []map[string]any{peer},
 	}
-	if a.Address != "" {
-		settings["address"] = []string{a.Address}
+	if len(a.Address) > 0 {
+		settings["address"] = []string(a.Address)
 	}
 	if len(a.DNS) > 0 {
 		settings["remoteDNS"] = a.DNS

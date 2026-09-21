@@ -190,6 +190,7 @@ func l7SNIClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 	}()
 
 	reasm := l7sni.NewReassembler(l7sniReassembleMaxAge, l7sniReassembleMaxSize)
+	sharedIPs := newL7SNISharedIPTracker()
 	expire := time.NewTicker(l7sniReassembleMaxAge)
 	defer expire.Stop()
 	go func() {
@@ -198,7 +199,9 @@ func l7SNIClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 			case <-ctx.Done():
 				return
 			case <-expire.C:
-				reasm.Expire(time.Now())
+				now := time.Now()
+				reasm.Expire(now)
+				sharedIPs.expire(now)
 			}
 		}
 	}()
@@ -219,7 +222,7 @@ func l7SNIClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 			snap = l7sniLoadSnapshot()
 			snapAt = time.Now()
 		}
-		l7SNIHandlePacket(ctx, pkt.Payload, reasm, snap, logf)
+		l7SNIHandlePacket(ctx, pkt.Payload, reasm, sharedIPs, snap, logf)
 	}
 }
 
@@ -275,7 +278,7 @@ func l7sniLoadSnapshot() l7sniSnapshot {
 // (this runs on every captured packet; a persistent problem would show
 // up as "never logs a match", something hardware testing needs to
 // notice directly, not a log line per uninteresting packet).
-func l7SNIHandlePacket(ctx context.Context, raw []byte, reasm *l7sni.Reassembler, snap l7sniSnapshot, logf func(string, ...any)) {
+func l7SNIHandlePacket(ctx context.Context, raw []byte, reasm *l7sni.Reassembler, sharedIPs *l7sniSharedIPTracker, snap l7sniSnapshot, logf func(string, ...any)) {
 	if !snap.enabled || len(snap.domains) == 0 {
 		// Nothing this packet could possibly match -- checked before any
 		// parsing at all, since with no route lists configured (the
@@ -307,15 +310,39 @@ func l7SNIHandlePacket(ctx context.Context, raw []byte, reasm *l7sni.Reassembler
 		return
 	}
 
+	// AR-07: note every successfully-extracted hostname, matched or not
+	// -- what this needs to catch is "does dst also serve something
+	// else", which requires seeing every sighting, not just the ones
+	// that happen to match a route list.
+	previousHost, shared := sharedIPs.note(dst, host, time.Now())
+
 	if !snap.domains.matches(host) {
 		return
 	}
 
 	dstIP := net.IP(dst[:]).String()
+	ttl := snap.ttl
+	if shared {
+		// A route-list match is only evidence about host itself -- dst
+		// having just as recently served previousHost too means this is
+		// very likely a shared CDN/hosting IP, and the full-length
+		// AdaptiveRoute TTL would route all of that IP's unrelated
+		// traffic through the tunnel as well, not just host's. Use a
+		// short TTL instead to bound how long that collateral redirect
+		// can last; an actively-used blocked domain simply gets
+		// re-redirected on its own very next connection.
+		ttl = l7sniSharedIPRedirectTTL
+	}
 	actx, cancel := context.WithTimeout(ctx, adaptiveRouteOpTimeout)
 	defer cancel()
-	_ = adaptiveroute.AddIP(actx, adaptiveRouteIPSet, dstIP, snap.ttl)
+	_ = adaptiveroute.AddIP(actx, adaptiveRouteIPSet, dstIP, ttl)
 	keenetic.DeleteConntrackFlow(actx, "tcp", net.IP(src[:]).String(), dstIP, uint(sport), uint(dport))
+	if shared {
+		logf("l7sni: %s -> %s:%d matched a routes list, but this IP also recently served %q -- "+
+			"redirecting with a short TTL to limit collateral impact on unrelated traffic sharing the address",
+			host, dstIP, dport, previousHost)
+		return
+	}
 	logf("l7sni: %s -> %s:%d matched a routes list, redirecting", host, dstIP, dport)
 }
 

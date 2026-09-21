@@ -449,6 +449,68 @@ func TestUnbound_RouterDNSOnOffAndRemoveReverts(t *testing.T) {
 	}
 }
 
+// TestUnbound_InstallBacksUpForeignConf is ADD-02's regression test for
+// Install's overwrite: a conf that exists but carries none of our
+// markers (a stock package default, or a real hand-edited file -- content
+// alone can't tell them apart) must be preserved as a .orig backup
+// instead of silently destroyed.
+func TestUnbound_InstallBacksUpForeignConf(t *testing.T) {
+	f := newFakeSys()
+	withFakeSys(t, f)
+	ctx := context.Background()
+	a, _ := Find("unbound")
+
+	foreign := "# hand-edited by someone else\nserver:\n  verbosity: 3\n"
+	f.files[unboundConf] = []byte(foreign)
+
+	if err := a.Install(ctx); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if got := string(f.files[unboundConf+".orig"]); got != foreign {
+		t.Errorf("backup = %q, want the original foreign conf %q", got, foreign)
+	}
+	if conf := string(f.files[unboundConf]); !strings.Contains(conf, unboundManagedMark) {
+		t.Errorf("unbound.conf should be our own managed conf now: %q", conf)
+	}
+}
+
+// TestUnbound_RemoveSurfacesUnbindFailure is ADD-02's regression test for
+// Remove's other half: a failed `ip name-server` removal used to be
+// discarded outright (`_ = setLocalNameServer(...)`), silently leaving
+// Keenetic possibly still pointed at a resolver about to stop existing.
+// Remove must still complete (uninstalling shouldn't be blocked by this),
+// but now reports the failure instead of returning nil.
+func TestUnbound_RemoveSurfacesUnbindFailure(t *testing.T) {
+	f := newFakeSys()
+	withFakeSys(t, f)
+	ns := map[string]bool{}
+	withUnboundKeeneticSeam(t, true, "192.168.1.1", ns)
+	ctx := context.Background()
+	a, _ := Find("unbound")
+
+	if err := a.Install(ctx); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if err := a.Configure(ctx, map[string]string{"router-dns": "on"}); err != nil {
+		t.Fatalf("router-dns=on: %v", err)
+	}
+
+	setLocalNameServer = func(context.Context, string, int, bool) error {
+		return fmt.Errorf("ndmc: timeout")
+	}
+
+	err := a.Remove(ctx)
+	if err == nil {
+		t.Fatal("Remove should report the unbind failure, not silently succeed")
+	}
+	if !strings.Contains(err.Error(), "ndmc: timeout") {
+		t.Errorf("Remove error = %v, want it to wrap the unbind failure", err)
+	}
+	if _, still := f.installed[unboundPkg]; still {
+		t.Error("unbound-daemon should still be removed despite the unbind failure")
+	}
+}
+
 func TestUnbound_RouterDNSRequiresKeenetic(t *testing.T) {
 	f := newFakeSys()
 	withFakeSys(t, f)

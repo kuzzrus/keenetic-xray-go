@@ -2,6 +2,7 @@ package addons
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -117,6 +118,61 @@ func TestDnscrypt_RouterDNSOnOffAndRemove(t *testing.T) {
 	}
 	if _, still := f.installed[dnscryptPkg]; still {
 		t.Error("dnscrypt-proxy2 should be removed")
+	}
+}
+
+// TestDnscrypt_InstallBacksUpForeignConf mirrors unbound's own
+// TestUnbound_InstallBacksUpForeignConf -- see its doc comment (ADD-02).
+func TestDnscrypt_InstallBacksUpForeignConf(t *testing.T) {
+	f := newFakeSys()
+	withFakeSys(t, f)
+	ctx := context.Background()
+	a, _ := Find("dnscrypt")
+
+	foreign := "# hand-edited by someone else\nlisten_addresses = ['127.0.0.1:53']\n"
+	f.files[dnscryptConf] = []byte(foreign)
+
+	if err := a.Install(ctx); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if got := string(f.files[dnscryptConf+".orig"]); got != foreign {
+		t.Errorf("backup = %q, want the original foreign conf %q", got, foreign)
+	}
+	if toml := string(f.files[dnscryptConf]); !strings.Contains(toml, unboundManagedMark) {
+		t.Errorf("dnscrypt conf should be our own managed conf now: %q", toml)
+	}
+}
+
+// TestDnscrypt_RemoveSurfacesUnbindFailure mirrors unbound's own
+// TestUnbound_RemoveSurfacesUnbindFailure -- see its doc comment (ADD-02).
+func TestDnscrypt_RemoveSurfacesUnbindFailure(t *testing.T) {
+	f := newFakeSys()
+	withFakeSys(t, f)
+	ns := map[string]bool{}
+	withUnboundKeeneticSeam(t, true, "192.168.1.1", ns)
+	ctx := context.Background()
+	a, _ := Find("dnscrypt")
+
+	if err := a.Install(ctx); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if err := a.Configure(ctx, map[string]string{"router-dns": "on"}); err != nil {
+		t.Fatalf("router-dns=on: %v", err)
+	}
+
+	setLocalNameServer = func(context.Context, string, int, bool) error {
+		return fmt.Errorf("ndmc: timeout")
+	}
+
+	err := a.Remove(ctx)
+	if err == nil {
+		t.Fatal("Remove should report the unbind failure, not silently succeed")
+	}
+	if !strings.Contains(err.Error(), "ndmc: timeout") {
+		t.Errorf("Remove error = %v, want it to wrap the unbind failure", err)
+	}
+	if _, still := f.installed[dnscryptPkg]; still {
+		t.Error("dnscrypt-proxy2 should still be removed despite the unbind failure")
 	}
 }
 

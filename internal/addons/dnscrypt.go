@@ -125,7 +125,15 @@ func (*dnscryptAddon) Install(ctx context.Context) error {
 		return err
 	}
 	_ = mkdirAll(dnscryptCacheDir)
+	// ADD-02: back up whatever's already there first, best-effort --
+	// content alone can't tell a stock conf apart from a real hand-edited
+	// one, and a harmless leftover .orig file is a much better outcome
+	// than silently destroying someone's actual config. Same reasoning
+	// as unbound's own Install, see there.
 	if body, err := readFile(dnscryptConf); err != nil || !strings.Contains(string(body), unboundManagedMark) {
+		if err == nil && len(body) > 0 {
+			_ = writeFile(dnscryptConf+".orig", body, 0o644)
+		}
 		if err := writeFile(dnscryptConf, []byte(dnscryptConfBody(false, "", true, true)), 0o644); err != nil {
 			return fmt.Errorf("запись %s: %w", dnscryptConf, err)
 		}
@@ -138,11 +146,23 @@ func (*dnscryptAddon) Install(ctx context.Context) error {
 
 func (*dnscryptAddon) Remove(ctx context.Context) error {
 	d := dnscryptRead(ctx)
+	// ADD-02: same reasoning as unbound's own Remove -- keep going
+	// regardless of whether the name-server entry actually came off, but
+	// surface the failure instead of discarding it outright, since it
+	// means `ip name-server` may still point at a resolver that's about
+	// to stop existing.
+	var unbindErr error
 	if d.routerMode && keeneticAvailable() && privateV4(d.routerIP) {
-		_ = setLocalNameServer(ctx, d.routerIP, d.port, false)
+		unbindErr = setLocalNameServer(ctx, d.routerIP, d.port, false)
 	}
 	_, _ = initdRun(ctx, dnscryptInit, "stop")
-	return opkgRemove(ctx, dnscryptPkg)
+	if err := opkgRemove(ctx, dnscryptPkg); err != nil {
+		return err
+	}
+	if unbindErr != nil {
+		return fmt.Errorf("dnscrypt-proxy удалён, но снять `ip name-server %s:%d` не вышло -- проверьте и снимите вручную: %w", d.routerIP, d.port, unbindErr)
+	}
+	return nil
 }
 
 func (*dnscryptAddon) Configure(ctx context.Context, kv map[string]string) error {

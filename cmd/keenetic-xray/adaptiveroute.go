@@ -23,6 +23,18 @@ import (
 // itself while the condition persists.
 const inertExclusionWarnInterval = 10 * time.Minute
 
+// exclusionLookupFor returns the ExcludedRangeLookup clsCfg should carry
+// for cfg's current DisableRussianExclusion setting (AR-06) -- pulled out
+// as its own pure function so this decision is unit-testable without a
+// real router: adaptiveRouteClassifyLoop's own loop body is gated behind
+// keenetic.Available(), unreachable in this dev/CI environment.
+func exclusionLookupFor(cfg *config.Config) func(string) (string, bool) {
+	if cfg.AdaptiveRoute.DisableRussianExclusion {
+		return nil
+	}
+	return georanges.Lookup
+}
+
 // warnIfExclusionInert says so, in the log the operator actually reads,
 // when the Russian-exclusion veto is switched on but has no data behind
 // it and is therefore doing nothing at all.
@@ -461,15 +473,10 @@ func adaptiveRouteClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 			// wiring the function reference once here is enough, no need
 			// to re-set it as the table itself refreshes in the background.
 			c.KnownRangeLookup = knownranges.Lookup
-			// Same reasoning as KnownRangeLookup just above: wire the
-			// function reference once, georangesRefreshLoop
-			// (cmd/keenetic-xray/georanges.go) keeps the table it reads
-			// current in the background. DisableRussianExclusion default
-			// (false) keeps this on -- see AdaptiveRouteConfig's own doc
-			// comment for why.
-			if !cfg.AdaptiveRoute.DisableRussianExclusion {
-				c.ExcludedRangeLookup = georanges.Lookup
-			}
+			// ExcludedRangeLookup is set below, in the per-tick refresh
+			// alongside OKTTL/BlockThreshold (AR-06) -- unlike
+			// KnownRangeLookup just above, DisableRussianExclusion is a
+			// live settings toggle, so it can't just be wired once here.
 			clsCfg = &c
 			logf("adaptive-route: classifier started (LAN subnet %s)", subnet)
 		}
@@ -483,6 +490,13 @@ func adaptiveRouteClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 		// AdaptiveRoute.Enabled going false then true again).
 		clsCfg.OKTTL = cfg.AdaptiveRoute.EffectiveOKTTL()
 		clsCfg.BlockThreshold = cfg.AdaptiveRoute.EffectiveBlockThreshold()
+		// AR-06: DisableRussianExclusion is a live settings toggle too
+		// (same as OKTTL/BlockThreshold just above), but until now this
+		// mirrored only the initial clsCfg==nil build above, not this
+		// per-tick refresh -- flipping it in the bot without a full
+		// daemon restart (AdaptiveRoute.Enabled off/on again) silently
+		// did nothing.
+		clsCfg.ExcludedRangeLookup = exclusionLookupFor(cfg)
 		warnIfExclusionInert(clsCfg, &inertWarnedAt, logf)
 
 		now := time.Now()

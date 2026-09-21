@@ -6,6 +6,7 @@ import (
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/addons"
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
+	"github.com/kuzzrus/keenetic-xray-go/internal/failover"
 	"github.com/kuzzrus/keenetic-xray-go/internal/install"
 	"github.com/kuzzrus/keenetic-xray-go/internal/keenetic"
 )
@@ -27,7 +28,7 @@ const reconcileInterval = 2 * time.Minute
 // LAN IP moves (ifipchanged.d) or a tracked interface comes back up
 // (ifstatechanged.d), so drift is normally fixed within a second, not up
 // to two minutes.
-func routerReconcileLoop(ctx context.Context, logf func(string, ...any)) {
+func routerReconcileLoop(ctx context.Context, d *failover.Daemon, logf func(string, ...any)) {
 	if !keenetic.Available() {
 		return
 	}
@@ -39,7 +40,7 @@ func routerReconcileLoop(ctx context.Context, logf func(string, ...any)) {
 			return
 		case <-t.C:
 		}
-		reconcileOnce(ctx, logf)
+		reconcileOnce(ctx, d, logf)
 	}
 }
 
@@ -47,8 +48,11 @@ func routerReconcileLoop(ctx context.Context, logf func(string, ...any)) {
 // step reads the live state first and only issues ndmc / iptables
 // commands (and logs) when it finds drift. Config is reloaded so a change
 // applied over SIGHUP (`proxy0 off`, `transport wg off`, a route edit) is
-// respected.
-func reconcileOnce(ctx context.Context, logf func(string, ...any)) {
+// respected. d is the live daemon, threaded through to reconcileWGTransport
+// (WG-01) so a re-key it finds can reach the running xray-core, not just
+// config.json; nil is fine (some callers -- tests, mainly -- have no
+// daemon to push into), it just means that specific push is skipped.
+func reconcileOnce(ctx context.Context, d *failover.Daemon, logf func(string, ...any)) {
 	if !keenetic.Available() {
 		return
 	}
@@ -58,7 +62,7 @@ func reconcileOnce(ctx context.Context, logf func(string, ...any)) {
 	}
 	reconcileProxy0(ctx, cfg, logf)
 	applyRoutesAtStartup(cfg, logf) // already drift-based and quiet-when-clean
-	reconcileWGTransport(ctx, cfg, logf)
+	reconcileWGTransport(ctx, d, cfg, logf)
 	reconcileMSSClamp(ctx, cfg, logf)
 	reconcileDNS(ctx, cfg, logf)
 	reconcileSusanin(ctx, logf)
@@ -159,7 +163,20 @@ func reconcileProxy0(ctx context.Context, cfg *config.Config, logf func(string, 
 
 // reconcileWGTransport rebuilds the WG-transport interface only when it's
 // missing or down; the healthy path is a single `show interface` read.
-func reconcileWGTransport(ctx context.Context, cfg *config.Config, logf func(string, ...any)) {
+//
+// WG-01: rebuilding can re-key the Keenetic side -- the firmware hands
+// out a fresh keypair for an interface it had to recreate from scratch,
+// same as applyWGTransportAtStartup's own "re-keyed by firmware" log
+// line already anticipates. That call persists the new
+// KeeneticPublicKey to config.json, but this function runs on
+// routerReconcileLoop's own goroutine against its own independently-
+// loaded cfg -- it was never the same *config.Config the daemon holds,
+// and never called Daemon.ReloadConfig either, so the already-running
+// xray-core (which baked the *old* key into its own generated config
+// whenever it last started) never found out. The WG tunnel then stays
+// broken until something unrelated happens to trigger a reload, or a
+// manual restart. Push the fresh key into the live daemon here instead.
+func reconcileWGTransport(ctx context.Context, d *failover.Daemon, cfg *config.Config, logf func(string, ...any)) {
 	w := cfg.WGTransport
 	if !w.Enabled || w.Iface == "" {
 		return
@@ -170,7 +187,28 @@ func reconcileWGTransport(ctx context.Context, cfg *config.Config, logf func(str
 		return
 	}
 	logf("wg-transport: %s is down, rebuilding", w.Iface)
+	prevKey := cfg.WGTransport.KeeneticPublicKey
 	applyWGTransportAtStartup(cfg, logf)
+	if cfg.WGTransport.KeeneticPublicKey != prevKey {
+		pushRekeyedWGConfig(ctx, d, cfg, logf)
+	}
+}
+
+// pushRekeyedWGConfig is split out from reconcileWGTransport so its own
+// plumbing (call ReloadConfig, log which outcome) is testable without a
+// real router -- keenetic.Available() gates everything upstream of this
+// call in this dev/CI environment, so a real key change can never be
+// produced here without hardware; this is exercised directly instead,
+// against a Daemon that's deliberately never had Run started.
+func pushRekeyedWGConfig(ctx context.Context, d *failover.Daemon, cfg *config.Config, logf func(string, ...any)) {
+	if d == nil {
+		return
+	}
+	if d.ReloadConfig(ctx, cfg) {
+		logf("wg-transport: re-keyed by firmware, pushed the new config to the live daemon")
+	} else {
+		logf("wg-transport: re-keyed by firmware, but the daemon wasn't ready to reload -- will need a restart to pick it up")
+	}
 }
 
 // reconcileMSSClamp re-adds this project's forwarded-TCP MSS-clamp rule

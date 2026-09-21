@@ -4,11 +4,13 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/classifier"
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
+	"github.com/kuzzrus/keenetic-xray-go/internal/failover"
 )
 
 // Without ndmc (CI / dev), every reconcile step must be a safe no-op --
@@ -34,11 +36,44 @@ func TestReconcileSteps_NoRouterIsNoop(t *testing.T) {
 	logf := func(string, ...any) {}
 	ctx := context.Background()
 	reconcileProxy0(ctx, cfg, logf)
-	reconcileWGTransport(ctx, cfg, logf)
+	reconcileWGTransport(ctx, nil, cfg, logf)
 	reconcileMSSClamp(ctx, cfg, logf)
 	reconcileSusanin(ctx, logf)
 	reconcileAdaptiveRoute(ctx, cfg, logf)
 	reconcileWatchdog(logf)
+}
+
+// TestPushRekeyedWGConfig_NoDaemonIsNoop confirms the nil-daemon guard --
+// reconcileWGTransport's own tests run with no daemon reference (no
+// router in this environment), so pushRekeyedWGConfig must tolerate that
+// cleanly rather than assuming a live one always exists.
+func TestPushRekeyedWGConfig_NoDaemonIsNoop(t *testing.T) {
+	pushRekeyedWGConfig(context.Background(), nil, config.Default(), func(string, ...any) {
+		t.Error("must not log anything when d is nil")
+	})
+}
+
+// TestPushRekeyedWGConfig_DaemonNotReady is WG-01's regression test for
+// pushRekeyedWGConfig's own plumbing: given a Daemon whose Run was never
+// started (do() then blocks until the caller's ctx gives up, exactly as
+// it would on a real router if Run genuinely wasn't servicing commands
+// yet), it must call ReloadConfig and report the "wasn't ready" outcome
+// -- not silently drop the re-keyed config. The "successfully pushed to
+// a live daemon" outcome needs either real hardware or a heavier
+// re-exec'd-Run test harness (see internal/failover's own tests for that
+// pattern); this covers what's reachable without either.
+func TestPushRekeyedWGConfig_DaemonNotReady(t *testing.T) {
+	d := failover.NewDaemon(failover.Paths{}, config.Default())
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	var logged []string
+	pushRekeyedWGConfig(ctx, d, config.Default(), func(format string, args ...any) {
+		logged = append(logged, format)
+	})
+	if len(logged) != 1 || !strings.Contains(logged[0], "wasn't ready to reload") {
+		t.Errorf("logged = %v, want one line reporting the daemon wasn't ready to reload", logged)
+	}
 }
 
 // TestReconcileAdaptiveRoute_SkipsWhenFailedOpen is AR-09's regression
@@ -202,7 +237,7 @@ func TestRouterReconcileLoop_StopsOnContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	done := make(chan struct{})
-	go func() { routerReconcileLoop(ctx, func(string, ...any) {}); close(done) }()
+	go func() { routerReconcileLoop(ctx, nil, func(string, ...any) {}); close(done) }()
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):

@@ -392,6 +392,7 @@ func judgeTest(cfg *Config, state *State, udp bool, f Flow, now time.Time) []Act
 	switch {
 	case good:
 		state.OK[i].add(f.Dst, now, cfg.OKTTL)
+		state.OKSince[i][f.Dst] = now // AR-05: see judgeOK's own doc comment
 		state.Test[i].remove(f.Dst)
 		state.Watch[i].remove(f.Dst)
 		state.Cooldown[i].remove(f.Dst)
@@ -430,6 +431,21 @@ func okVerdict(f Flow) (healthy, failed bool) {
 	return healthy, failed
 }
 
+// judgeOK's healthy-refresh branch below is capped by maxOKLifetime
+// (AR-05): without it, a destination whose block was later lifted -- or
+// that was never really blocked, just caught a transient false positive
+// -- would stay routed through the tunnel forever. OKRefreshBelow's own
+// window means any healthy flow within the last stretch of an entry's
+// TTL extends it straight back out to a full new one, so a destination
+// with even occasional regular use in practice never reaches its own
+// expiry to get a chance at being tried DIRECT again -- there is no
+// separate, dedicated check for that recovery at all. Once the cap
+// trips, judgeOK simply stops refreshing and lets the entry lapse on its
+// existing (already-granted) TTL on schedule: no early eviction, no
+// synthetic DIRECT probe traffic, nothing an operator would notice under
+// normal use. If it's genuinely still blocked, ClrFast/ClrSoft detect
+// and re-promote it the same way they did the first time, typically
+// within one soft_interval of the next real connection attempt.
 func judgeOK(cfg *Config, state *State, udp bool, f Flow, now time.Time) []Action {
 	i := protoIndex(udp)
 	healthy, failed := okVerdict(f)
@@ -437,6 +453,7 @@ func judgeOK(cfg *Config, state *State, udp bool, f Flow, now time.Time) []Actio
 	switch {
 	case failed && !healthy:
 		state.OK[i].remove(f.Dst)
+		delete(state.OKSince[i], f.Dst)
 		state.Test[i].remove(f.Dst)
 		state.Watch[i].remove(f.Dst)
 		state.Cooldown[i].add(f.Dst, now, cfg.CooldownOKTTL)
@@ -447,11 +464,35 @@ func judgeOK(cfg *Config, state *State, udp bool, f Flow, now time.Time) []Actio
 	case healthy && !failed:
 		at := state.OK[i].at(f.Dst, now)
 		if !at.IsZero() && at.Sub(now) <= cfg.OKRefreshBelow {
+			since, tracked := state.OKSince[i][f.Dst]
+			if !tracked {
+				// Entry predates this fix, or was loaded from disk
+				// (OKSince isn't persisted) -- start its clock now
+				// rather than treating it as already-expired.
+				since = now
+				state.OKSince[i][f.Dst] = since
+			}
+			if now.Sub(since) >= maxOKLifetime(cfg) {
+				return nil
+			}
 			state.OK[i].add(f.Dst, now, cfg.OKTTL)
 			return []Action{{Kind: ActionAddIP, IP: f.Dst, TTL: cfg.OKTTL}}
 		}
 	}
 	return nil
+}
+
+// maxOKLifetimeMultiple sets how many OKTTL cycles a single OK-tier
+// entry may be refreshed through before judgeOK stops extending it (see
+// its own doc comment, AR-05). Tied to cfg.OKTTL rather than a fixed
+// duration so the cap still respects the operator's own chosen trust
+// window: the bot's own OKTTL buttons run 6/12/18/24h, so the default
+// multiplier below caps total lifetime at 1-4 days depending on that
+// choice, comfortably longer than any single normal refresh cycle.
+const maxOKLifetimeMultiple = 4
+
+func maxOKLifetime(cfg *Config) time.Duration {
+	return maxOKLifetimeMultiple * cfg.OKTTL
 }
 
 // ClrBlockPromote has no upstream equivalent. A large CDN (Facebook/

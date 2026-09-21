@@ -499,6 +499,88 @@ func TestClrJudge_OKNotYetDueForRefresh(t *testing.T) {
 	}
 }
 
+// TestAR05_OKRefreshStopsAtMaxLifetime is the regression test for AR-05:
+// without a lifetime cap, a destination with recurring healthy traffic
+// gets its OKTTL refreshed indefinitely -- every refresh lands inside
+// OKRefreshBelow of the next expiry, so it never reaches one -- and so
+// never gets a chance to be tried DIRECT again even long after whatever
+// originally blocked it stopped applying. Once OKSince shows the entry
+// has already lived past maxOKLifetime (here forced by seeding OKSince
+// in the past), the same otherwise-refreshable healthy flow must no
+// longer extend it.
+func TestAR05_OKRefreshStopsAtMaxLifetime(t *testing.T) {
+	cfg, state := testConfig(), NewState()
+	t0 := time.Now()
+	almostExpired := cfg.OKRefreshBelow - time.Minute // due for a refresh on its own terms
+	state.OK[0].add(blockedDst, t0, almostExpired)
+	state.OKSince[0][blockedDst] = t0.Add(-maxOKLifetime(cfg)) // already at the cap
+	f := tcpFlow("ESTABLISHED", 5, 0, 5, 500)                  // healthy
+
+	actions := ClrJudge(cfg, state, []Flow{f}, t0)
+	if len(actions) != 0 {
+		t.Errorf("actions = %+v, want none -- the entry is past its max lifetime", actions)
+	}
+	if got := state.OK[0].at(blockedDst, t0); got.Sub(t0) != almostExpired {
+		t.Errorf("expiry = %v from now, want it left untouched at the original almostExpired", got.Sub(t0))
+	}
+}
+
+// TestAR05_OKRefreshStillWorksWellWithinLifetime is the negative
+// counterpart: a freshly-promoted entry due for a normal refresh must
+// still refresh normally, confirming the cap doesn't just disable
+// refreshing altogether.
+func TestAR05_OKRefreshStillWorksWellWithinLifetime(t *testing.T) {
+	cfg, state := testConfig(), NewState()
+	t0 := time.Now()
+	almostExpired := cfg.OKRefreshBelow - time.Minute
+	state.OK[0].add(blockedDst, t0, almostExpired)
+	state.OKSince[0][blockedDst] = t0 // just started
+	f := tcpFlow("ESTABLISHED", 5, 0, 5, 500)
+
+	actions := ClrJudge(cfg, state, []Flow{f}, t0)
+	if len(actions) != 1 || actions[0].Kind != ActionAddIP {
+		t.Fatalf("actions = %+v, want a refresh -- well within the lifetime cap", actions)
+	}
+	if got := state.OK[0].at(blockedDst, t0); got.Sub(t0) < cfg.OKTTL-time.Second {
+		t.Errorf("expiry = %v from now, want it pushed back out to ~OKTTL", got.Sub(t0))
+	}
+}
+
+// TestAR05_OKSinceBackfillsForUntrackedEntry covers an OK entry that
+// predates this fix, or was reloaded from disk (OKSince isn't
+// persisted, see State's own doc comment): the first refresh touch
+// should start its clock from now, not treat it as already at the cap.
+func TestAR05_OKSinceBackfillsForUntrackedEntry(t *testing.T) {
+	cfg, state := testConfig(), NewState()
+	t0 := time.Now()
+	almostExpired := cfg.OKRefreshBelow - time.Minute
+	state.OK[0].add(blockedDst, t0, almostExpired) // no OKSince entry at all
+	f := tcpFlow("ESTABLISHED", 5, 0, 5, 500)
+
+	actions := ClrJudge(cfg, state, []Flow{f}, t0)
+	if len(actions) != 1 || actions[0].Kind != ActionAddIP {
+		t.Fatalf("actions = %+v, want a refresh -- an untracked entry must not be treated as already expired", actions)
+	}
+	if got := state.OKSince[0][blockedDst]; !got.Equal(t0) {
+		t.Errorf("OKSince = %v, want backfilled to %v", got, t0)
+	}
+}
+
+// TestAR05_OKSinceClearedOnFailedJudgment confirms a dropped OK entry
+// doesn't leave a stale OKSince behind for a later, unrelated promotion
+// of the same destination to inherit.
+func TestAR05_OKSinceClearedOnFailedJudgment(t *testing.T) {
+	cfg, state, now := testConfig(), NewState(), time.Now()
+	state.OK[0].add(blockedDst, now, cfg.OKTTL)
+	state.OKSince[0][blockedDst] = now.Add(-time.Hour)
+	f := tcpFlow("SYN_SENT", 4, 0, 0, 0) // failed
+
+	ClrJudge(cfg, state, []Flow{f}, now)
+	if _, tracked := state.OKSince[0][blockedDst]; tracked {
+		t.Error("OKSince should have been cleared when the entry left the ok tier")
+	}
+}
+
 // TestAR02_GoodFlowProtectsSharedIPFromFailedSiblingFlow is the
 // regression test for the audit's AR-02: State.OK is keyed by
 // destination IP alone, not IP+port (see ClrJudge's own doc comment), so

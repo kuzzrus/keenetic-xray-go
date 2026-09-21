@@ -156,14 +156,15 @@ func TestAdaptiveRouteClassifyLoop_NoRouterStopsOnContextCancel(t *testing.T) {
 }
 
 // TestAdaptiveRouteClassifyLoop_HonorsResetMarker covers the race found
-// live (2026-09-16): adaptiveRouteFlush (internal/botcontrol) can't
-// reliably os.Remove the state file directly, since this loop's own
-// still-running (in some other process) copy would just write its
-// stale in-memory state straight back over the deletion moments later,
-// via its own shutdown save below. A marker file next to the state path
-// is what actually gets honored -- checked here directly: a pre-
-// existing OK entry must NOT survive a startup that finds the marker,
-// even though nothing here calls adaptiveRouteFlush at all.
+// live (2026-09-16): adaptiveRouteFlush (both this package's own CLI
+// version and internal/botcontrol's, see AR-10) can't reliably os.Remove
+// the state file directly, since this loop's own still-running (in some
+// other process) copy would just write its stale in-memory state
+// straight back over the deletion moments later, via its own shutdown
+// save below. A marker file next to the state path is what actually
+// gets honored -- checked here directly: a pre-existing OK entry must
+// NOT survive a startup that finds the marker, even though nothing here
+// calls either adaptiveRouteFlush at all.
 func TestAdaptiveRouteClassifyLoop_HonorsResetMarker(t *testing.T) {
 	cfgPath := filepath.Join(t.TempDir(), "c.json")
 	statePath := filepath.Join(t.TempDir(), "state.json")

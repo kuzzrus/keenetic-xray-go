@@ -244,12 +244,12 @@ func cmdDaemon(args []string) error {
 	if cfg.Agent.Enabled {
 		presetDrift = make(chan botcontrol.Event, 1)
 	}
-	go routerReconcileLoop(ctx, logf)
+	go routerReconcileLoop(ctx, d, logf)
 	go presetRefreshLoop(ctx, logf, presetDrift)
 	go knownRangesRefreshLoop(ctx, logf)
 	go georangesRefreshLoop(ctx, logf)
 	startQualitySweep(ctx, cfg, logf)
-	watchReconcileSignal(ctx, func() { reconcileOnce(ctx, logf) }) // SIGUSR1 from the netfilter.d hook
+	watchReconcileSignal(ctx, func() { reconcileOnce(ctx, d, logf) }) // SIGUSR1 from the netfilter.d hook
 
 	if cfg.Agent.Enabled {
 		opts, err := loadAgentOptions(cfg)

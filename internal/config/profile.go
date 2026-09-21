@@ -95,10 +95,10 @@ type Profile struct {
 // validates, or reinterprets any of it -- only relays what the link
 // gives it.
 type AmneziaWGParams struct {
-	PrivateKey string   `json:"private_key"`
-	Address    string   `json:"address"` // client's tunnel-internal address, e.g. "10.8.1.2/32"
-	DNS        []string `json:"dns,omitempty"`
-	MTU        int      `json:"mtu,omitempty"`
+	PrivateKey string         `json:"private_key"`
+	Address    AWGAddressList `json:"address"` // client's tunnel-internal address(es), e.g. ["10.8.1.2/32"] or dual-stack ["10.8.1.2/32", "fd00::2/128"]
+	DNS        []string       `json:"dns,omitempty"`
+	MTU        int            `json:"mtu,omitempty"`
 
 	PeerPublicKey       string   `json:"peer_public_key"`
 	PresharedKey        string   `json:"preshared_key,omitempty"`
@@ -130,6 +130,30 @@ type AmneziaWGParams struct {
 	MaxHandshakeAttempts   string `json:"max_handshake_attempts,omitempty"`
 	RandomTrailers         string `json:"random_trailers,omitempty"`
 	DisableCookies         string `json:"disable_cookies,omitempty"`
+}
+
+// AWGAddressList is AmneziaWGParams.Address's own type (AWG-02): a
+// dual-stack client tunnel address like "10.8.1.2/32, fd00::2/128" needs
+// to become two separate entries in xray's own config address array, not
+// one string with a comma inside it. UnmarshalJSON accepts either a JSON
+// array (the shape this project now always writes) or a single JSON
+// string (comma-split the same way ParseAmneziaWGURI's own DNS/
+// AllowedIPs fields already are), so a config.json saved by a build from
+// before this fix keeps loading correctly instead of failing to parse.
+type AWGAddressList []string
+
+func (a *AWGAddressList) UnmarshalJSON(data []byte) error {
+	var multi []string
+	if err := json.Unmarshal(data, &multi); err == nil {
+		*a = multi
+		return nil
+	}
+	var single string
+	if err := json.Unmarshal(data, &single); err != nil {
+		return err
+	}
+	*a = splitTrimmedCSV(single)
+	return nil
 }
 
 // Validate checks that a Profile has the fields required to generate a

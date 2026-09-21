@@ -98,7 +98,10 @@ func applyAmneziaWGInterfaceField(p *Profile, key, value string) {
 	case "privatekey":
 		a.PrivateKey = value
 	case "address":
-		a.Address = value
+		// AWG-02: comma-split like DNS below -- a dual-stack
+		// "10.8.1.2/32, fd00::2/128" is two separate addresses, not one
+		// string with a comma in it.
+		a.Address = splitTrimmedCSV(value)
 	case "dns":
 		a.DNS = splitTrimmedCSV(value)
 	case "mtu":

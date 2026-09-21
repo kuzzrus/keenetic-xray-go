@@ -511,7 +511,7 @@ func TestGenerateXrayConfig_AmneziaWGOutbound(t *testing.T) {
 		Port:     443,
 		AWG: &AmneziaWGParams{
 			PrivateKey:          "AAAA=",
-			Address:             "10.8.1.2/32",
+			Address:             AWGAddressList{"10.8.1.2/32"},
 			DNS:                 []string{"8.8.8.8", "8.8.4.4"},
 			PeerPublicKey:       "BBBB=",
 			PresharedKey:        "CCCC=",
@@ -554,6 +554,9 @@ func TestGenerateXrayConfig_AmneziaWGOutbound(t *testing.T) {
 	case settings["remoteDNS"] == nil:
 		t.Error("remoteDNS missing")
 	}
+	if addr, ok := settings["address"].([]any); !ok || len(addr) != 1 || addr[0] != "10.8.1.2/32" {
+		t.Errorf("address = %#v, want [10.8.1.2/32]", settings["address"])
+	}
 	peers, ok := settings["peers"].([]any)
 	if !ok || len(peers) != 1 {
 		t.Fatalf("peers = %#v, want exactly one", settings["peers"])
@@ -573,5 +576,36 @@ func TestGenerateXrayConfig_AmneziaWGOutbound(t *testing.T) {
 	// see GenerateXrayConfig's own comment for why.
 	if _, has := decoded["routing"]; has {
 		t.Error("amneziawg outbound must not add a routing block")
+	}
+}
+
+// TestGenerateXrayConfig_AmneziaWGDualStackAddress is AWG-02's regression
+// test: a dual-stack client address must become two separate entries in
+// xray's own settings.address array, not one string with a comma stuck
+// inside it (which the previous []string{a.Address} wrapping produced
+// whenever Address itself held a "v4, v6" pair).
+func TestGenerateXrayConfig_AmneziaWGDualStackAddress(t *testing.T) {
+	p := Profile{
+		Protocol: "amneziawg",
+		Address:  "awg.example.com",
+		Port:     443,
+		AWG: &AmneziaWGParams{
+			PrivateKey:    "AAAA=",
+			Address:       AWGAddressList{"10.8.1.2/32", "fd00::2/128"},
+			PeerPublicKey: "BBBB=",
+		},
+	}
+	data, err := GenerateXrayConfig(XrayConfigOptions{SOCKSPort: 1080, Outbound: p})
+	if err != nil {
+		t.Fatalf("GenerateXrayConfig: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	settings := decoded["outbounds"].([]any)[0].(map[string]any)["settings"].(map[string]any)
+	addr, ok := settings["address"].([]any)
+	if !ok || len(addr) != 2 || addr[0] != "10.8.1.2/32" || addr[1] != "fd00::2/128" {
+		t.Errorf("address = %#v, want [10.8.1.2/32 fd00::2/128] as two separate entries", settings["address"])
 	}
 }

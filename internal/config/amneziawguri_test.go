@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/base64"
+	"strings"
 	"testing"
 )
 
@@ -57,8 +58,8 @@ func TestParseAmneziaWGURI(t *testing.T) {
 	switch {
 	case a.PrivateKey != "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=":
 		t.Errorf("PrivateKey = %q", a.PrivateKey)
-	case a.Address != "10.8.1.2/32":
-		t.Errorf("Address (tunnel) = %q, want 10.8.1.2/32", a.Address)
+	case len(a.Address) != 1 || a.Address[0] != "10.8.1.2/32":
+		t.Errorf("Address (tunnel) = %v, want [10.8.1.2/32]", a.Address)
 	case len(a.DNS) != 2 || a.DNS[0] != "8.8.8.8" || a.DNS[1] != "8.8.4.4":
 		t.Errorf("DNS = %v, want [8.8.8.8 8.8.4.4]", a.DNS)
 	case a.Jc != "4" || a.Jmin != "40" || a.Jmax != "70":
@@ -82,6 +83,23 @@ func TestParseAmneziaWGURI(t *testing.T) {
 	}
 	if err := p.Validate(); err != nil {
 		t.Errorf("parsed profile should validate: %v", err)
+	}
+}
+
+// TestParseAmneziaWGURI_DualStackAddress is AWG-02's regression test:
+// applyAmneziaWGInterfaceField's "address" case used to copy the .conf
+// value verbatim (unlike the neighboring "dns" case, which already
+// comma-splits) -- a dual-stack "10.8.1.2/32, fd00::2/128" became one
+// slice element with a literal comma inside it instead of two.
+func TestParseAmneziaWGURI_DualStackAddress(t *testing.T) {
+	conf := strings.Replace(testAWGConf, "Address = 10.8.1.2/32", "Address = 10.8.1.2/32, fd00::2/128", 1)
+	link := "vpn://" + base64.RawStdEncoding.EncodeToString([]byte(conf))
+	p, err := ParseAmneziaWGURI(link)
+	if err != nil {
+		t.Fatalf("ParseAmneziaWGURI: %v", err)
+	}
+	if len(p.AWG.Address) != 2 || p.AWG.Address[0] != "10.8.1.2/32" || p.AWG.Address[1] != "fd00::2/128" {
+		t.Errorf("Address = %v, want two separate entries [10.8.1.2/32 fd00::2/128]", p.AWG.Address)
 	}
 }
 

@@ -418,16 +418,6 @@ func buildStreamSettings(p Profile, xhttpMode string) (map[string]any, error) {
 			return nil, fmt.Errorf("grpc network requires a serviceName or path")
 		}
 		stream["grpcSettings"] = map[string]any{"serviceName": svc}
-	case "h2", "http":
-		stream["network"] = "http" // Xray's canonical name; some share links say "h2"
-		httpSettings := map[string]any{}
-		if p.Path != "" {
-			httpSettings["path"] = p.Path
-		}
-		if p.Host != "" {
-			httpSettings["host"] = []string{p.Host}
-		}
-		stream["httpSettings"] = httpSettings
 	case "xhttp":
 		// Seed from the share link's `extra` blob (xmux + sc* + padding
 		// tuning) so those keys reach xray verbatim; then the dedicated

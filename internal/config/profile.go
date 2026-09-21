@@ -47,7 +47,7 @@ type Profile struct {
 	Encryption string `json:"encryption"` // almost always "none"
 	Flow       string `json:"flow,omitempty"`
 
-	Network  string `json:"network"`  // tcp | ws | grpc | http ("h2" accepted as an alias) | xhttp
+	Network  string `json:"network"`  // tcp | ws | grpc | xhttp -- NOT h2/h3/http, removed upstream (XR-01)
 	Security string `json:"security"` // none | tls | reality
 
 	Fingerprint string   `json:"fingerprint,omitempty"` // fp=
@@ -159,7 +159,15 @@ func (p *Profile) validateVLESS() error {
 		return fmt.Errorf("missing uuid")
 	}
 	switch p.Network {
-	case "tcp", "ws", "grpc", "h2", "http", "xhttp":
+	case "tcp", "ws", "grpc", "xhttp":
+	// XR-01: h2/h3/http are deliberately NOT accepted -- real
+	// XTLS/Xray-core (verified against v26.9.9's own
+	// infra/conf/transport_internet.go) removed all three
+	// (`case "h2", "h3", "http": return "", errors.PrintRemovedFeatureError(...)`)
+	// and refuses to start with any of them. Accepting them here would
+	// let a profile pass local validation and save cleanly, only to
+	// have the real binary refuse to start -- a failure mode with
+	// nothing in this project's own logs to explain it.
 	default:
 		return fmt.Errorf("unsupported network %q", p.Network)
 	}
@@ -169,9 +177,18 @@ func (p *Profile) validateVLESS() error {
 		return fmt.Errorf("unsupported security %q", p.Security)
 	}
 	if p.Security == "reality" {
-		if p.PublicKey == "" || p.ShortID == "" {
-			return fmt.Errorf("reality security requires public_key and short_id")
+		if p.PublicKey == "" {
+			return fmt.Errorf("reality security requires public_key")
 		}
+		// XR-01: short_id is deliberately NOT required. Verified against
+		// v26.9.9's own infra/conf/transport_security.go: the client-side
+		// REALITY branch only checks ShortId's *maximum* length (16 hex
+		// chars); hex.Decode on an empty string returns (0, nil), not an
+		// error, so an empty short_id decodes cleanly to 8 zero bytes and
+		// the profile builds and connects fine -- REALITY servers commonly
+		// list "" among their own shortIds for exactly this reason. This
+		// project's own validator used to reject that case outright,
+		// refusing to save a profile the real binary would have accepted.
 		if p.SNI == "" {
 			return fmt.Errorf("reality security requires sni (the server name to present in the TLS handshake)")
 		}

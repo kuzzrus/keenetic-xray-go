@@ -453,6 +453,66 @@ func TestClrJudge_OKNotYetDueForRefresh(t *testing.T) {
 	}
 }
 
+// TestAR02_GoodFlowProtectsSharedIPFromFailedSiblingFlow is the
+// regression test for the audit's AR-02: State.OK is keyed by
+// destination IP alone, not IP+port (see ClrJudge's own doc comment), so
+// a healthy flow to blockedDst:443 and a failed flow to blockedDst:80
+// share one ok-tier entry. Before this fix, ClrJudge judged and mutated
+// on each flow independently and immediately, so whichever flow happened
+// to come last in the conntrack scan -- not the actual evidence --
+// decided the outcome; a working :443 connection could be dropped from
+// the ipset because an unrelated, merely-stalled :80 connection to the
+// same IP was judged failed in the very same pass. Run with both
+// orderings to confirm the fix doesn't just get lucky with scan order.
+func TestAR02_GoodFlowProtectsSharedIPFromFailedSiblingFlow(t *testing.T) {
+	cfg, now := testConfig(), time.Now()
+	healthy := tcpFlow("ESTABLISHED", 5, 0, 5, 500) // :443, RP=5 -> healthy
+	failedFlow := Flow{L4Proto: 6, Proto: "tcp", Src: lanSrc, Dst: blockedDst,
+		SPort: 40001, DPort: 80, TCPState: "SYN_SENT", OP: 4, RP: 0} // :80, stalled -> failed
+
+	for _, flows := range [][]Flow{{failedFlow, healthy}, {healthy, failedFlow}} {
+		state := NewState()
+		state.OK[0].add(blockedDst, now, cfg.OKTTL)
+
+		actions := ClrJudge(cfg, state, flows, now)
+
+		if !state.OK[0].has(blockedDst, now) {
+			t.Errorf("flows=%+v: dst left the ok tier -- a same-tick healthy :443 flow must protect it from a failed :80 sibling", flows)
+		}
+		for _, a := range actions {
+			if a.Kind == ActionRemoveIP {
+				t.Errorf("flows=%+v: actions = %+v, want no RemoveIP", flows, actions)
+			}
+		}
+	}
+}
+
+// TestAR02_GoodFlowProtectsTestTierFromFailedSiblingFlow is the Test-tier
+// counterpart: a promotion in progress for blockedDst must still reach
+// the ok tier off a healthy :443 flow even when a failed :80 flow to the
+// same IP is judged in the same pass.
+func TestAR02_GoodFlowProtectsTestTierFromFailedSiblingFlow(t *testing.T) {
+	cfg, state, now := testConfig(), NewState(), time.Now()
+	state.Test[0].add(blockedDst, now.Add(-time.Second), cfg.TestTTL) // AR-01: earlier tick, see TestClrJudge_TestToOK
+
+	healthy := tcpFlow("ESTABLISHED", 1, 0, 2, 0) // :443, RP=2 -> good
+	failedFlow := Flow{L4Proto: 6, Proto: "tcp", Src: lanSrc, Dst: blockedDst,
+		SPort: 40001, DPort: 80, TCPState: "SYN_SENT", OP: 3, RP: 0} // :80, stalled -> failed
+
+	actions := ClrJudge(cfg, state, []Flow{failedFlow, healthy}, now)
+	if !state.OK[0].has(blockedDst, now) {
+		t.Errorf("dst should have reached the ok tier via the healthy :443 flow, actions = %+v", actions)
+	}
+	if state.Cooldown[0].has(blockedDst, now) {
+		t.Error("dst must not have been sent to cooldown by the failed :80 sibling")
+	}
+	for _, a := range actions {
+		if a.Kind == ActionRemoveIP {
+			t.Errorf("actions = %+v, want no RemoveIP", actions)
+		}
+	}
+}
+
 func TestClrJudge_IgnoresUntrackedDestination(t *testing.T) {
 	cfg, state, now := testConfig(), NewState(), time.Now()
 	f := tcpFlow("ESTABLISHED", 5, 0, 5, 500) // not in test or ok state at all

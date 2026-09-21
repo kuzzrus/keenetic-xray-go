@@ -248,7 +248,51 @@ func watchOrConfirmLateStall(cfg *Config, state *State, udp bool, f Flow, now ti
 // whose expiry is still exactly that far out was necessarily created
 // with *this* now -- i.e. earlier in this very call, not on a previous
 // tick.
+//
+// AR-02: State.Test/State.OK are keyed by destination IP alone (see the
+// package doc comment), matching the REDIRECT ipset's own IP-only
+// membership -- port-scoping for blast radius lives in the iptables rule
+// itself (internal/adaptiveroute's redirectPorts), not in this state. One
+// consequence: two different conntrack flows to the same IP on different
+// eligible ports (e.g. :80 and :443, both promotableDst) share one
+// judgment. flows' own order is whatever ScanConntrack happened to
+// enumerate that tick -- not meaningful, and not something a caller
+// should have to reason about -- so without the pre-pass below, a flow
+// that confirmed a destination healthy could have that confirmation
+// immediately discarded by a *different*, unrelated flow to the same
+// destination judged failed right after it, in the very same call.
+// goodThisTick runs a first, read-only pass over every qualifying flow to
+// collect each (protocol, dst) that had at least one good/healthy flow
+// this tick, so the second, mutating pass can refuse to let a
+// failed-only flow undo it.
 func ClrJudge(cfg *Config, state *State, flows []Flow, now time.Time) []Action {
+	type judgeKey struct {
+		i   int
+		dst string
+	}
+	goodThisTick := map[judgeKey]bool{}
+	for _, f := range flows {
+		if f.L4Proto != 6 && f.L4Proto != 17 {
+			continue
+		}
+		if !fromLAN(cfg, f.Src) || !promotableDst(f.L4Proto == 17, f.DPort) {
+			continue
+		}
+		i := protoIndex(f.L4Proto == 17)
+		var good bool
+		switch {
+		case state.Test[i].has(f.Dst, now) && !skipFreshTestPromotion(cfg, state, i, f.Dst, now):
+			good, _ = testVerdict(f)
+		case state.OK[i].has(f.Dst, now):
+			good, _ = okVerdict(f)
+		default:
+			continue
+		}
+		if good {
+			goodThisTick[judgeKey{i, f.Dst}] = true
+		}
+	}
+
 	var actions []Action
 	for _, f := range flows {
 		if f.L4Proto != 6 && f.L4Proto != 17 {
@@ -272,8 +316,14 @@ func ClrJudge(cfg *Config, state *State, flows []Flow, now time.Time) []Action {
 			if skipFreshTestPromotion(cfg, state, i, f.Dst, now) {
 				continue
 			}
+			if good, failed := testVerdict(f); failed && !good && goodThisTick[judgeKey{i, f.Dst}] {
+				continue // a sibling flow to the same dst confirmed it good this tick
+			}
 			actions = append(actions, judgeTest(cfg, state, udp, f, now)...)
 		case state.OK[i].has(f.Dst, now):
+			if healthy, failed := okVerdict(f); failed && !healthy && goodThisTick[judgeKey{i, f.Dst}] {
+				continue // a sibling flow to the same dst confirmed it healthy this tick
+			}
 			actions = append(actions, judgeOK(cfg, state, udp, f, now)...)
 		}
 	}
@@ -288,9 +338,11 @@ func skipFreshTestPromotion(cfg *Config, state *State, i int, dst string, now ti
 	return state.Test[i].at(dst, now).Sub(now) == cfg.TestTTL
 }
 
-func judgeTest(cfg *Config, state *State, udp bool, f Flow, now time.Time) []Action {
-	i := protoIndex(udp)
-	good, failed := false, false
+// testVerdict computes judgeTest's own good/failed thresholds without
+// mutating anything -- extracted so ClrJudge's first pass (see its own
+// doc comment, AR-02) can consult the same numbers judgeTest itself
+// applies, rather than keeping two copies that could drift.
+func testVerdict(f Flow) (good, failed bool) {
 	if f.L4Proto == 6 {
 		if f.RP >= 2 || f.RB >= 128 {
 			good = true
@@ -299,14 +351,20 @@ func judgeTest(cfg *Config, state *State, udp bool, f Flow, now time.Time) []Act
 			(f.TCPState == "ESTABLISHED" && f.OP >= 10 && f.OB >= 3000 && f.RP <= 1 && f.RB < 128) {
 			failed = true
 		}
-	} else {
-		if f.RP >= 1 {
-			good = true
-		}
-		if (f.DPort == 443 && f.OP >= 10 && f.RP == 0) || (f.DPort != 443 && f.OP >= 20 && f.RP == 0) {
-			failed = true
-		}
+		return good, failed
 	}
+	if f.RP >= 1 {
+		good = true
+	}
+	if (f.DPort == 443 && f.OP >= 10 && f.RP == 0) || (f.DPort != 443 && f.OP >= 20 && f.RP == 0) {
+		failed = true
+	}
+	return good, failed
+}
+
+func judgeTest(cfg *Config, state *State, udp bool, f Flow, now time.Time) []Action {
+	i := protoIndex(udp)
+	good, failed := testVerdict(f)
 
 	switch {
 	case good:
@@ -327,9 +385,9 @@ func judgeTest(cfg *Config, state *State, udp bool, f Flow, now time.Time) []Act
 	return nil
 }
 
-func judgeOK(cfg *Config, state *State, udp bool, f Flow, now time.Time) []Action {
-	i := protoIndex(udp)
-	healthy, failed := false, false
+// okVerdict is judgeOK's own testVerdict counterpart -- see that
+// function's doc comment.
+func okVerdict(f Flow) (healthy, failed bool) {
 	if f.L4Proto == 6 {
 		if f.RP >= 2 || f.RB >= 128 {
 			healthy = true
@@ -338,14 +396,20 @@ func judgeOK(cfg *Config, state *State, udp bool, f Flow, now time.Time) []Actio
 			(f.TCPState == "ESTABLISHED" && f.OP >= 15 && f.OB >= 5000 && f.RP <= 1 && f.RB < 128) {
 			failed = true
 		}
-	} else {
-		if f.RP >= 1 {
-			healthy = true
-		}
-		if f.DPort == 443 && f.OP >= 16 && f.RP == 0 {
-			failed = true
-		}
+		return healthy, failed
 	}
+	if f.RP >= 1 {
+		healthy = true
+	}
+	if f.DPort == 443 && f.OP >= 16 && f.RP == 0 {
+		failed = true
+	}
+	return healthy, failed
+}
+
+func judgeOK(cfg *Config, state *State, udp bool, f Flow, now time.Time) []Action {
+	i := protoIndex(udp)
+	healthy, failed := okVerdict(f)
 
 	switch {
 	case failed && !healthy:

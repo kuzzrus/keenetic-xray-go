@@ -14,6 +14,7 @@ package l7capture
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"syscall"
 	"time"
@@ -61,6 +62,7 @@ type Capture struct {
 	seq     uint32
 	portID  uint32
 	recvBuf []byte
+	pending []Packet // L7-02: packets already parsed out of recvBuf but not yet returned by Read
 }
 
 // handshakeTimeout bounds Open's blocking config-command reads (see
@@ -189,34 +191,73 @@ type Packet struct {
 }
 
 // Read blocks until the next NFLOG-delivered packet arrives (skipping
-// any other netlink traffic on this socket) and returns it. Payload
-// aliases Capture's own internal receive buffer -- valid only until the
-// next call to Read; a caller that needs to keep the bytes longer (a
-// Reassembler buffering a still-incomplete ClientHello, for instance)
-// must copy them.
+// any other netlink traffic on this socket) and returns it. Payload is
+// this call's own copy, safe to keep past the next call to Read (a
+// Reassembler buffering a still-incomplete ClientHello, for instance).
+//
+// L7-02: a single recv() can carry more than one NFLOG message when the
+// kernel batches them under load -- returning only the first message
+// found and discarding the rest, the previous behavior, silently
+// dropped real ClientHellos/HTTP requests. Every matching message
+// parsed out of one recv() is now queued in pending and drained before
+// the next syscall.Read, so none of them are lost; each gets its own
+// copy since recvBuf itself is reused (and so overwritten) by that next
+// read.
+//
+// ENOBUFS -- the kernel's own netlink socket buffer overflowing because
+// this process didn't drain it fast enough for a burst of traffic -- is
+// treated as expected under load, not a fatal error: whatever messages
+// were lost in the overflow are simply gone, there's nothing to
+// recover, so this keeps reading rather than surfacing an error that
+// would otherwise tear down the whole capture session over a condition
+// NFLOG consumers are expected to just ride out.
 func (c *Capture) Read() (Packet, error) {
 	for {
+		if len(c.pending) > 0 {
+			pkt := c.pending[0]
+			c.pending = c.pending[1:]
+			return pkt, nil
+		}
 		n, err := syscall.Read(c.fd, c.recvBuf)
 		if err != nil {
+			if errors.Is(err, syscall.ENOBUFS) {
+				continue
+			}
 			return Packet{}, fmt.Errorf("l7capture: read: %w", err)
 		}
-		msgs, err := syscall.ParseNetlinkMessage(c.recvBuf[:n])
-		if err != nil {
-			continue // a malformed frame from the kernel would be a kernel bug; skip and keep reading
-		}
-		for _, m := range msgs {
-			subsys := uint8(m.Header.Type >> 8)
-			msgType := uint8(m.Header.Type & 0xff)
-			if subsys != nflogSubsys || msgType != nfulnlMsgPacket || len(m.Data) < nfgenLen {
-				continue
-			}
-			payload, mark, ifin, ifout := parsePacketAttrs(m.Data[nfgenLen:])
-			if payload == nil {
-				continue
-			}
-			return Packet{Payload: payload, Mark: mark, IfIndexIn: ifin, IfIndexOut: ifout}, nil
-		}
+		c.pending = parsePackets(c.recvBuf[:n])
 	}
+}
+
+// parsePackets extracts every NFULNL_MSG_PACKET message from buf (one
+// recv()'s worth of raw netlink bytes, possibly several batched
+// together), each with its own copy of the payload independent of buf.
+// Pulled out of Read as its own pure function -- unlike the rest of
+// this file, this doesn't touch a socket at all, just decodes bytes, so
+// it's testable on a real Linux CI runner even though it can't be
+// exercised against a real kernel there (see this file's own
+// REAL-HARDWARE-VERIFICATION-PENDING note).
+func parsePackets(buf []byte) []Packet {
+	msgs, err := syscall.ParseNetlinkMessage(buf)
+	if err != nil {
+		return nil // a malformed frame from the kernel would be a kernel bug; nothing usable in it
+	}
+	var out []Packet
+	for _, m := range msgs {
+		subsys := uint8(m.Header.Type >> 8)
+		msgType := uint8(m.Header.Type & 0xff)
+		if subsys != nflogSubsys || msgType != nfulnlMsgPacket || len(m.Data) < nfgenLen {
+			continue
+		}
+		payload, mark, ifin, ifout := parsePacketAttrs(m.Data[nfgenLen:])
+		if payload == nil {
+			continue
+		}
+		cp := make([]byte, len(payload))
+		copy(cp, payload)
+		out = append(out, Packet{Payload: cp, Mark: mark, IfIndexIn: ifin, IfIndexOut: ifout})
+	}
+	return out
 }
 
 // Close releases the socket. Does not attempt a graceful per-group

@@ -2,6 +2,7 @@ package keenetic
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -72,11 +73,15 @@ func mssMatch(mss int, withComment bool) []string {
 
 // SetMSSClamp installs this project's one MSS-clamp rule at mss, removing
 // any stale copy of ours first (e.g. a different value). mss < 1 clears.
+// A cleanup failure (see clearOurRules) doesn't stop the new rule from
+// being added -- MSS clamping working right now matters more than a
+// leftover stale rule -- but is still reported rather than swallowed,
+// unless adding the new rule fails too (that error takes priority).
 func SetMSSClamp(ctx context.Context, mss int) error {
 	if mss < 1 {
 		return ClearMSSClamp(ctx)
 	}
-	clearOurRules(ctx)
+	clearErr := clearOurRules(ctx)
 	// `-t mangle` and the `-A FORWARD` verb+chain must lead; the match
 	// follows. (Getting this order wrong is an iptables "exit status 2".)
 	add := func(withComment bool) error {
@@ -84,12 +89,12 @@ func SetMSSClamp(ctx context.Context, mss int) error {
 		return iptablesRun(ctx, args...)
 	}
 	if add(true) == nil {
-		return nil
+		return clearErr
 	}
 	if err := add(false); err != nil {
 		return fmt.Errorf("adding MSS-clamp rule (--set-mss %d): %w", mss, err)
 	}
-	return nil
+	return clearErr
 }
 
 // isOurMSSRule matches an `iptables -S FORWARD` line this project would
@@ -128,23 +133,39 @@ func ClearMSSClamp(ctx context.Context) error {
 	if !iptablesPresent() {
 		return nil
 	}
-	clearOurRules(ctx)
-	return nil
+	return clearOurRules(ctx)
 }
 
 // clearOurRules deletes every FORWARD mangle rule that is ours (see
 // isOurMSSRule), reading the live spec back with `-S` so the -D matches
-// byte-for-byte whatever is there.
-func clearOurRules(ctx context.Context) {
+// byte-for-byte whatever is there. Each field is unquoted (FW-01): real
+// `iptables -S` wraps a string-valued match argument like our own
+// `--comment` in double quotes so its own output round-trips as a shell
+// command, but iptablesRun execs iptables directly (no shell in
+// between), so passing a field through with its quotes still attached
+// sends iptables a value it never actually stored -- the delete then
+// fails to match anything, silently, forever, since -D reports no error
+// for "no such rule". Every previous version of this function's own test
+// fixtures fed back *unquoted* fake -S output, which is why this went
+// unnoticed: it isn't what real iptables actually prints.
+func clearOurRules(ctx context.Context) error {
 	out, err := iptablesListForward(ctx)
 	if err != nil {
-		return
+		return nil // nothing to list; not a cleanup failure worth reporting
 	}
+	var errs []error
 	for _, line := range strings.Split(out, "\n") {
 		if !strings.HasPrefix(line, "-A FORWARD ") || !isOurMSSRule(line) {
 			continue
 		}
-		spec := strings.Fields(strings.TrimPrefix(line, "-A "))
-		_ = iptablesRun(ctx, append([]string{"-t", "mangle", "-D"}, spec...)...)
+		fields := strings.Fields(strings.TrimPrefix(line, "-A "))
+		spec := make([]string, len(fields))
+		for i, f := range fields {
+			spec[i] = unquote(f)
+		}
+		if err := iptablesRun(ctx, append([]string{"-t", "mangle", "-D"}, spec...)...); err != nil {
+			errs = append(errs, fmt.Errorf("removing stale rule %q: %w", line, err))
+		}
 	}
+	return errors.Join(errs...)
 }

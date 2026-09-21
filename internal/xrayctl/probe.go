@@ -77,12 +77,30 @@ func probeWithRetries(ctx context.Context, socksAddr, url string, timeout time.D
 	}
 }
 
+// probeIdleConnTimeout bounds how long a probeOnce call's own idle
+// keep-alive connection can outlive that call on its own, in case
+// CloseIdleConnections below doesn't run (a panic unwinding past it,
+// say) -- belt and suspenders, not the primary fix.
+const probeIdleConnTimeout = 10 * time.Second
+
 // probeOnce performs a single HTTP GET to url through the SOCKS5 proxy
 // at socksAddr and reports whether it got back a non-error response.
+//
+// FAIL-03: a fresh http.Transport used to be created here on every call
+// with no IdleConnTimeout set (the zero value means "never expires") and
+// nothing ever calling CloseIdleConnections -- if the health-check
+// server kept the connection alive, each probe could leak one persistent
+// connection plus its own goroutine that would never close itself. At a
+// several-second probe interval over months of uptime, a real slow
+// leak. Fixed by explicitly closing this Transport's idle connections
+// before returning: this Client is never reused for a second request
+// (one GET per call), so anything still idle at that point is
+// definitely done being useful.
 func probeOnce(ctx context.Context, socksAddr, url string, timeout time.Duration) error {
 	client := &http.Client{
 		Timeout: timeout,
 		Transport: &http.Transport{
+			IdleConnTimeout: probeIdleConnTimeout,
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 				host, portStr, err := net.SplitHostPort(addr)
 				if err != nil {
@@ -96,6 +114,7 @@ func probeOnce(ctx context.Context, socksAddr, url string, timeout time.Duration
 			},
 		},
 	}
+	defer client.CloseIdleConnections()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

@@ -292,3 +292,51 @@ func TestProbe_NoSOCKSServer(t *testing.T) {
 		t.Error("expected error when SOCKS5 proxy is unreachable")
 	}
 }
+
+// TestProbeOnce_ClosesIdleConnections is FAIL-03's regression test:
+// probeOnce used to build a fresh http.Transport on every call with no
+// IdleConnTimeout set (the zero value means "never expires") and
+// nothing ever calling CloseIdleConnections -- if the health-check
+// server kept the connection alive (Go's own net/http server does, by
+// default, exactly like a real health-check endpoint might), each call
+// could leak one persistent connection plus its own goroutine that
+// would never close itself on its own. Tracks the backend's own live
+// connection count via http.Server.ConnState: after several probeOnce
+// calls against a keep-alive backend, none should still be open.
+func TestProbeOnce_ClosesIdleConnections(t *testing.T) {
+	var active atomic.Int64
+	backend := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	backend.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		switch state {
+		case http.StateNew:
+			active.Add(1)
+		case http.StateClosed, http.StateHijacked:
+			active.Add(-1)
+		}
+	}
+	backend.Start()
+	defer backend.Close()
+
+	socksAddr := fakeSOCKS5Server(t)
+
+	for i := 0; i < 5; i++ {
+		if err := probeOnce(context.Background(), socksAddr, backend.URL, 2*time.Second); err != nil {
+			t.Fatalf("probeOnce #%d: %v", i, err)
+		}
+	}
+
+	// CloseIdleConnections acts synchronously on the Transport's own
+	// pool, but the resulting TCP close is a real network operation the
+	// backend only observes asynchronously -- poll briefly instead of
+	// asserting immediately.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if active.Load() == 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Errorf("active backend connections = %d after 5 probeOnce calls, want 0 (idle connections not closed)", active.Load())
+}

@@ -80,6 +80,74 @@ func TestL7SNIMatchesRoutes_EmptyRouting(t *testing.T) {
 	}
 }
 
+// TestL7SNIMatchesRoutes_SkipsNonDefaultInterface is L7-01's regression
+// test for part 3/3: a route list explicitly pointed at a non-default
+// Proxy interface must not be picked up by L7 SNI matching, since a
+// match here can only ever feed the one adaptive-routing ipset, which
+// always rides whatever profile is the current live egress -- there's
+// no dataplane hook to actually honor a RouteIface() other than Proxy0.
+func TestL7SNIMatchesRoutes_SkipsNonDefaultInterface(t *testing.T) {
+	cfg := &config.Config{Routing: config.RoutingConfig{Lists: []config.RouteList{
+		{Name: "work-vpn", Entries: []string{"internal.example"}, Interface: "Proxy1"},
+	}}}
+	if l7sniMatchesRoutes(cfg, "internal.example") {
+		t.Error("a list routed through a non-default interface must not match")
+	}
+}
+
+// TestL7SNIMatchesRoutes_MatchesExplicitDefaultInterface confirms the
+// filter is about the *resolved* interface, not merely an empty
+// Interface field -- explicitly spelling out the default must still
+// match, the same as leaving it blank does.
+func TestL7SNIMatchesRoutes_MatchesExplicitDefaultInterface(t *testing.T) {
+	cfg := &config.Config{Routing: config.RoutingConfig{Lists: []config.RouteList{
+		{Name: "insta", Entries: []string{"instagram.com"}, Interface: "Proxy0"},
+	}}}
+	if !l7sniMatchesRoutes(cfg, "instagram.com") {
+		t.Error("an explicit Proxy0 interface (the default, spelled out) should still match")
+	}
+}
+
+// TestL7SNIMatchesRoutes_MixedInterfacesOnlyDefaultMatches covers both
+// lists appearing side by side -- the non-default one must not shadow
+// or otherwise interfere with the default one still matching correctly.
+func TestL7SNIMatchesRoutes_MixedInterfacesOnlyDefaultMatches(t *testing.T) {
+	cfg := &config.Config{Routing: config.RoutingConfig{Lists: []config.RouteList{
+		{Name: "default-iface", Entries: []string{"instagram.com"}},
+		{Name: "other-iface", Entries: []string{"internal.example"}, Interface: "Proxy2"},
+	}}}
+	if !l7sniMatchesRoutes(cfg, "instagram.com") {
+		t.Error("the default-interface list's own domain should still match")
+	}
+	if l7sniMatchesRoutes(cfg, "internal.example") {
+		t.Error("the non-default-interface list's own domain must not match")
+	}
+}
+
+// --- l7sniEnabled (L7-01, part 1/3) ---
+
+func TestL7SNIEnabled_RequiresBothTogglesOn(t *testing.T) {
+	cases := []struct {
+		name            string
+		l7sni, adaptive bool
+		want            bool
+	}{
+		{"both off", false, false, false},
+		{"l7sni on, adaptive route off", true, false, false},
+		{"l7sni off, adaptive route on", false, true, false},
+		{"both on", true, true, true},
+	}
+	for _, c := range cases {
+		cfg := &config.Config{
+			L7SNI:         config.L7SNIConfig{Enabled: c.l7sni},
+			AdaptiveRoute: config.AdaptiveRouteConfig{Enabled: c.adaptive},
+		}
+		if got := l7sniEnabled(cfg); got != c.want {
+			t.Errorf("%s: l7sniEnabled = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 // --- l7sniSharedIPTracker (AR-07) ---
 
 func TestL7SNISharedIPTracker_FirstSightingNotShared(t *testing.T) {

@@ -12,6 +12,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"time"
 
@@ -96,22 +97,71 @@ const (
 // localized to one step instead of producing total silence again.
 const l7sniStartupTimeout = 15 * time.Second
 
-// l7SNIClassifyLoop runs L7 hostname detection end to end: brings up
-// the NFLOG capture and its iptables rules once (only if
-// cfg.L7SNI.Enabled at startup -- toggling this later needs a daemon
-// restart to take effect, same as AdaptiveRoute.Enabled does), then
-// reads packets forever, extracts a hostname via internal/l7sni, and on
-// a match against the operator's own Routing lists, adds that
-// connection's destination straight to the adaptive-routing ipset and
-// flushes its own conntrack entry so it re-routes immediately. See
-// config.L7SNIConfig's own doc comment for why the adaptive-routing
-// ipset, not Routing's own NDM object-groups, is the right dataplane to
-// feed a directly-detected IP into.
+// l7SNIClassifyLoop runs L7 hostname detection end to end, self-healing
+// across capture failures (L7-02): a session (l7SNIClassifySession) that
+// ends because its NFLOG read failed used to leave L7 SNI silently and
+// permanently dead until the whole daemon restarted, with nothing to
+// notice short of an operator eventually realizing matches had stopped
+// happening at all. reconcileL7SNI (routerReconcileLoop) already
+// repairs firewall-rule drift on its own schedule, but never touched
+// this read loop itself -- a session that goes down now gets a fresh
+// one, with the whole startup sequence (kernel modules, WAN detection,
+// rules, socket) run again from scratch.
+//
+// Startup-level failures (feature disabled, no ndmc, config load
+// failed) are deliberately NOT retried here -- l7SNIClassifySession
+// reports started=false for all of those, same as it returning at all
+// used to mean before this change -- since none of them are expected to
+// resolve themselves moments later on their own; toggling L7SNI live,
+// or a router only appearing later, already needs a daemon restart to
+// be noticed, matching AdaptiveRoute.Enabled's own documented behavior.
 func l7SNIClassifyLoop(ctx context.Context, logf func(string, ...any)) {
+	for {
+		started, err := l7SNIClassifySession(ctx, logf)
+		if ctx.Err() != nil {
+			return
+		}
+		if !started {
+			return
+		}
+		logf("l7sni: capture session ended (%v), restarting in %s", err, l7sniRestartDelay)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(l7sniRestartDelay):
+		}
+	}
+}
+
+// l7sniRestartDelay is how long l7SNIClassifyLoop waits before opening a
+// fresh capture session after one ends unexpectedly -- long enough that
+// a persistent problem doesn't spin a busy retry loop, short enough that
+// a transient one (a firewall rebuild racing capture setup, say)
+// self-heals in well under a minute.
+const l7sniRestartDelay = 5 * time.Second
+
+// l7SNIClassifySession runs one attempt at L7 hostname detection: brings
+// up the NFLOG capture and its iptables rules (only if cfg.L7SNI.Enabled
+// -- toggling this later needs a daemon restart to take effect, same as
+// AdaptiveRoute.Enabled does), then reads packets until either ctx is
+// cancelled or the capture itself fails, extracting a hostname via
+// internal/l7sni and, on a match against the operator's own Routing
+// lists, adding that connection's destination straight to the adaptive-
+// routing ipset and flushing its own conntrack entry so it re-routes
+// immediately. See config.L7SNIConfig's own doc comment for why the
+// adaptive-routing ipset, not Routing's own NDM object-groups, is the
+// right dataplane to feed a directly-detected IP into.
+//
+// started reports whether capture actually got going -- false for every
+// startup-declined-or-failed case (feature off, no ndmc, config load
+// failed, kernel module load, WAN detection, rule install, or socket
+// open); l7SNIClassifyLoop uses this to decide whether retrying the
+// session is even worth attempting (see its own doc comment, L7-02).
+func l7SNIClassifySession(ctx context.Context, logf func(string, ...any)) (started bool, sessionErr error) {
 	cfg, err := config.Load(configPath())
 	if err != nil {
 		logf("l7sni: config load failed, not starting: %v", err)
-		return
+		return false, nil
 	}
 	if !cfg.L7SNI.Enabled {
 		// Deliberately quiet: this is the ordinary "feature is off"
@@ -124,11 +174,11 @@ func l7SNIClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 		// worth this one line even though it fires on most daemon
 		// starts.
 		logf("l7sni: disabled (transport l7sni on to enable)")
-		return
+		return false, nil
 	}
 	if !keenetic.Available() {
 		logf("l7sni: ndmc not found, not starting")
-		return
+		return false, nil
 	}
 
 	// Found live (2026-09-15): EnsureRules below fails outright with
@@ -142,13 +192,13 @@ func l7SNIClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 	mcancel()
 	if err != nil {
 		logf("l7sni: loading NFLOG kernel modules failed: %v", err)
-		return
+		return false, err
 	}
 
 	wan, err := l7capture.ResolveWANInterface("")
 	if err != nil {
 		logf("l7sni: WAN interface detection failed: %v", err)
-		return
+		return false, err
 	}
 
 	logf("l7sni: installing NFLOG rules on %s", wan)
@@ -157,14 +207,14 @@ func l7SNIClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 	rcancel()
 	if err != nil {
 		logf("l7sni: installing NFLOG rules failed: %v", err)
-		return
+		return false, err
 	}
 
 	logf("l7sni: opening NFLOG capture socket (group %d)", l7sniNflogGroup)
 	capture, err := l7capture.Open(l7sniNflogGroup)
 	if err != nil {
 		logf("l7sni: NFLOG capture unavailable: %v", err)
-		return
+		return false, err
 	}
 	defer capture.Close()
 
@@ -211,12 +261,11 @@ func l7SNIClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 	snapAt := time.Now()
 	for {
 		if ctx.Err() != nil {
-			return
+			return true, nil
 		}
 		pkt, err := capture.Read()
 		if err != nil {
-			logf("l7sni: capture read failed, stopping: %v", err)
-			return
+			return true, fmt.Errorf("capture read failed: %w", err)
 		}
 		if time.Since(snapAt) >= l7sniConfigRefreshInterval {
 			snap = l7sniLoadSnapshot()

@@ -515,6 +515,31 @@ func TestRouterHandler_AdaptiveRouteSetBlockThreshold_NegativeDisables(t *testin
 	}
 }
 
+// TestRouterHandler_AdaptiveRouteSetBlockThreshold_ZeroNormalizesToDisabled
+// is the regression test for AR-08: a literal 0 saved to BlockThreshold
+// is indistinguishable from "unset" to EffectiveBlockThreshold, which
+// falls back to DefaultBlockThreshold for exactly that value -- so
+// storing 0 verbatim would report block-widening as disabled while it
+// silently kept running at the default threshold. 0 must normalize to
+// -1, the value EffectiveBlockThreshold actually honors as disabled.
+func TestRouterHandler_AdaptiveRouteSetBlockThreshold_ZeroNormalizesToDisabled(t *testing.T) {
+	h := &RouterHandler{Config: config.Default(), ConfigPath: filepath.Join(t.TempDir(), "c.json")}
+
+	out, err := h.Handle(context.Background(), Command{Action: ActionAdaptiveRouteSetBlockThreshold, Args: []string{"0"}})
+	if err != nil {
+		t.Fatalf("adrt_blockthr 0: %v", err)
+	}
+	if !strings.Contains(out, "отключено") {
+		t.Errorf("out = %q, want it to say block-widening is disabled", out)
+	}
+	if h.Config.AdaptiveRoute.BlockThreshold != -1 {
+		t.Errorf("BlockThreshold = %d, want -1 (0 is ambiguous with unset) -- see EffectiveBlockThreshold", h.Config.AdaptiveRoute.BlockThreshold)
+	}
+	if got := h.Config.AdaptiveRoute.EffectiveBlockThreshold(); got > 0 {
+		t.Errorf("EffectiveBlockThreshold() = %d, want non-positive -- block-widening must actually be disabled, not silently fall back to the default", got)
+	}
+}
+
 func TestRouterHandler_AdaptiveRouteSetBlockThreshold_RejectsGarbage(t *testing.T) {
 	h := &RouterHandler{Config: config.Default(), ConfigPath: filepath.Join(t.TempDir(), "c.json")}
 

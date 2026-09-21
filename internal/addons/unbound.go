@@ -139,7 +139,14 @@ func (*unboundAddon) Install(ctx context.Context) error {
 	// Replace a stock package conf (or a missing one) with ours -- the
 	// router-mode logic reads its own markers back, and a stock conf can
 	// carry an `interface: ::0` that must not leak into `ip name-server`.
+	// ADD-02: back up whatever's already there first, best-effort --
+	// content alone can't tell a stock conf apart from a real hand-edited
+	// one, and a harmless leftover .orig file is a much better outcome
+	// than silently destroying someone's actual config.
 	if body, err := readFile(unboundConf); err != nil || !strings.Contains(string(body), unboundManagedMark) {
+		if err == nil && len(body) > 0 {
+			_ = writeFile(unboundConf+".orig", body, 0o644)
+		}
 		if err := writeFile(unboundConf, []byte(unboundConfBody(unboundDefCache, true, false, "")), 0o644); err != nil {
 			return fmt.Errorf("запись %s: %w", unboundConf, err)
 		}
@@ -152,14 +159,26 @@ func (*unboundAddon) Install(ctx context.Context) error {
 
 func (*unboundAddon) Remove(ctx context.Context) error {
 	u := unboundRead(ctx)
-	// Best-effort: drop the name-server entry if we have a real IP for it.
-	// A leftover entry just gives dns-proxy a dead upstream alongside its
-	// working ones -- not worth aborting the removal over.
+	// Drop the name-server entry if we have a real IP for it, but keep
+	// going regardless of whether it worked -- the operator asked to
+	// remove the addon, and refusing over this one cleanup step
+	// shouldn't block that. ADD-02: silently discarding the error here
+	// (as opposed to just not aborting on it) left `ip name-server`
+	// potentially still pointed at a resolver that's about to stop
+	// existing, with nothing telling the operator DNS might now be
+	// broken -- surfaced below instead, once removal itself is done.
+	var unbindErr error
 	if u.routerMode && keeneticAvailable() && privateV4(u.routerIP) {
-		_ = setLocalNameServer(ctx, u.routerIP, u.port, false)
+		unbindErr = setLocalNameServer(ctx, u.routerIP, u.port, false)
 	}
 	_, _ = initdRun(ctx, unboundInit, "stop")
-	return opkgRemove(ctx, unboundPkg)
+	if err := opkgRemove(ctx, unboundPkg); err != nil {
+		return err
+	}
+	if unbindErr != nil {
+		return fmt.Errorf("unbound удалён, но снять `ip name-server %s:%d` не вышло -- проверьте и снимите вручную: %w", u.routerIP, u.port, unbindErr)
+	}
+	return nil
 }
 
 // routerLANIP resolves the LAN IP for a DNS component's router mode:

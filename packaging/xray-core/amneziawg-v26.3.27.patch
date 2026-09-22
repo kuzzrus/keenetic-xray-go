@@ -1,5 +1,5 @@
 diff --git a/go.mod b/go.mod
-index d67419b..5616f9f 100644
+index d67419b..24f6c41 100644
 --- a/go.mod
 +++ b/go.mod
 @@ -26,7 +26,6 @@ require (
@@ -27,9 +27,9 @@ index d67419b..5616f9f 100644
  	gopkg.in/yaml.v3 v3.0.1 // indirect
  )
 +
-+replace github.com/amnezia-vpn/amneziawg-go/v3 => github.com/kuzzrus/amneziawg-go/v3 v3.1.20260829-0.20260917133128-58a3db174350
++replace github.com/amnezia-vpn/amneziawg-go/v3 => github.com/kuzzrus/amneziawg-go/v3 v3.1.20260829-0.20260922090841-9f614256e326
 diff --git a/go.sum b/go.sum
-index 1385e72..072812d 100644
+index 1385e72..42917f7 100644
 --- a/go.sum
 +++ b/go.sum
 @@ -19,8 +19,8 @@ github.com/golang/mock v1.7.0-rc.1 h1:YojYx61/OLFsiv6Rw1Z96LpldJIy31o+UHmwAUMJ6/
@@ -47,8 +47,8 @@ index 1385e72..072812d 100644
  github.com/kr/pretty v0.3.1/go.mod h1:hoEshYVHaxMs3cyo3Yncou5ZscifuDolrwPKZanG3xk=
  github.com/kr/text v0.2.0 h1:5Nx0Ya0ZqY2ygV366QzturHI13Jq95ApcVaJBhpS+AY=
  github.com/kr/text v0.2.0/go.mod h1:eLer722TekiGuMkidMxC/pM04lWEeraHUUmBw8l2grE=
-+github.com/kuzzrus/amneziawg-go/v3 v3.1.20260829-0.20260917133128-58a3db174350 h1:PgvZwx9vWqOGM/fbWFzm8AmrqahG7TRT/sWNY3hd21o=
-+github.com/kuzzrus/amneziawg-go/v3 v3.1.20260829-0.20260917133128-58a3db174350/go.mod h1:YoPc6qcOZqD7TXZ1xpedD8Sx3aSKsxN05ZqEFmXDNHk=
++github.com/kuzzrus/amneziawg-go/v3 v3.1.20260829-0.20260922090841-9f614256e326 h1:mRwO12AlWfZkImclb+dVYJo3Xl9m8IqfWCPDqf5Qam4=
++github.com/kuzzrus/amneziawg-go/v3 v3.1.20260829-0.20260922090841-9f614256e326/go.mod h1:YoPc6qcOZqD7TXZ1xpedD8Sx3aSKsxN05ZqEFmXDNHk=
  github.com/miekg/dns v1.1.72 h1:vhmr+TF2A3tuoGNkLDFK9zi36F2LS+hKTRW0Uf8kbzI=
  github.com/miekg/dns v1.1.72/go.mod h1:+EuEPhdHOsfk6Wk5TT2CzssZdqkmFhf8r+aVyDEToIs=
  github.com/pelletier/go-toml v1.9.5 h1:4yBQzkHv+7BHq2PQUZF3Mx0IYxG7LsP222s7Agd3ve8=

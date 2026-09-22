@@ -1,5 +1,5 @@
 diff --git a/go.mod b/go.mod
-index be24f79..9d6ce70 100644
+index be24f79..3a790bd 100644
 --- a/go.mod
 +++ b/go.mod
 @@ -3,6 +3,7 @@ module github.com/xtls/xray-core
@@ -32,9 +32,9 @@ index be24f79..9d6ce70 100644
  	gopkg.in/yaml.v2 v2.4.0 // indirect
  )
 +
-+replace github.com/amnezia-vpn/amneziawg-go/v3 => github.com/kuzzrus/amneziawg-go/v3 v3.1.20260829-0.20260917133128-58a3db174350
++replace github.com/amnezia-vpn/amneziawg-go/v3 => github.com/kuzzrus/amneziawg-go/v3 v3.1.20260829-0.20260922090841-9f614256e326
 diff --git a/go.sum b/go.sum
-index f906979..a726d1f 100644
+index f906979..2ed18e8 100644
 --- a/go.sum
 +++ b/go.sum
 @@ -18,8 +18,8 @@ github.com/golang/mock v1.7.0-rc.1 h1:YojYx61/OLFsiv6Rw1Z96LpldJIy31o+UHmwAUMJ6/
@@ -52,8 +52,8 @@ index f906979..a726d1f 100644
  github.com/kr/pretty v0.3.1/go.mod h1:hoEshYVHaxMs3cyo3Yncou5ZscifuDolrwPKZanG3xk=
  github.com/kr/text v0.2.0 h1:5Nx0Ya0ZqY2ygV366QzturHI13Jq95ApcVaJBhpS+AY=
  github.com/kr/text v0.2.0/go.mod h1:eLer722TekiGuMkidMxC/pM04lWEeraHUUmBw8l2grE=
-+github.com/kuzzrus/amneziawg-go/v3 v3.1.20260829-0.20260917133128-58a3db174350 h1:PgvZwx9vWqOGM/fbWFzm8AmrqahG7TRT/sWNY3hd21o=
-+github.com/kuzzrus/amneziawg-go/v3 v3.1.20260829-0.20260917133128-58a3db174350/go.mod h1:YoPc6qcOZqD7TXZ1xpedD8Sx3aSKsxN05ZqEFmXDNHk=
++github.com/kuzzrus/amneziawg-go/v3 v3.1.20260829-0.20260922090841-9f614256e326 h1:mRwO12AlWfZkImclb+dVYJo3Xl9m8IqfWCPDqf5Qam4=
++github.com/kuzzrus/amneziawg-go/v3 v3.1.20260829-0.20260922090841-9f614256e326/go.mod h1:YoPc6qcOZqD7TXZ1xpedD8Sx3aSKsxN05ZqEFmXDNHk=
  github.com/libp2p/go-nat v1.0.1-0.20250821073202-01afc089f138 h1:YohuNPT/1k3VcThCQlBZ43PCPWPfMRS1zcxWBF2SLK8=
  github.com/libp2p/go-nat v1.0.1-0.20250821073202-01afc089f138/go.mod h1:TXQg5tfSy+bUjnhT5728j5j/MBj7keIYqqZ1+8k/ui8=
  github.com/libp2p/go-netroute v0.2.1 h1:V8kVrpD8GK0Riv15/7VN6RbUQ3URNZVosw7H2v9tksU=
@@ -233,7 +233,7 @@ index 0e71e15..bd4ca6c 100644
  					bufs[0][2] = 0
  					bufs[0][3] = 0
 diff --git a/proxy/wireguard/client.go b/proxy/wireguard/client.go
-index ef0cc1e..e25f5dc 100644
+index ef0cc1e..1f8e9ed 100644
 --- a/proxy/wireguard/client.go
 +++ b/proxy/wireguard/client.go
 @@ -10,8 +10,9 @@ import (
@@ -341,6 +341,24 @@ index ef0cc1e..e25f5dc 100644
  	for _, peer := range h.conf.Peers {
  		cfg.WriteString("public_key=" + peer.PublicKey + "\n")
  		if peer.PreSharedKey != "" {
+@@ -360,10 +439,17 @@ func (h *Handler) init(ctx context.Context) error {
+ 	}
+ 	err := dev.IpcSet(cfg.String())
+ 	if err != nil {
++		// AWG-05: dev is otherwise abandoned here with no reference
++		// left to it anywhere (h.dev is only set below, on full
++		// success) -- its background goroutines/queues started by
++		// device.NewDevice above would leak indefinitely. Same below
++		// for a dev.Up() failure.
++		dev.Close()
+ 		return err
+ 	}
+ 	err = dev.Up()
+ 	if err != nil {
++		dev.Close()
+ 		return err
+ 	}
+ 	h.dev = dev
 diff --git a/proxy/wireguard/config.pb.go b/proxy/wireguard/config.pb.go
 index 4f434d1..364a09e 100644
 --- a/proxy/wireguard/config.pb.go

@@ -315,6 +315,85 @@ func TestNfqws2_Configure(t *testing.T) {
 	}
 }
 
+// TestShellDoubleQuoteEscape is ADD-01's core regression test: values
+// used to be embedded into a shell KEY="value" config line completely
+// unescaped -- a value containing a double-quote could close the string
+// early and inject arbitrary shell syntax into whatever init script
+// later sources the file.
+func TestShellDoubleQuoteEscape(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{"plain interface name unchanged", "eth0.2", "eth0.2", false},
+		{"double quote escaped", `eth0"`, `eth0\"`, false},
+		{"backslash escaped", `eth0\`, `eth0\\`, false},
+		{"dollar escaped (no variable expansion)", "eth0$HOME", `eth0\$HOME`, false},
+		{"backtick escaped (no command substitution)", "eth0`id`", "eth0\\`id\\`", false},
+		{
+			"the exact injection shape: closes the string, appends a command",
+			`eth0"; rm -rf /opt; X="`,
+			`eth0\"; rm -rf /opt; X=\"`,
+			false,
+		},
+		{"newline rejected outright", "eth0\nEVIL=1", "", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := shellDoubleQuoteEscape(c.in)
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("shellDoubleQuoteEscape(%q): want error, got nil", c.in)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("shellDoubleQuoteEscape(%q): unexpected error: %v", c.in, err)
+			}
+			if got != c.want {
+				t.Errorf("shellDoubleQuoteEscape(%q) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+// TestNfqws2_Configure_EscapesShellMetacharacters is ADD-01's end-to-end
+// regression test: isp_interface (and every other free-form Configure
+// value) reaches shellConfSet with zero validation of its own -- the
+// escaping has to happen at the point the file is actually written.
+// Confirms the injection shape from the audit produces a config file
+// where the malicious tail stays inert data inside the quotes, not
+// live shell syntax.
+func TestNfqws2_Configure_EscapesShellMetacharacters(t *testing.T) {
+	f := newFakeSys()
+	withFakeSys(t, f)
+	ctx := context.Background()
+	f.installed[nfqwsPkg] = "2.0-test"
+	f.files[nfqwsConf] = []byte("ISP_INTERFACE=\"\"\n")
+	a, _ := Find("nfqws2")
+
+	injected := `eth0"; rm -rf /opt; X="`
+	if err := a.Configure(ctx, map[string]string{"isp_interface": injected}); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
+	conf := string(f.files[nfqwsConf])
+	if strings.Contains(conf, `ISP_INTERFACE="eth0"; rm -rf /opt; X=""`) {
+		t.Fatalf("value written unescaped -- breaks out of its quotes: %q", conf)
+	}
+	want := `ISP_INTERFACE="eth0\"; rm -rf /opt; X=\""`
+	if !strings.Contains(conf, want) {
+		t.Errorf("conf = %q, want it to contain the escaped line %q", conf, want)
+	}
+
+	// A newline can't be represented on a single KEY="value" line --
+	// Configure must fail rather than silently corrupt the file.
+	if err := a.Configure(ctx, map[string]string{"isp_interface": "eth0\nEVIL=1"}); err == nil {
+		t.Error("isp_interface with a newline: want an error, got nil")
+	}
+}
+
 func TestUnbound_InstallWritesConfAndStarts(t *testing.T) {
 	f := newFakeSys()
 	withFakeSys(t, f)

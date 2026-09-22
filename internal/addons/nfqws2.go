@@ -231,13 +231,38 @@ func validPorts(s string) error {
 	return nil
 }
 
+// shellDoubleQuoteEscape escapes s for safe embedding inside a
+// double-quoted POSIX shell string (ADD-01): backslash, double-quote,
+// dollar and backtick are the characters that keep special meaning
+// inside "..." and must be backslash-escaped, or a value could break out
+// of its quotes and inject arbitrary shell commands/variable expansion
+// into whatever init script later sources this file. A newline has no
+// safe representation on a single KEY="value" line at all -- it would
+// split into a second, malformed line -- so it's rejected outright
+// rather than silently mangled.
+func shellDoubleQuoteEscape(s string) (string, error) {
+	if strings.ContainsAny(s, "\r\n") {
+		return "", fmt.Errorf("значение содержит перевод строки, недопустимо в однострочном конфиге")
+	}
+	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, `$`, `\$`, "`", "\\`")
+	return r.Replace(s), nil
+}
+
 // shellConfSet rewrites a KEY=value shell config: each key in set
-// replaces its existing KEY= line (value quoted), or is appended if
-// absent. Other lines are preserved verbatim.
+// replaces its existing KEY= line (value quoted and escaped), or is
+// appended if absent. Other lines are preserved verbatim.
 func shellConfSet(path string, set map[string]string) error {
 	data, err := readFile(path)
 	if err != nil {
 		return fmt.Errorf("чтение %s: %w", path, err)
+	}
+	escaped := make(map[string]string, len(set))
+	for k, v := range set {
+		esc, err := shellDoubleQuoteEscape(v)
+		if err != nil {
+			return fmt.Errorf("%s: %w", k, err)
+		}
+		escaped[k] = esc
 	}
 	lines := strings.Split(string(data), "\n")
 	seen := map[string]bool{}
@@ -246,21 +271,21 @@ func shellConfSet(path string, set map[string]string) error {
 		if !ok {
 			continue
 		}
-		if v, want := set[strings.TrimSpace(key)]; want {
+		if v, want := escaped[strings.TrimSpace(key)]; want {
 			lines[i] = fmt.Sprintf(`%s="%s"`, strings.TrimSpace(key), v)
 			seen[strings.TrimSpace(key)] = true
 		}
 	}
 	// Append any keys that weren't already present, in a stable order.
 	var missing []string
-	for k := range set {
+	for k := range escaped {
 		if !seen[k] {
 			missing = append(missing, k)
 		}
 	}
 	sort.Strings(missing)
 	for _, k := range missing {
-		lines = append(lines, fmt.Sprintf(`%s="%s"`, k, set[k]))
+		lines = append(lines, fmt.Sprintf(`%s="%s"`, k, escaped[k]))
 	}
 	return writeFile(path, []byte(strings.Join(lines, "\n")), 0o644)
 }

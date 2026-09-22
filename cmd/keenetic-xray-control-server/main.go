@@ -71,14 +71,15 @@ func run(args []string) error {
 		return fmt.Errorf("loading queue store: %w", err)
 	}
 
-	// Carry any routers pinned in config.json into the runtime registry
-	// (once; a no-op for IDs already there). After this the registry --
-	// mutable from the bot with /add_router and /remove_router -- is the
+	// Carry any routers pinned in config.json into the runtime registry --
+	// the very first time this store file is ever used, never again
+	// after that (BOT-03: re-seeding on every startup made a router
+	// removed via the bot's /remove_router come right back as long as
+	// config.json still listed it). After this the registry -- mutable
+	// from the bot with /add_router and /remove_router -- is the sole
 	// source of truth for which routers may authenticate.
-	for id, token := range cfg.Routers {
-		if err := store.SeedRouter(id, token, ""); err != nil {
-			return fmt.Errorf("seeding router %q from config: %w", id, err)
-		}
+	if err := store.SeedRoutersFromConfig(cfg.Routers); err != nil {
+		return fmt.Errorf("seeding routers from config: %w", err)
 	}
 
 	logger := log.New(os.Stderr, "", log.LstdFlags)

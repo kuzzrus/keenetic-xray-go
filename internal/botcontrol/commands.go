@@ -1089,8 +1089,11 @@ func (h *RouterHandler) watchdogLog() (string, error) {
 }
 
 // daemonLog tails the daemon's own rolling log (applog). args[0], if
-// given, is the line count; default 200, capped at 500 so a reply fits a
-// chat message.
+// given, is the line count; default 200, capped at 500 -- a line-count
+// cap alone doesn't bound the actual text length (BOT-05: 500 lines can
+// easily run well past Telegram's per-message limit), so the reply
+// fitting a chat message is TelegramBot.send/editMessageText's own job
+// (truncateForTelegram), not this cap's.
 func (h *RouterHandler) daemonLog(args []string) (string, error) {
 	if h.DaemonLog == "" {
 		return "", fmt.Errorf("лог демона не настроен для этого агента")

@@ -2,12 +2,23 @@ package botcontrol
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 func TestValidRouterID(t *testing.T) {
-	ok := []string{"home", "home-router", "office_2", "R2D2", "a"}
-	bad := []string{"", "has space", "точка", "sla/sh", "semi;colon", "a:b", string(make([]byte, 65))}
+	// exactly maxRouterIDLen (32) valid characters -- the boundary
+	// itself must still be accepted.
+	atLimit := strings.Repeat("a", maxRouterIDLen)
+	// BOT-04: one character over the limit -- combined with the longest
+	// composite callback_data prefix this project builds
+	// ("adnx:"+id+":"+addonID+":router-dns=off", 30 fixed bytes), a
+	// router ID this long already only just fits; one more character
+	// pushes some composite callback over Telegram's 64-byte limit.
+	overLimit := strings.Repeat("a", maxRouterIDLen+1)
+
+	ok := []string{"home", "home-router", "office_2", "R2D2", "a", atLimit}
+	bad := []string{"", "has space", "точка", "sla/sh", "semi;colon", "a:b", overLimit, string(make([]byte, 65))}
 	for _, id := range ok {
 		if !ValidRouterID(id) {
 			t.Errorf("ValidRouterID(%q) = false, want true", id)
@@ -127,6 +138,68 @@ func TestStore_SeedRouter_IsIdempotent(t *testing.T) {
 	}
 	if err := s.SeedRouter("home", "", ""); err == nil {
 		t.Error("SeedRouter with an empty token: want error")
+	}
+}
+
+// TestStore_SeedRoutersFromConfig_RemovalSurvivesRestart is BOT-03's
+// regression test: config.json's routers map used to be re-seeded via a
+// plain per-ID SeedRouter call on every startup, so a router removed via
+// the bot's /remove_router came right back as long as config.json still
+// listed it -- SeedRouter can't tell "never seen" apart from
+// "deliberately removed," both just look like "not currently in the
+// registry." SeedRoutersFromConfig must only ever do this once per store
+// file, across a real reload from disk (a fresh process, not just a
+// second in-memory call).
+func TestStore_SeedRoutersFromConfig_RemovalSurvivesRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "queue.json")
+	cfgRouters := map[string]string{"home": "config-token", "cabin": "cabin-token"}
+
+	s, err := LoadStore(path)
+	if err != nil {
+		t.Fatalf("LoadStore: %v", err)
+	}
+	if err := s.SeedRoutersFromConfig(cfgRouters); err != nil {
+		t.Fatalf("SeedRoutersFromConfig (first): %v", err)
+	}
+	if !s.HasRouter("home") || !s.HasRouter("cabin") {
+		t.Fatalf("first seed didn't register both routers: %+v", s.Routers())
+	}
+
+	if err := s.RemoveRouter("home"); err != nil {
+		t.Fatalf("RemoveRouter: %v", err)
+	}
+
+	// Simulate a real control-server restart: reload the store from disk
+	// (a fresh Store value, not the same in-memory one) and re-run the
+	// exact same startup seeding call with the exact same config.json
+	// content -- config.json is never edited by removing a router via
+	// the bot, so this is the realistic repro, not a contrived one.
+	reloaded, err := LoadStore(path)
+	if err != nil {
+		t.Fatalf("LoadStore (reload): %v", err)
+	}
+	if err := reloaded.SeedRoutersFromConfig(cfgRouters); err != nil {
+		t.Fatalf("SeedRoutersFromConfig (after restart): %v", err)
+	}
+
+	if reloaded.HasRouter("home") {
+		t.Error("removed router came back after a restart -- SeedRoutersFromConfig re-seeded from config.json")
+	}
+	if !reloaded.HasRouter("cabin") {
+		t.Error("untouched router lost across restart")
+	}
+}
+
+// TestStore_SeedRoutersFromConfig_FirstRunSeedsEverything confirms the
+// happy path the once-only guard must not break: a genuinely fresh store
+// (nothing ever seeded) still picks up every router config.json lists.
+func TestStore_SeedRoutersFromConfig_FirstRunSeedsEverything(t *testing.T) {
+	s, _ := LoadStore("")
+	if err := s.SeedRoutersFromConfig(map[string]string{"home": "t1", "cabin": "t2"}); err != nil {
+		t.Fatalf("SeedRoutersFromConfig: %v", err)
+	}
+	if !s.HasRouter("home") || !s.HasRouter("cabin") {
+		t.Errorf("first-run seed missing routers: %+v", s.Routers())
 	}
 }
 

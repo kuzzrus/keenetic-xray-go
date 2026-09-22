@@ -40,6 +40,11 @@ const maxRecentResults = 8
 type storeState struct {
 	Routers  map[string]*RouterState  `json:"routers"`
 	Registry map[string]*RouterRecord `json:"registry,omitempty"`
+	// ConfigRoutersSeeded is set once SeedRoutersFromConfig has ever run
+	// against this store file -- after that, config.json's routers map
+	// is never consulted again, so a router removed from the registry
+	// via the bot stays removed across restarts (BOT-03).
+	ConfigRoutersSeeded bool `json:"config_routers_seeded,omitempty"`
 }
 
 // Store tracks per-router command queues and results, persisted to a JSON

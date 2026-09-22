@@ -560,7 +560,38 @@ func (b *TelegramBot) sendMessageHTML(ctx context.Context, chatID int64, text st
 	return b.send(ctx, chatID, text, kb, "HTML")
 }
 
+// telegramTextLimit is Telegram's real per-message text limit (4096
+// UTF-16 code units per the Bot API docs). This project's text is
+// overwhelmingly BMP characters (Cyrillic/Latin/digits/most emoji),
+// where one rune is one UTF-16 unit, so a rune count is a close, safe
+// proxy without pulling in UTF-16-aware length math. Capped well under
+// the real 4096 to leave margin for the rare surrogate-pair emoji and
+// truncateForTelegram's own marker.
+const telegramTextLimit = 4000
+
+// truncateForTelegram cuts text down to telegramTextLimit runes if it's
+// over, appending a marker so the operator knows content was cut rather
+// than silently losing the tail (BOT-05: send/editMessageText used to
+// post text at whatever length a caller handed them -- Telegram rejects
+// an over-limit message outright, and that failure was visible only in
+// the server's own log, never in the chat. daemonLog in particular could
+// return up to 500 log lines with no byte/char bound at all, easily
+// exceeding this).
+func truncateForTelegram(text string) string {
+	r := []rune(text)
+	if len(r) <= telegramTextLimit {
+		return text
+	}
+	const marker = "\n… (обрезано, сообщение слишком длинное)"
+	limit := telegramTextLimit - len([]rune(marker))
+	if limit < 0 {
+		limit = 0
+	}
+	return string(r[:limit]) + marker
+}
+
 func (b *TelegramBot) send(ctx context.Context, chatID int64, text string, kb inlineKeyboard, parseMode string) int {
+	text = truncateForTelegram(text)
 	payload := map[string]any{"chat_id": chatID, "text": text}
 	if len(kb.InlineKeyboard) > 0 {
 		payload["reply_markup"] = kb
@@ -596,6 +627,7 @@ func (b *TelegramBot) editMessageText(ctx context.Context, chatID int64, message
 	if messageID == 0 {
 		return false
 	}
+	text = truncateForTelegram(text)
 	payload := map[string]any{"chat_id": chatID, "message_id": messageID, "text": text}
 	if len(kb.InlineKeyboard) > 0 {
 		payload["reply_markup"] = kb

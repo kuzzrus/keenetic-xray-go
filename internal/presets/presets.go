@@ -76,6 +76,30 @@ func readDataFile(name string) ([]byte, error) {
 	return files.ReadFile("data/" + name)
 }
 
+// validPresetName reports whether name is safe to use as a preset id: it
+// becomes a bare filename (name+".lst") joined onto the overlay
+// directory in several places (readDataFile above, Refresh below), so a
+// value smuggled in through an untrusted manifest.json -- a compromised
+// update source, or a hand-edited/corrupted overlay copy -- must never
+// be allowed to contain a path separator or "." (so no "..", no
+// absolute path), which could otherwise read or write outside the
+// overlay directory entirely (PRE-02). Every real preset name is
+// lowercase letters, digits and hyphens only; this is that allowlist,
+// not a denylist of specific dangerous characters.
+func validPresetName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // snapshot returns the current manifest and name index, loading them on
 // first use. The returned values are never mutated in place (Refresh
 // swaps in wholly new ones), so callers may read them after the lock is
@@ -90,11 +114,22 @@ func snapshot() (manifest, map[string]Preset) {
 		if raw, err := readDataFile("manifest.json"); err == nil {
 			var m manifest
 			if json.Unmarshal(raw, &m) == nil {
-				loaded = m
+				// PRE-02: filter here too, not just at write-time in
+				// Refresh -- an overlay manifest.json already on disk
+				// (corrupted, hand-edited, or written by an older,
+				// unpatched version of this code) is just as untrusted
+				// as one being actively fetched.
+				kept := m.Presets[:0]
 				idx := make(map[string]Preset, len(m.Presets))
 				for _, p := range m.Presets {
+					if !validPresetName(p.Name) {
+						continue
+					}
+					kept = append(kept, p)
 					idx[p.Name] = p
 				}
+				m.Presets = kept
+				loaded = m
 				byName = idx
 			}
 		}

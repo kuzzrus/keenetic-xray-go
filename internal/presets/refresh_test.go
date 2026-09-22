@@ -170,3 +170,138 @@ func TestRefresh_NoOverlayConfigured(t *testing.T) {
 		t.Fatal("expected an error when no overlay dir is set")
 	}
 }
+
+// TestValidPresetName is PRE-02's core allowlist test.
+func TestValidPresetName(t *testing.T) {
+	ok := []string{"youtube", "youtube-ip", "x-twitter", "a", "google-ai"}
+	bad := []string{"", "..", "../evil", "/etc/passwd", "a/b", "a.lst", "UPPER", "with space", "with_underscore"}
+	for _, n := range ok {
+		if !validPresetName(n) {
+			t.Errorf("validPresetName(%q) = false, want true", n)
+		}
+	}
+	for _, n := range bad {
+		if validPresetName(n) {
+			t.Errorf("validPresetName(%q) = true, want false", n)
+		}
+	}
+}
+
+// TestRefresh_RejectsPathTraversalName is PRE-02's regression test for the
+// write-side path traversal the audit flagged: row.Name becomes a bare
+// filename joined onto the overlay dir with no validation. A manifest
+// entry shaped like a path must be rejected outright, before it ever
+// reaches filepath.Join, not just fail some later step.
+func TestRefresh_RejectsPathTraversalName(t *testing.T) {
+	dir := t.TempDir()
+	withOverlay(t, dir)
+
+	evil := Preset{Name: "../evil", Kind: "domains", Count: 1, Rev: "x", Title: "Evil", Category: "Тест"}
+	base := fakeRepo(t, map[string]string{
+		"manifest.json": manifestJSON(evil),
+		"../evil.lst":   "owned.example\n",
+	})
+
+	res, err := Refresh(context.Background(), base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Failed != 1 {
+		t.Errorf("Result = %+v, want Failed 1 (bad name rejected)", res)
+	}
+	// Nothing must have been written outside the overlay dir.
+	outside := filepath.Join(filepath.Dir(dir), "evil.lst")
+	if _, err := os.Stat(outside); err == nil {
+		t.Errorf("a file was written outside the overlay dir: %s", outside)
+	}
+	if _, ok := Find("../evil"); ok {
+		t.Error("the path-traversal-named preset should not be servable")
+	}
+}
+
+// TestRefresh_WriteFailureFallsBackToEmbed is PRE-02's regression test
+// for the worse-than-assumed failure mode the audit's re-verification
+// found: a write failure used to drop the preset from the index
+// entirely, not "fall back to the embedded default" as it looked like
+// at a glance. Pre-creates the target .lst path as a directory so
+// writeFileAtomic's final rename onto it fails.
+func TestRefresh_WriteFailureFallsBackToEmbed(t *testing.T) {
+	dir := t.TempDir()
+	withOverlay(t, dir)
+	if err := os.MkdirAll(filepath.Join(dir, "youtube.lst"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	yt, _ := Entries("youtube") // the embedded copy, before overlay has anything real
+	base := fakeRepo(t, map[string]string{
+		"manifest.json": manifestJSON(Preset{Name: "youtube", Kind: "domains", Count: len(yt), Rev: "different", Title: "YouTube", Category: "Видео"}),
+		"youtube.lst":   strings.Join(yt, "\n") + "\n",
+	})
+
+	res, err := Refresh(context.Background(), base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Failed != 1 {
+		t.Errorf("Result = %+v, want Failed 1 (write error)", res)
+	}
+	if _, ok := Find("youtube"); !ok {
+		t.Fatal("youtube vanished from the index entirely instead of falling back to the embed")
+	}
+	got, ok := Entries("youtube")
+	if !ok || len(got) != len(yt) {
+		t.Errorf("Entries(youtube) = %d entries, want the embed fallback of %d", len(got), len(yt))
+	}
+}
+
+// TestHttpGet_OversizedResponseErrorsInsteadOfTruncating is PRE-02's
+// regression test for the third integrity gap: io.LimitReader(body,
+// limit) alone silently truncates a larger response to exactly limit
+// bytes with no error -- the .lst-fetch analog of SUB-01's bug, one HTTP
+// response over.
+func TestHttpGet_OversizedResponseErrorsInsteadOfTruncating(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "0123456789") // 10 bytes
+	}))
+	defer srv.Close()
+
+	_, err := httpGet(context.Background(), srv.Client(), srv.URL, 5)
+	if err == nil {
+		t.Fatal("httpGet with a 10-byte response and a 5-byte limit: want an error, got nil")
+	}
+}
+
+// TestSnapshot_FiltersPathTraversalNameFromOnDiskManifest is PRE-02's
+// read-side regression test: an overlay manifest.json is untrusted
+// whether it was just fetched or was already sitting on disk (corrupted,
+// hand-edited, or written by an older unpatched build) -- snapshot()
+// must filter row names the same way Refresh does, not just trust
+// whatever's already on the filesystem.
+func TestSnapshot_FiltersPathTraversalNameFromOnDiskManifest(t *testing.T) {
+	dir := t.TempDir()
+	withOverlay(t, dir)
+
+	raw := manifestJSON(
+		Preset{Name: "../evil", Kind: "domains", Count: 1, Rev: "x", Title: "Evil", Category: "Тест"},
+		Preset{Name: "acme", Kind: "domains", Count: 1, Rev: "y", Title: "Acme", Category: "Тест"},
+	)
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "acme.lst"), []byte("good.example\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reload()
+
+	if _, ok := Find("../evil"); ok {
+		t.Error("path-traversal-named entry loaded from an on-disk manifest should be filtered out")
+	}
+	if _, ok := Find("acme"); !ok {
+		t.Error("the legitimate sibling entry should still load")
+	}
+	for _, p := range All() {
+		if p.Name == "../evil" {
+			t.Error("../evil leaked into All()")
+		}
+	}
+}

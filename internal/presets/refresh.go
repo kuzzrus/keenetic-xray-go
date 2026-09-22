@@ -89,6 +89,19 @@ func Refresh(ctx context.Context, baseURL string) (Result, error) {
 	kept := make([]Preset, 0, len(remote.Presets))
 
 	for _, row := range remote.Presets {
+		// PRE-02: row.Name becomes a bare filename (row.Name+".lst")
+		// joined onto the overlay dir in several places below -- reject
+		// it up front, before any of those, rather than letting a
+		// manifest entry shaped like a path ("../../etc/passwd") reach
+		// filepath.Join at all. Exploitability needs a compromised
+		// update source (this project's own repo, by default), but the
+		// fix doesn't depend on that being hard.
+		if !validPresetName(row.Name) {
+			res.Failed++
+			res.Notes = append(res.Notes, fmt.Sprintf("%q: недопустимое имя пресета, пропущено", row.Name))
+			continue
+		}
+
 		localRev := localRevOf(dir, row.Name, embedIdx)
 		if localRev == row.Rev {
 			res.Skipped++
@@ -118,6 +131,15 @@ func Refresh(ctx context.Context, baseURL string) (Result, error) {
 		if err := writeFileAtomic(filepath.Join(dir, row.Name+".lst"), renderOverlayList(row, lines)); err != nil {
 			res.Failed++
 			res.Notes = append(res.Notes, row.Name+": запись: "+err.Error())
+			// PRE-02: a write failure must degrade the same way a fetch
+			// or validation failure already does -- fall back to the
+			// embedded copy so this preset stays in the index. Before
+			// this, it just vanished from the manifest entirely (not
+			// "falls back to the built-in default" as it looked like at
+			// a glance) until the next successful refresh.
+			if p, ok := embedIdx[row.Name]; ok {
+				kept = append(kept, p)
+			}
 			continue
 		}
 		// The rev the manifest advertises must match what we just wrote.
@@ -218,7 +240,21 @@ func httpGet(ctx context.Context, hc *http.Client, url string, limit int64) ([]b
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, limit))
+	// PRE-02: limit+1, then check -- io.LimitReader(resp.Body, limit)
+	// alone silently truncates a larger response to exactly limit bytes
+	// with no error at all (io.ReadAll sees a clean EOF at the cap, not
+	// a failure). A manifest.json cut off mid-object still fails to
+	// parse (an error surfaces one level up), but a .lst file cut off
+	// mid-list just looks like a shorter, otherwise-valid list -- the
+	// same silent-truncation shape as SUB-01, one HTTP fetch over.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > limit {
+		return nil, fmt.Errorf("response exceeds %d byte limit", limit)
+	}
+	return body, nil
 }
 
 func writeFileAtomic(path string, data []byte) error {

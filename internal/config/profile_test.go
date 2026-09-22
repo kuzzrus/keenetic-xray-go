@@ -980,3 +980,56 @@ func TestAmneziaWGParams_UnmarshalJSON_LoadsPreFixConfig(t *testing.T) {
 		t.Errorf("Address = %v, want [10.8.1.2/32]", a.Address)
 	}
 }
+
+// validAWGProfile is a minimal amneziawg Profile that passes Validate --
+// shared by the AWG-03 DNS-validation cases below so each only needs to
+// mutate the one field it's testing.
+func validAWGProfile() Profile {
+	return Profile{
+		Protocol: "amneziawg",
+		Address:  "awg.example.com",
+		Port:     443,
+		AWG: &AmneziaWGParams{
+			PrivateKey:    "AAAA=",
+			PeerPublicKey: "BBBB=",
+		},
+	}
+}
+
+// TestProfileValidate_AmneziaWGDNS is AWG-03's regression test: real
+// Xray-core (proxy/wireguard/client.go's NewClient) feeds every DNS
+// entry straight into netip.MustParseAddr with no validation of its
+// own -- a bad entry panics the *entire* xray process, not just this
+// connection, the moment the profile is actually used. Validate must
+// catch this before the profile is ever saved.
+func TestProfileValidate_AmneziaWGDNS(t *testing.T) {
+	cases := []struct {
+		name    string
+		dns     []string
+		wantErr bool
+	}{
+		{"no dns is valid (Xray falls back to its own default resolvers)", nil, false},
+		{"a plain IPv4 is valid", []string{"8.8.8.8"}, false},
+		{"a plain IPv6 is valid", []string{"2606:4700:4700::1111"}, false},
+		{"multiple valid addresses", []string{"8.8.8.8", "8.8.4.4"}, false},
+		{`"local" alone is the one accepted non-address value`, []string{"local"}, false},
+		{"a hostname is not a valid netip.Addr -- the exact AWG-03 crash", []string{"dns.google"}, true},
+		{"an empty string is not a valid address", []string{""}, true},
+		{"a CIDR is not a bare address", []string{"8.8.8.8/32"}, true},
+		{"one bad entry alongside good ones must still fail", []string{"8.8.8.8", "not-an-ip"}, true},
+		{`"local" is only valid alone, not mixed with a real address`, []string{"local", "8.8.8.8"}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := validAWGProfile()
+			p.AWG.DNS = c.dns
+			err := p.Validate()
+			if c.wantErr && err == nil {
+				t.Errorf("DNS = %v: expected an error, got nil", c.dns)
+			}
+			if !c.wantErr && err != nil {
+				t.Errorf("DNS = %v: unexpected error: %v", c.dns, err)
+			}
+		})
+	}
+}

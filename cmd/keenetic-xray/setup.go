@@ -35,7 +35,7 @@ var errSlotSkipped = errors.New("slot skipped")
 // port numbers, rather than the older single-source-then-pick-an-index
 // flow non-interactive mode still uses.
 type setupOpts struct {
-	From       string // vless:// link or http(s):// subscription URL -- non-interactive mode only
+	From       string // vless:// / naive+https:// / vpn:// link or http(s):// subscription URL -- non-interactive mode only
 	PrimarySel string // index or a remark substring; "" -> 0 -- non-interactive mode only
 	BackupSel  string // index or a remark substring; "" -> 1 (or 0 with one profile) -- non-interactive mode only
 	Proxy0     string // "", "yes", "no" ("" -> prompt interactively, or auto when non-interactive)
@@ -137,12 +137,12 @@ func isCharDevice(f *os.File) bool {
 func runSetupNonInteractive(cfg *config.Config, o setupOpts) error {
 	input := strings.TrimSpace(o.From)
 	if input == "" {
-		return fmt.Errorf("no vless:// / naive+https:// link or subscription URL given")
+		return fmt.Errorf("no vless:// / naive+https:// / vpn:// link or subscription URL given")
 	}
 
 	var profiles []config.Profile
 	switch {
-	case strings.HasPrefix(input, "vless://"), strings.HasPrefix(input, "naive+"):
+	case strings.HasPrefix(input, "vless://"), strings.HasPrefix(input, "naive+"), strings.HasPrefix(input, "vpn://"):
 		p, err := config.ParseProfileURI(input)
 		if err != nil {
 			return fmt.Errorf("parsing share link: %w", err)
@@ -160,7 +160,7 @@ func runSetupNonInteractive(cfg *config.Config, o setupOpts) error {
 		profiles = result.Profiles
 		cfg.Subscription = &config.Subscription{URL: input, LastFetchedAt: time.Now()}
 	default:
-		return fmt.Errorf("input doesn't look like a vless:// / naive+https:// link or an http(s):// subscription URL")
+		return fmt.Errorf("input doesn't look like a vless:// / naive+https:// / vpn:// link or an http(s):// subscription URL")
 	}
 
 	if len(profiles) == 0 {
@@ -356,7 +356,7 @@ func promptSlotSource(reader *bufio.Reader, cfg *config.Config, label string, op
 	if optional {
 		hint = " (Enter — пропустить)"
 	}
-	fmt.Printf("%s профиль%s — вставь vless://, naive+https:// или ссылку на подписку http(s)://:\n> ", label, hint)
+	fmt.Printf("%s профиль%s — вставь vless://, naive+https://, vpn:// или ссылку на подписку http(s)://:\n> ", label, hint)
 	line, err := reader.ReadString('\n')
 	if err != nil && line == "" && !optional {
 		return slotSourceResult{}, fmt.Errorf("чтение ввода: %w", err)
@@ -370,7 +370,7 @@ func promptSlotSource(reader *bufio.Reader, cfg *config.Config, label string, op
 	}
 
 	switch {
-	case strings.HasPrefix(src, "vless://"), strings.HasPrefix(src, "naive+"):
+	case strings.HasPrefix(src, "vless://"), strings.HasPrefix(src, "naive+"), strings.HasPrefix(src, "vpn://"):
 		p, err := config.ParseProfileURI(src)
 		if err != nil {
 			return slotSourceResult{}, fmt.Errorf("%s: разбор ссылки: %w", label, err)
@@ -401,7 +401,7 @@ func promptSlotSource(reader *bufio.Reader, cfg *config.Config, label string, op
 		}
 		return slotSourceResult{profile: result.Profiles[idx], src: src, selector: strconv.Itoa(idx)}, nil
 	default:
-		return slotSourceResult{}, fmt.Errorf("%s: не похоже ни на ссылку сервера (vless://, naive+https://), ни на http(s)://-подписку", label)
+		return slotSourceResult{}, fmt.Errorf("%s: не похоже ни на ссылку сервера (vless://, naive+https://, vpn://), ни на http(s)://-подписку", label)
 	}
 }
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -21,6 +22,19 @@ const secondTestVLESSURI = "vless://22222222-3333-4444-5555-666666666666@backup.
 // thirdTestVLESSURI is a third distinct link, for the field-editor tests
 // that swap a slot's source to something not already configured.
 const thirdTestVLESSURI = "vless://33333333-4444-5555-6666-777777777777@third.example.com:443?type=tcp&security=none#third"
+
+// testAWGVPNURI is a synthetic (not-a-real-server) AmneziaWG vpn:// link
+// -- SETUP-VPN's regression fixture (setup.go's own prefix checks used to
+// not know about vpn://, even though config.ParseProfileURI already did).
+var testAWGVPNURI = "vpn://" + base64.StdEncoding.EncodeToString([]byte(`[Interface]
+PrivateKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+Address = 10.8.1.2/32
+
+[Peer]
+PublicKey = BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=
+Endpoint = awg.example.com:51820
+AllowedIPs = 0.0.0.0/0
+`))
 
 // seedTwoLinkConfig runs the wizard once (primary + backup as two vless
 // links, default ports) so a follow-up `runSetup` lands in the field
@@ -92,6 +106,54 @@ func TestRunSetupInteractive_VlessPrimaryNaiveBackup(t *testing.T) {
 	}
 	if cfg.BackupSource == nil || cfg.BackupSource.URL != naiveBackupURI {
 		t.Errorf("BackupSource = %+v, want URL %s", cfg.BackupSource, naiveBackupURI)
+	}
+}
+
+func TestRunSetupInteractive_VlessPrimaryVpnBackup(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	t.Setenv("KEENETIC_XRAY_CONFIG", path)
+
+	// primary vless link, backup vpn:// (AmneziaWG) link, then Enter/Enter
+	// for default ports. Regression for SETUP-VPN: the wizard's own
+	// prefix check used to only recognize vless://naive+, not vpn://,
+	// even though config.ParseProfileURI already did.
+	input := strings.NewReader(testVLESSURI + "\n" + testAWGVPNURI + "\n\n\n")
+	if err := runSetup(input, setupOpts{}); err != nil {
+		t.Fatalf("runSetup: %v", err)
+	}
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Profiles) != 2 {
+		t.Fatalf("len(Profiles) = %d, want 2", len(cfg.Profiles))
+	}
+	if got := cfg.Profiles[cfg.BackupIndex]; got.Protocol != "amneziawg" || got.Address != "awg.example.com" {
+		t.Errorf("backup = %+v, want the amneziawg profile", got)
+	}
+	if cfg.BackupSource == nil || cfg.BackupSource.URL != testAWGVPNURI {
+		t.Errorf("BackupSource = %+v, want URL %s", cfg.BackupSource, testAWGVPNURI)
+	}
+}
+
+func TestRunSetup_NonInteractive_VpnLink(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	t.Setenv("KEENETIC_XRAY_CONFIG", path)
+
+	// Regression for SETUP-VPN: the non-interactive (postinst / --sub=)
+	// path had the exact same missing-prefix gap as the interactive one.
+	if err := runSetup(strings.NewReader(""), setupOpts{From: testAWGVPNURI, Yes: true, Proxy0: "no"}); err != nil {
+		t.Fatalf("runSetup: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Profiles) != 1 || cfg.Profiles[0].Protocol != "amneziawg" {
+		t.Fatalf("profiles = %+v, want 1 amneziawg profile", cfg.Profiles)
 	}
 }
 

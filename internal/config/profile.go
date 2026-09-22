@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -255,6 +256,26 @@ func (p *Profile) validateAmneziaWG() error {
 	}
 	if p.AWG.PeerPublicKey == "" {
 		return fmt.Errorf("amneziawg: missing peer public key")
+	}
+	// AWG-03: every DNS entry must be a bare IP address (no port, no
+	// CIDR) -- verified against real Xray-core's own
+	// proxy/wireguard/client.go: NewClient feeds each one straight into
+	// netip.MustParseAddr with no validation of its own, so a bad entry
+	// (a hostname, a typo, anything not a plain address) panics the
+	// *entire* xray process the moment this profile is used, not just
+	// this one connection. Confirmed this project's own AWG-03 gap
+	// (upstream's behavior, not something the patch touches): nothing
+	// validated a .conf's DNS line before this. "local" is the one
+	// non-address value real Xray accepts here (it means "use the
+	// system resolver instead of a tunnel-pushed one"), only meaningful
+	// as the sole entry.
+	if len(p.AWG.DNS) == 1 && p.AWG.DNS[0] == "local" {
+		return nil
+	}
+	for _, d := range p.AWG.DNS {
+		if _, err := netip.ParseAddr(d); err != nil {
+			return fmt.Errorf("amneziawg: dns entry %q is not a valid IP address (real Xray-core panics the whole process on one that isn't)", d)
+		}
 	}
 	return nil
 }

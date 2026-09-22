@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -101,6 +102,43 @@ func TestCmdInternal_PostinstSetupThenPrermCleanup(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Dir(configFile)); !os.IsNotExist(err) {
 		t.Errorf("config dir should be removed after --purge, stat err = %v", err)
+	}
+}
+
+// TestCmdNeedsSetup is INST-01's regression test: config.json existing
+// at all used to be postinst's own signal for "already configured,
+// skip the wizard" -- but postinst-setup (run moments earlier in the
+// same postinst invocation) unconditionally creates an empty-profiles
+// skeleton file if none exists yet, so that signal was always true by
+// the time it was checked, even on a genuinely fresh install. The real
+// signal is whether any profiles are actually configured.
+func TestCmdNeedsSetup(t *testing.T) {
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "config.json")
+	t.Setenv("KEENETIC_XRAY_CONFIG", configFile)
+
+	// The exact bug shape: a fresh skeleton config exists (file present)
+	// but has no profiles -- setup must still be reported as needed.
+	if err := config.Default().Save(configFile); err != nil {
+		t.Fatal(err)
+	}
+	err := run([]string{"internal", "needs-setup"})
+	if err != nil {
+		t.Errorf("needs-setup on a profile-less config: got error %v, want nil (exit 0, needs setup)", err)
+	}
+
+	// A real, configured profile -- setup is not needed.
+	cfg, _ := config.Load(configFile)
+	cfg.Profiles = []config.Profile{{
+		UUID: "u", Address: "a", Port: 443, Network: "tcp", Security: "none", Encryption: "none", Remark: "configured",
+	}}
+	if err := cfg.Save(configFile); err != nil {
+		t.Fatal(err)
+	}
+	err = run([]string{"internal", "needs-setup"})
+	var code silentExitCode
+	if !errors.As(err, &code) || code != 1 {
+		t.Errorf("needs-setup on a configured profile: got %v (%T), want silentExitCode(1)", err, err)
 	}
 }
 

@@ -29,9 +29,14 @@ export KEENETIC_XRAY_POSTINST=1
 # configuration here so nothing else is needed. Best-effort: a failure
 # (bad URL, offline) just leaves it for `keenetic-xray setup` by hand.
 #
-# Otherwise, if a config already exists, this is an update to an
+# Otherwise, if profiles are already configured, this is an update to an
 # already-configured router, not a fresh install -- leave it exactly as
-# is and just (re)start below.
+# is and just (re)start below. This can't be decided by whether
+# config.json exists (INST-01): postinst-setup above already
+# unconditionally wrote an empty-profiles skeleton file if none existed
+# yet, so the file is always there by this point regardless of whether a
+# real profile has ever been configured -- `internal needs-setup` checks
+# len(Profiles) instead, the thing that actually answers the question.
 #
 # Otherwise, if there's a controlling terminal, run the interactive
 # wizard right here -- even under `curl ... | sh`, where install.sh's own
@@ -41,28 +46,23 @@ export KEENETIC_XRAY_POSTINST=1
 # (e.g. driven by cron/CI with stdin/stdout redirected to files), there's
 # nothing to prompt into -- leave the daemon idling until `keenetic-xray
 # setup` is run by hand, exactly as before this existed.
-CONFIG_FILE="${KEENETIC_XRAY_CONFIG:-/opt/etc/keenetic-xray/config.json}"
 if [ -n "${KEENETIC_XRAY_SETUP_FROM:-}" ]; then
     _proxy0=--proxy0
     [ -n "${KEENETIC_XRAY_NO_PROXY0:-}" ] && _proxy0=--no-proxy0
     /opt/sbin/keenetic-xray setup --yes "$_proxy0" --from "$KEENETIC_XRAY_SETUP_FROM" \
         || echo "keenetic-xray: auto-setup failed -- run 'keenetic-xray setup' by hand"
-elif [ -f "$CONFIG_FILE" ]; then
-    # Found live (2026-09-15): without this check, re-running install.sh
-    # with no link on an already-configured router (e.g. the bot's own
-    # "Обновить агент" button, which re-runs install.sh with no arguments
-    # at all) always fell into the tty branch below. `[ -e /dev/tty ]`
-    # only tests that the device node exists, not that anything is
-    # actually attached to read from it -- from a backgrounded agent
-    # process with no real terminal, `keenetic-xray setup </dev/tty`
-    # opened it fine and then blocked forever on its first prompt,
-    # holding up the daemon restart below indefinitely (the router was
-    # left with the daemon already stopped by this same upgrade and no
-    # way to bring it back short of a manual reinstall). Config.Load
-    # (internal/config) returns Default() for a missing file and never
-    # writes one on its own -- a config file existing at all means some
-    # previous setup already happened, wizard or --from, so there's
-    # nothing to re-ask here regardless of what invoked this update.
+elif ! /opt/sbin/keenetic-xray internal needs-setup; then
+    # Found live (2026-09-15): without an equivalent check, re-running
+    # install.sh with no link on an already-configured router (e.g. the
+    # bot's own "Обновить агент" button, which re-runs install.sh with no
+    # arguments at all) always fell into the tty branch below. `[ -e
+    # /dev/tty ]` only tests that the device node exists, not that
+    # anything is actually attached to read from it -- from a
+    # backgrounded agent process with no real terminal, `keenetic-xray
+    # setup </dev/tty` opened it fine and then blocked forever on its
+    # first prompt, holding up the daemon restart below indefinitely
+    # (the router was left with the daemon already stopped by this same
+    # upgrade and no way to bring it back short of a manual reinstall).
     echo "keenetic-xray: existing config found -- keeping it, skipping setup"
 elif [ -e /dev/tty ]; then
     echo "keenetic-xray: no link given -- running the interactive setup wizard"

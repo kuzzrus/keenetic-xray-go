@@ -21,11 +21,13 @@ import (
 // scripts call -- not meant for interactive use.
 func cmdInternal(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: keenetic-xray internal {postinst-setup|prerm-cleanup|ensure-xray-core|ensure-naive-core|self-rollback|watchdog-restart-hook} [args]")
+		return fmt.Errorf("usage: keenetic-xray internal {postinst-setup|needs-setup|prerm-cleanup|ensure-xray-core|ensure-naive-core|self-rollback|watchdog-restart-hook} [args]")
 	}
 	switch args[0] {
 	case "postinst-setup":
 		return cmdPostinstSetup()
+	case "needs-setup":
+		return cmdNeedsSetup()
 	case "prerm-cleanup":
 		return cmdPrermCleanup(args[1:])
 	case "ensure-xray-core":
@@ -150,6 +152,31 @@ func cmdPostinstSetup() error {
 		fmt.Println("warning: could not install the watchdog cron entry:", err)
 	}
 	return nil
+}
+
+// cmdNeedsSetup is a pure yes/no predicate for postinst's shell script
+// (INST-01), tested the normal Unix way: `if keenetic-xray internal
+// needs-setup; then <run the wizard>; fi`. Exits 0 (no message) if
+// cfg.Profiles is empty -- interactive setup is still needed -- or
+// silently 1 (via silentExitCode, not a reported failure) otherwise.
+//
+// This can't be answered by checking whether config.json exists:
+// PostinstSetup (called moments earlier in the same postinst run)
+// unconditionally writes an empty skeleton config if none exists yet,
+// so by the time postinst used to check `[ -f "$CONFIG_FILE" ]`, the
+// file was already always there -- true on a genuinely fresh install
+// with no profiles configured, not just on a real upgrade. That made
+// the interactive-wizard branch dead code for the plain `curl|sh`
+// install path.
+func cmdNeedsSetup() error {
+	cfg, err := config.Load(configPath())
+	if err != nil {
+		return err
+	}
+	if len(cfg.Profiles) == 0 {
+		return nil
+	}
+	return silentExitCode(1)
 }
 
 func cmdPrermCleanup(args []string) error {

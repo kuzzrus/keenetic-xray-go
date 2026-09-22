@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -21,8 +22,23 @@ import (
 	"github.com/kuzzrus/keenetic-xray-go/internal/version"
 )
 
+// silentExitCode lets a subcommand whose whole job is a yes/no answer for
+// a calling shell script (tested the normal Unix way, `if command; then`)
+// propagate a specific exit status through the same error-return plumbing
+// every other subcommand uses, without main's generic "keenetic-xray:
+// <message>" line printing what would otherwise look like a failure on
+// what's actually the ordinary, expected outcome (see cmdNeedsSetup).
+type silentExitCode int
+
+func (e silentExitCode) Error() string { return "" }
+
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	err := run(os.Args[1:])
+	var code silentExitCode
+	if errors.As(err, &code) {
+		os.Exit(int(code))
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "keenetic-xray:", err)
 		os.Exit(1)
 	}

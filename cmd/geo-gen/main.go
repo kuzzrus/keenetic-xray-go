@@ -193,7 +193,10 @@ func run(dir string, dryRun bool) error {
 		generated = old.Generated // nothing changed -> keep the old stamp, no diff
 	}
 	mf := manifestFile{Version: 1, Generated: generated, Categories: cats, Presets: rows}
-	out, _ := json.MarshalIndent(mf, "", "  ")
+	out, err := json.MarshalIndent(mf, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshaling manifest.json: %w", err)
+	}
 	out = append(out, '\n')
 	if dryRun {
 		fmt.Println("[dry-run] manifest.json would be:")
@@ -659,15 +662,24 @@ func fetch(url string) (string, error) {
 		if attempt > 0 {
 			time.Sleep(3 * time.Second)
 		}
-		req, _ := http.NewRequest(http.MethodGet, url, nil)
+		req, err := http.NewRequest(http.MethodGet, url, nil)
+		if err != nil {
+			// A malformed URL/method is not transient -- retrying
+			// won't fix it, fail immediately instead of looping.
+			return "", fmt.Errorf("building request for %s: %w", url, err)
+		}
 		req.Header.Set("User-Agent", "keenetic-xray-go geo-gen (+https://github.com/kuzzrus/keenetic-xray-go)")
 		resp, err := httpClient.Do(req)
 		if err != nil {
 			lastErr = err
 			continue
 		}
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+		b, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 		resp.Body.Close()
+		if err != nil {
+			lastErr = fmt.Errorf("reading response body: %w", err)
+			continue
+		}
 		if resp.StatusCode != http.StatusOK {
 			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
 			continue

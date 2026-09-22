@@ -1,11 +1,15 @@
 package main
 
 import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"reflect"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAggregateCIDRs(t *testing.T) {
@@ -125,5 +129,69 @@ func TestRenderListRoundTrips(t *testing.T) {
 	}
 	if !strings.HasPrefix(out, "# Example — домены\n") {
 		t.Errorf("rendered list missing header:\n%s", out)
+	}
+}
+
+// TestFetch_MalformedURLFailsFastNotPanics is PRE-03's regression test for
+// the real risk the audit called out: http.NewRequest's error used to be
+// dropped (req, _ := ...), so a malformed URL panicked on the very next
+// line (req.Header.Set on a nil *http.Request) instead of returning an
+// error. It must also fail on the first attempt, not retry -- a malformed
+// URL/method is never transient, so looping (with fetch's own 3s
+// inter-attempt sleep) would just waste time for no benefit.
+func TestFetch_MalformedURLFailsFastNotPanics(t *testing.T) {
+	start := time.Now()
+	_, err := fetch("://bad")
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("fetch(malformed URL): got nil error, want one")
+	}
+	if elapsed > time.Second {
+		t.Errorf("fetch(malformed URL) took %s -- looks like it retried instead of failing fast", elapsed)
+	}
+}
+
+// TestFetch_TruncatedBodyIsRetriedNotSilentlyAccepted is PRE-03's second
+// regression test: io.ReadAll's error used to be dropped (b, _ := ...),
+// so a connection that died mid-response silently produced a short,
+// truncated "successful" result instead of retrying or erroring. The
+// server advertises a Content-Length larger than what it actually sends,
+// then closes the connection -- io.ReadAll must see that as an error on
+// both of fetch's attempts (there's no working retry target here), and
+// fetch must propagate it rather than returning the truncated body as if
+// it were complete.
+func TestFetch_TruncatedBodyIsRetriedNotSilentlyAccepted(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Fatal("ResponseWriter does not support hijacking")
+		}
+		conn, buf, err := hj.Hijack()
+		if err != nil {
+			t.Fatalf("hijack: %v", err)
+		}
+		defer conn.Close()
+		fmt.Fprint(buf, "HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\nshort")
+		buf.Flush()
+	}))
+	defer srv.Close()
+
+	orig := httpClient.Timeout
+	httpClient.Timeout = 2 * time.Second
+	defer func() { httpClient.Timeout = orig }()
+
+	start := time.Now()
+	_, err := fetch(srv.URL)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("fetch(truncated body): got nil error, want one")
+	}
+	// Confirms it actually went through the 3s inter-attempt sleep (i.e.
+	// treated the truncated read as retryable, same as any other
+	// mid-transfer failure), not a fast-fail path.
+	if elapsed < 3*time.Second {
+		t.Errorf("fetch(truncated body) took %s -- want it to have retried once (~3s sleep)", elapsed)
 	}
 }

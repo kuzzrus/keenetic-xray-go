@@ -658,6 +658,31 @@ type AdaptiveRouteConfig struct {
 	// every classify tick, same as OKTTLHours -- applies live within one
 	// tick, no daemon restart.
 	BlockThreshold int `json:"block_threshold,omitempty"`
+
+	// KnownRangeMaxWidthBits caps how far a promoted block may widen when
+	// it matches a real provider CIDR (internal/classifier.Config.
+	// KnownRangeMinPrefixBits -- "min prefix bits" and "max width" are the
+	// same knob named from opposite ends: a *longer* required prefix is a
+	// *narrower* allowed network). This is independent of BlockThreshold
+	// above: BlockThreshold controls whether widening happens *at all*
+	// (disabled entirely at <= 0, only the exact confirmed address is
+	// ever redirected); this field controls how far it's allowed to go
+	// *when* it does. Even with this field at its narrowest, the naive
+	// per-tick grouping (classifier.Config.BlockCIDRBits, a hardcoded
+	// /24) still applies when no known-range match qualifies -- there is
+	// no setting that makes promotion redirect a single exact address
+	// while leaving multi-address widening on, since the two are the
+	// same mechanism.
+	//
+	// 0 (the zero value, unset) -> DefaultKnownRangeMinPrefixBits (18,
+	// today's long-standing behavior, the PR #179/#180 incident fix --
+	// see AR-03 in docs/AUDIT-2026-09-18-verified.md). A valid value is
+	// 1-32; anything else is rejected by the setter, not silently
+	// clamped. Bot-exposed as preset buttons on the adaptive-routing
+	// screen, same shape as BlockThreshold's own. Read fresh every
+	// classify tick, same as BlockThreshold -- applies live within one
+	// tick, no daemon restart.
+	KnownRangeMaxWidthBits int `json:"known_range_max_width_bits,omitempty"`
 }
 
 // DefaultAdaptiveRoutePort is the xray dokodemo-door inbound's port.
@@ -679,6 +704,12 @@ const DefaultOKTTLHours = 6
 // importing internal/classifier here, same reasoning as
 // DefaultOKTTLHours.
 const DefaultBlockThreshold = 4
+
+// DefaultKnownRangeMinPrefixBits mirrors internal/classifier.
+// DefaultConfig's own KnownRangeMinPrefixBits (18) -- duplicated as a
+// plain constant rather than importing internal/classifier here, same
+// reasoning as DefaultOKTTLHours/DefaultBlockThreshold.
+const DefaultKnownRangeMinPrefixBits = 18
 
 func (a AdaptiveRouteConfig) EffectivePort() int {
 	if a.Port > 0 {
@@ -723,6 +754,22 @@ func (a AdaptiveRouteConfig) EffectiveBlockThreshold() int {
 		return DefaultBlockThreshold
 	}
 	return a.BlockThreshold
+}
+
+// EffectiveKnownRangeMinPrefixBits returns a.KnownRangeMaxWidthBits
+// unchanged unless it's unset (0), in which case it returns
+// DefaultKnownRangeMinPrefixBits. Unlike BlockThreshold, there is no
+// negative "disabled" state here -- a prefix-bits value is meaningless
+// below 1, and the field's own doc comment covers why "no widening at
+// all" is BlockThreshold's job, not this one's. Validation that a
+// stored value is in 1-32 lives at the setter (RouterHandler), not
+// here -- this accessor trusts whatever config.json already holds, the
+// same division of responsibility EffectiveBlockThreshold uses.
+func (a AdaptiveRouteConfig) EffectiveKnownRangeMinPrefixBits() int {
+	if a.KnownRangeMaxWidthBits == 0 {
+		return DefaultKnownRangeMinPrefixBits
+	}
+	return a.KnownRangeMaxWidthBits
 }
 
 // Defaults for WGTransportConfig. The address is a deliberately obscure

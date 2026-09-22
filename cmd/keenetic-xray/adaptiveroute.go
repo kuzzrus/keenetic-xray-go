@@ -500,6 +500,7 @@ func adaptiveRouteClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 		// AdaptiveRoute.Enabled going false then true again).
 		clsCfg.OKTTL = cfg.AdaptiveRoute.EffectiveOKTTL()
 		clsCfg.BlockThreshold = cfg.AdaptiveRoute.EffectiveBlockThreshold()
+		clsCfg.KnownRangeMinPrefixBits = cfg.AdaptiveRoute.EffectiveKnownRangeMinPrefixBits()
 		// AR-06: DisableRussianExclusion is a live settings toggle too
 		// (same as OKTTL/BlockThreshold just above), but until now this
 		// mirrored only the initial clsCfg==nil build above, not this

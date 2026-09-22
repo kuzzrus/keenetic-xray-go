@@ -95,6 +95,13 @@ const (
 	// entirely, not rejected as invalid the way SetTTL's <= 0 is --
 	// applies live within one classify tick, no restart.
 	ActionAdaptiveRouteSetBlockThreshold = "adrt_blockthr"
+	// ActionAdaptiveRouteSetKnownRangeWidth: args[0] = minimum prefix
+	// bits a known-range match must have to be used, 1-32 (e.g. "22");
+	// rejected as invalid outside that range, unlike SetBlockThreshold's
+	// <= 0. Independent of SetBlockThreshold: that one is whether
+	// widening happens at all, this one is how far it's allowed to go.
+	// Applies live within one classify tick, no restart.
+	ActionAdaptiveRouteSetKnownRangeWidth = "adrt_kwid"
 	// L7 SNI hostname detection, a companion to adaptive routing above --
 	// feeds the same redirect ipset from a direct NFLOG read of TLS SNI/
 	// HTTP Host instead of conntrack timing. See internal/l7capture and

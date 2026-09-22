@@ -930,6 +930,25 @@ func TestAdaptiveRouteConfig_EffectiveBlockThreshold(t *testing.T) {
 	}
 }
 
+func TestAdaptiveRouteConfig_EffectiveKnownRangeMinPrefixBits(t *testing.T) {
+	cases := []struct {
+		bits int
+		want int
+	}{
+		{0, DefaultKnownRangeMinPrefixBits}, // unset -> default (18)
+		{24, 24},                            // narrower cap
+		{16, 16},                            // wider cap
+		{32, 32},
+		{1, 1},
+	}
+	for _, c := range cases {
+		a := AdaptiveRouteConfig{KnownRangeMaxWidthBits: c.bits}
+		if got := a.EffectiveKnownRangeMinPrefixBits(); got != c.want {
+			t.Errorf("EffectiveKnownRangeMinPrefixBits with KnownRangeMaxWidthBits=%d = %d, want %d", c.bits, got, c.want)
+		}
+	}
+}
+
 // TestAWGAddressList_UnmarshalJSON_AcceptsBothShapes is AWG-02's
 // backward-compatibility test: AmneziaWGParams.Address changed from a
 // plain string to AWGAddressList ([]string) so a dual-stack address can

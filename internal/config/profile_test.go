@@ -1033,3 +1033,53 @@ func TestProfileValidate_AmneziaWGDNS(t *testing.T) {
 		})
 	}
 }
+
+// TestProfileValidate_AmneziaWGJunk is AWG-04's regression test: the
+// AmneziaWG fork (kuzzrus/amneziawg-go@58a3db1, device/uapi.go) parses
+// jc/jmin/jmax independently via strconv.ParseUint with no
+// cross-validation, and device/noise-protocol.go's JunkPackets() computes
+// `min+fastrandn(max-min)` -- a Jmin > Jmax underflows the unsigned
+// subtraction to near 2^32, allocating a multi-gigabyte buffer per junk
+// packet and OOM-crashing xray. Validate must catch this before the
+// profile is ever saved. jmin == jmax is deliberately NOT rejected: the
+// fork's fastrandn is runtime.fastrandn (go:linkname'd), whose real
+// implementation is `uint32(uint64(fastrand())*uint64(n)>>32)` --
+// fastrandn(0) is a safe 0, not a crash, only fastrandn of a *wrapped*
+// huge n (n > 0 from the underflow) is dangerous.
+func TestProfileValidate_AmneziaWGJunk(t *testing.T) {
+	cases := []struct {
+		name    string
+		jc      string
+		jmin    string
+		jmax    string
+		wantErr bool
+	}{
+		{"no jc/jmin/jmax is valid", "", "", "", false},
+		{"jc alone, valid number, is valid", "4", "", "", false},
+		{"jc alone, non-numeric, is invalid", "abc", "", "", true},
+		{"jc alone, negative, is invalid", "-1", "", "", true},
+		{"jmin < jmax is valid", "", "40", "70", false},
+		{"jmin == jmax is valid -- fastrandn(0) is a safe 0, not a crash", "", "50", "50", false},
+		{"jmin > jmax is invalid -- the exact AWG-04 underflow", "", "70", "40", true},
+		{"jmin set without jmax is invalid", "", "40", "", true},
+		{"jmax set without jmin is invalid", "", "", "70", true},
+		{"jmin non-numeric is invalid", "", "abc", "70", true},
+		{"jmax non-numeric is invalid", "", "40", "abc", true},
+		{"jmin/jmax beyond uint32 range is invalid", "", "99999999999", "99999999999", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := validAWGProfile()
+			p.AWG.Jc = c.jc
+			p.AWG.Jmin = c.jmin
+			p.AWG.Jmax = c.jmax
+			err := p.Validate()
+			if c.wantErr && err == nil {
+				t.Errorf("jc/jmin/jmax = %q/%q/%q: expected an error, got nil", c.jc, c.jmin, c.jmax)
+			}
+			if !c.wantErr && err != nil {
+				t.Errorf("jc/jmin/jmax = %q/%q/%q: unexpected error: %v", c.jc, c.jmin, c.jmax, err)
+			}
+		})
+	}
+}

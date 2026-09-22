@@ -37,6 +37,40 @@ const DefaultTag = "v26.3.27"
 // Empty -> no prerelease is currently offered.
 const PrereleaseTag = "v26.9.9"
 
+// AWGConfirmedTags lists the exact xray-core release tags whose normally-
+// published vendored build is known to carry the AmneziaWG patch --
+// mirrors .github/workflows/xray-core.yml's own AWG_CONFIRMED_TAGS env
+// var, which is what actually decides whether a given tag's build gets
+// the patch applied and published to this project's ordinary
+// xray-core/<tag> release. A tag not in this list, even if it has its
+// own patch staged, is published separately as xray-core-awg-dev/<tag>
+// instead -- an explicit opt-in the bot/CLI never install by default.
+// Update this alongside that workflow file whenever a tag is promoted
+// (see docs/HANDOFF-amneziawg.md and the amneziawg-plan memory file).
+var AWGConfirmedTags = []string{"v26.9.9"}
+
+// SupportsAWG reports whether tag's normally-published vendored build is
+// known to carry the AmneziaWG patch (AWG-01). This is a static claim
+// about what this project built and published for tag -- not a runtime
+// capability probe of whatever binary actually ends up at Ensure's
+// Dest, which coreVersionKnownWrong can't make either: the patch
+// doesn't change the "Xray X.Y.Z" version string a running binary
+// reports, so a patched and a vanilla build of the same tag are
+// indistinguishable that way. A binary installed via opkg (Entware's
+// own feed, never patched) or swapped in by hand is outside what any
+// check in this package can see regardless.
+func SupportsAWG(tag string) bool {
+	if tag == "" {
+		tag = DefaultTag
+	}
+	for _, t := range AWGConfirmedTags {
+		if t == tag {
+			return true
+		}
+	}
+	return false
+}
+
 const defaultBaseURL = "https://github.com/kuzzrus/keenetic-xray-go/releases/download/xray-core"
 
 // maxAssetBytes caps the vendored-binary download. The unpacked xray-core

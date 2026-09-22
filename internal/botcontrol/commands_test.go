@@ -2,6 +2,7 @@ package botcontrol
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -912,6 +913,84 @@ func TestRouterHandler_SetSlotSource(t *testing.T) {
 	}
 	if saved.BackupSource == nil || saved.BackupSource.Selector != "DE" {
 		t.Errorf("saved BackupSource = %+v", saved.BackupSource)
+	}
+}
+
+// testAWGLink is a synthetic vpn:// AmneziaWG link -- just enough fields
+// for ParseAmneziaWGURI/validateAmneziaWG to accept it (real key/endpoint
+// values aren't needed, this never actually connects).
+const testAWGConf = `[Interface]
+PrivateKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+Address = 10.8.1.2/32
+
+[Peer]
+PublicKey = CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC=
+Endpoint = awg.example.com:443
+`
+
+func testAWGLink() string {
+	return "vpn://" + base64.RawStdEncoding.EncodeToString([]byte(testAWGConf))
+}
+
+// TestRouterHandler_SetSlotSource_WarnsWhenCoreDoesNotConfirmAWG is
+// AWG-01's regression test: setting an amneziawg profile while the
+// configured xray-core tag isn't in xraycore.AWGConfirmedTags must warn
+// in the reply -- nothing downstream (validateAmneziaWG included) checks
+// this on its own, so without this the profile would save silently and
+// the operator would have no way to know their obfuscation might not
+// actually be active.
+func TestRouterHandler_SetSlotSource_WarnsWhenCoreDoesNotConfirmAWG(t *testing.T) {
+	cfg := config.Default() // XrayCoreTag == "" -> DefaultTag, not AWG-confirmed
+	h := &RouterHandler{Config: cfg, ConfigPath: filepath.Join(t.TempDir(), "c.json")}
+
+	out, err := h.Handle(context.Background(), Command{
+		Action: ActionSetPrimarySource,
+		Args:   []string{testAWGLink()},
+	})
+	if err != nil {
+		t.Fatalf("set_primary_source (awg): %v", err)
+	}
+	if !strings.Contains(out, "не подтверждён как AmneziaWG-patched") {
+		t.Errorf("out = %q, want a warning about the unconfirmed core tag", out)
+	}
+}
+
+// TestRouterHandler_SetSlotSource_NoWarningWithConfirmedAWGCore is the
+// negative case: the same profile with a confirmed tag already set must
+// not warn.
+func TestRouterHandler_SetSlotSource_NoWarningWithConfirmedAWGCore(t *testing.T) {
+	cfg := config.Default()
+	cfg.XrayCoreTag = xraycore.PrereleaseTag
+	h := &RouterHandler{Config: cfg, ConfigPath: filepath.Join(t.TempDir(), "c.json")}
+
+	out, err := h.Handle(context.Background(), Command{
+		Action: ActionSetPrimarySource,
+		Args:   []string{testAWGLink()},
+	})
+	if err != nil {
+		t.Fatalf("set_primary_source (awg): %v", err)
+	}
+	if strings.Contains(out, "не подтверждён") {
+		t.Errorf("out = %q, want no warning -- the configured tag is AWG-confirmed", out)
+	}
+}
+
+// TestRouterHandler_SetSlotSource_NoWarningForNonAWGProfile confirms the
+// warning is specific to amneziawg profiles -- an ordinary vless profile
+// must never mention AWG at all, regardless of the configured core tag.
+func TestRouterHandler_SetSlotSource_NoWarningForNonAWGProfile(t *testing.T) {
+	cfg := config.Default() // XrayCoreTag == "" -> DefaultTag, not AWG-confirmed
+	h := &RouterHandler{Config: cfg, ConfigPath: filepath.Join(t.TempDir(), "c.json")}
+
+	out, err := h.Handle(context.Background(), Command{
+		Action: ActionSetPrimarySource,
+		Args:   []string{"vless://11111111-2222-3333-4444-555555555555@a.example.com:443?type=tcp&security=none#RU-1"},
+	})
+	if err != nil {
+		t.Fatalf("set_primary_source (vless): %v", err)
+	}
+	if strings.Contains(out, "AmneziaWG") {
+		t.Errorf("out = %q, want no AWG-related warning for a non-AWG profile", out)
 	}
 }
 

@@ -1508,6 +1508,22 @@ func (h *RouterHandler) setSlotSource(ctx context.Context, primary bool, args []
 	h.rebindXray(ctx)
 
 	msg := fmt.Sprintf("%s ← %s", word, prof.Remark)
+	// AWG-01: nothing downstream of here (validateAmneziaWG included)
+	// checks whether the xray-core binary actually installed can even
+	// speak AmneziaWG -- the patch doesn't change the "Xray X.Y.Z"
+	// version string a running binary reports, so a plain, unobfuscated
+	// vanilla build of the same tag is indistinguishable from a patched
+	// one that way. Warn rather than refuse to save: this can't rule out
+	// a binary installed or swapped in by hand, and blocking outright on
+	// an imperfect signal risks locking out a real, working setup.
+	if prof.Protocol == "amneziawg" && !xraycore.SupportsAWG(h.Config.XrayCoreTag) {
+		tag := h.Config.XrayCoreTag
+		if tag == "" {
+			tag = xraycore.DefaultTag
+		}
+		msg += fmt.Sprintf("\n⚠️ текущий тег ядра (%s) не подтверждён как AmneziaWG-patched — обфускация может незаметно не работать. Переключитесь на пререлиз (%s) через ⚙️ Ядро, если ещё не на нём.",
+			tag, xraycore.PrereleaseTag)
+	}
 	if !otherSet {
 		msg += fmt.Sprintf(" (⚠️ %s не задан — демон простаивает, пока не зададите и его)", other)
 	}

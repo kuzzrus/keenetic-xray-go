@@ -47,6 +47,25 @@ func TestTags_Sane(t *testing.T) {
 	}
 }
 
+// TestSupportsAWG is AWG-01's own regression test: SupportsAWG must
+// agree with AWGConfirmedTags exactly, including the "" means DefaultTag
+// convention every other tag-consuming function in this package already
+// uses.
+func TestSupportsAWG(t *testing.T) {
+	if !SupportsAWG(PrereleaseTag) {
+		t.Errorf("SupportsAWG(%q) = false, want true -- this is the one tag known to carry the patch", PrereleaseTag)
+	}
+	if SupportsAWG(DefaultTag) {
+		t.Errorf("SupportsAWG(%q) = true, want false -- DefaultTag is not (yet) in AWGConfirmedTags", DefaultTag)
+	}
+	if SupportsAWG("") {
+		t.Error(`SupportsAWG("") = true, want false -- "" means DefaultTag, which isn't confirmed`)
+	}
+	if SupportsAWG("v0.0.0-not-a-real-tag") {
+		t.Error("SupportsAWG of an unrelated tag = true, want false")
+	}
+}
+
 func TestDefaultTag_MatchesPackagingPin(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", "packaging", "xray-core", "version"))
 	if err != nil {

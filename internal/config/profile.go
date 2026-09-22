@@ -269,12 +269,43 @@ func (p *Profile) validateAmneziaWG() error {
 	// non-address value real Xray accepts here (it means "use the
 	// system resolver instead of a tunnel-pushed one"), only meaningful
 	// as the sole entry.
-	if len(p.AWG.DNS) == 1 && p.AWG.DNS[0] == "local" {
-		return nil
+	if !(len(p.AWG.DNS) == 1 && p.AWG.DNS[0] == "local") {
+		for _, d := range p.AWG.DNS {
+			if _, err := netip.ParseAddr(d); err != nil {
+				return fmt.Errorf("amneziawg: dns entry %q is not a valid IP address (real Xray-core panics the whole process on one that isn't)", d)
+			}
+		}
 	}
-	for _, d := range p.AWG.DNS {
-		if _, err := netip.ParseAddr(d); err != nil {
-			return fmt.Errorf("amneziawg: dns entry %q is not a valid IP address (real Xray-core panics the whole process on one that isn't)", d)
+	// AWG-04: jc/jmin/jmax feed straight into the AmneziaWG fork's own
+	// strconv.ParseUint(value, 10, 32) with no cross-validation of its
+	// own (kuzzrus/amneziawg-go@58a3db1, device/uapi.go) -- a Jmin >
+	// Jmax then reaches device.JunkPackets()'s `min+fastrandn(max-min)`
+	// as an unsigned subtraction, wrapping to near 2^32 and allocating
+	// a multi-gigabyte []byte per junk packet, OOM-crashing xray on a
+	// router with 128-512MB RAM. Reachable from this project's own
+	// .conf-file-upload / URI import (internal/config/amneziawguri.go
+	// copies jmin/jmax verbatim, no validation), not just a
+	// hand-edited config, so it's validated here rather than left to
+	// the fork's own (missing) check.
+	if p.AWG.Jc != "" {
+		if _, err := strconv.ParseUint(p.AWG.Jc, 10, 32); err != nil {
+			return fmt.Errorf("amneziawg: jc %q is not a valid non-negative integer", p.AWG.Jc)
+		}
+	}
+	if (p.AWG.Jmin == "") != (p.AWG.Jmax == "") {
+		return fmt.Errorf("amneziawg: jmin and jmax must be set together")
+	}
+	if p.AWG.Jmin != "" {
+		jmin, err := strconv.ParseUint(p.AWG.Jmin, 10, 32)
+		if err != nil {
+			return fmt.Errorf("amneziawg: jmin %q is not a valid non-negative integer", p.AWG.Jmin)
+		}
+		jmax, err := strconv.ParseUint(p.AWG.Jmax, 10, 32)
+		if err != nil {
+			return fmt.Errorf("amneziawg: jmax %q is not a valid non-negative integer", p.AWG.Jmax)
+		}
+		if jmin > jmax {
+			return fmt.Errorf("amneziawg: jmin (%d) must not exceed jmax (%d) -- the AmneziaWG fork's JunkPackets() underflows the gap and allocates a multi-gigabyte buffer otherwise", jmin, jmax)
 		}
 	}
 	return nil

@@ -135,7 +135,26 @@ if [ -s "${CONFIG_DIR}/config.json" ]; then
     echo "server-install: config already present -- keeping it (run 'keenetic-xray-control-server setup' to change it)"
 elif [ -e /dev/tty ]; then
     echo "server-install: running the setup wizard"
-    KEENETIC_XRAY_CS_CONFIG="${CONFIG_DIR}/config.json" "$BIN_PATH" setup </dev/tty
+    # INST-04: /dev/tty existing as a device node doesn't prove anyone is
+    # actually there to answer prompts -- e.g. this installer invoked
+    # from an automated/unattended provisioning pipeline where /dev/tty
+    # still resolves to some stale controlling terminal. Bound the wait
+    # so that case fails into the same "finish manually" guidance the
+    # no-tty branch below already gives, instead of hanging indefinitely
+    # -- and, since this runs under `set -eu`, an unguarded failure here
+    # would otherwise abort the whole script before the chown/
+    # systemctl-enable steps below ever run.
+    _setup_ok=1
+    if command -v timeout >/dev/null 2>&1; then
+        KEENETIC_XRAY_CS_CONFIG="${CONFIG_DIR}/config.json" timeout 300 "$BIN_PATH" setup </dev/tty || _setup_ok=0
+    else
+        KEENETIC_XRAY_CS_CONFIG="${CONFIG_DIR}/config.json" "$BIN_PATH" setup </dev/tty || _setup_ok=0
+    fi
+    if [ "$_setup_ok" = 0 ]; then
+        echo "server-install: setup wizard failed, was cancelled, or timed out -- finish manually:" >&2
+        echo "  KEENETIC_XRAY_CS_CONFIG=${CONFIG_DIR}/config.json ${BIN_PATH} setup" >&2
+        echo "  systemctl enable --now keenetic-xray-control-server" >&2
+    fi
 else
     echo "server-install: no controlling terminal -- finish manually:" >&2
     echo "  KEENETIC_XRAY_CS_CONFIG=${CONFIG_DIR}/config.json ${BIN_PATH} setup" >&2

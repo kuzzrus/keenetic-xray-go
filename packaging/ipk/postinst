@@ -66,11 +66,25 @@ elif ! /opt/sbin/keenetic-xray internal needs-setup; then
     echo "keenetic-xray: existing config found -- keeping it, skipping setup"
 elif [ -e /dev/tty ]; then
     echo "keenetic-xray: no link given -- running the interactive setup wizard"
-    if [ -n "${KEENETIC_XRAY_NO_PROXY0:-}" ]; then
-        /opt/sbin/keenetic-xray setup --no-proxy0 </dev/tty \
-            || echo "keenetic-xray: setup wizard failed or was cancelled -- run 'keenetic-xray setup' by hand"
+    _setup_args=""
+    [ -n "${KEENETIC_XRAY_NO_PROXY0:-}" ] && _setup_args="--no-proxy0"
+    # INST-04: /dev/tty existing as a device node doesn't prove anyone is
+    # actually there to answer prompts -- it's the same weak signal the
+    # incident above exploited, just via a different route into this
+    # branch (already closed). Bound the wait so a still-possible
+    # unattended trigger (this script invoked from cron/CI/a
+    # provisioning pipeline with a stale controlling terminal) fails
+    # fast into the "run by hand" guidance instead of hanging
+    # indefinitely. BusyBox's own timeout applet if present; run
+    # unprotected otherwise, same "don't require a specific tool"
+    # reasoning as this project's curl/wget and sha256sum fallbacks
+    # elsewhere.
+    # shellcheck disable=SC2086 # _setup_args is "" or one flag word, deliberately unquoted
+    if command -v timeout >/dev/null 2>&1; then
+        timeout 300 /opt/sbin/keenetic-xray setup $_setup_args </dev/tty \
+            || echo "keenetic-xray: setup wizard failed, was cancelled, or timed out waiting for input -- run 'keenetic-xray setup' by hand"
     else
-        /opt/sbin/keenetic-xray setup </dev/tty \
+        /opt/sbin/keenetic-xray setup $_setup_args </dev/tty \
             || echo "keenetic-xray: setup wizard failed or was cancelled -- run 'keenetic-xray setup' by hand"
     fi
 else

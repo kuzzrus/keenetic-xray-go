@@ -44,6 +44,7 @@ jobs:
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
       apply_patch: ${{ steps.resolve.outputs.apply_patch }}
+      is_dev_stage: ${{ steps.resolve.outputs.is_dev_stage }}
     steps:
       - name: Resolve AmneziaWG patch/publish target
         id: resolve
@@ -59,15 +60,21 @@ jobs:
           if [ "$is_confirmed" = "true" ]; then
             apply_patch=true
             tag="xray-core/$VER"
+            is_dev_stage=false
           elif [ "$AWG_DEV" = "true" ]; then
             apply_patch=true
             tag="xray-core-awg-dev/$VER"
+            is_dev_stage=true
           else
             apply_patch=false
             tag="xray-core/$VER"
+            is_dev_stage=false
           fi
-          echo "apply_patch=$apply_patch" >> "$GITHUB_OUTPUT"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          {
+            echo "apply_patch=$apply_patch"
+            echo "tag=$tag"
+            echo "is_dev_stage=$is_dev_stage"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Create or update the release
         env:
@@ -158,20 +165,28 @@ jobs:
           bad="$(gofmt -l $touched)"
           if [ -n "$bad" ]; then echo "::error::gofmt found issues in patched files:"; echo "$bad"; exit 1; fi
 
-      # Dev-staging only (inputs.awg_dev, NOT tied to apply_patch -- a
-      # promoted/confirmed tag builds plain CGO_ENABLED=0 like every
-      # other production core, see the Build step below), and only
-      # where a cross-C toolchain is set up (matrix.cross_cc):
-      # CGO_ENABLED=1, using the vendored amneziawg-go fork (see the
-      # "Apply AmneziaWG patch" step) as a diagnostic for
-      # amnezia-vpn/amneziawg-go#110 ("arm64: outbound H4 header
-      # corrupted in transport packets", CGO_ENABLED=0 specifically).
-      # Ruled out live as the actual bug (v26.9.9's real root cause was
-      # proxy/wireguard/bind.go, see the patch and
-      # docs/HANDOFF-amneziawg.md) -- kept only as a free diagnostic for
-      # whatever tag is still being staged.
+      # Dev-staging only (needs.prepare.outputs.is_dev_stage -- true only
+      # when awg_dev was requested AND the tag is NOT already in
+      # AWG_CONFIRMED_TAGS; a promoted/confirmed tag builds plain
+      # CGO_ENABLED=0 like every other production core regardless of
+      # awg_dev, see the Build step below), and only where a cross-C
+      # toolchain is set up (matrix.cross_cc): CGO_ENABLED=1, using the
+      # vendored amneziawg-go fork (see the "Apply AmneziaWG patch"
+      # step) as a diagnostic for amnezia-vpn/amneziawg-go#110 ("arm64:
+      # outbound H4 header corrupted in transport packets",
+      # CGO_ENABLED=0 specifically). Ruled out live as the actual bug
+      # (v26.9.9's real root cause was proxy/wireguard/bind.go, see the
+      # patch and docs/HANDOFF-amneziawg.md) -- kept only as a free
+      # diagnostic for whatever tag is still being staged. Gating on
+      # is_dev_stage rather than the raw input matters: re-dispatching
+      # an already-confirmed tag with awg_dev=true (a real combination
+      # used while debugging) still targets the production release
+      # (xray-core/<tag>, not xray-core-awg-dev/<tag>) -- without this
+      # gate that run would silently --clobber the real release with a
+      # dynamically-linked CGO diagnostic build instead of the static
+      # CGO_ENABLED=0 one every other production core gets.
       - name: Install cross-C toolchain (AWG dev CGO diagnostic)
-        if: ${{ inputs.awg_dev && matrix.cross_pkg != '' }}
+        if: ${{ needs.prepare.outputs.is_dev_stage == 'true' && matrix.cross_pkg != '' }}
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq "${{ matrix.cross_pkg }}"
@@ -179,7 +194,7 @@ jobs:
       - name: Build
         working-directory: xray-core
         env:
-          CGO_ENABLED: ${{ inputs.awg_dev && matrix.cross_cc != '' && '1' || '0' }}
+          CGO_ENABLED: ${{ needs.prepare.outputs.is_dev_stage == 'true' && matrix.cross_cc != '' && '1' || '0' }}
           CC: ${{ matrix.cross_cc }}
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
@@ -204,7 +219,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           GOMIPS: ${{ matrix.gomips }}
           UPX_FLAGS: ${{ matrix.upx }}
-          CGO_ENABLED: ${{ inputs.awg_dev && matrix.cross_cc != '' && '1' || '0' }}
+          CGO_ENABLED: ${{ needs.prepare.outputs.is_dev_stage == 'true' && matrix.cross_cc != '' && '1' || '0' }}
           CROSS_CC: ${{ matrix.cross_cc }}
         run: |
           set -eu

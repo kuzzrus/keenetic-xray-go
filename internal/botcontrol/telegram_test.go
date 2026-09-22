@@ -266,6 +266,52 @@ func TestTelegramBot_NotifyServer_ReachesEveryAllowedChat(t *testing.T) {
 	}
 }
 
+// TestTruncateForTelegram is BOT-05's core regression test: Telegram
+// rejects a message over its 4096-char text limit outright. Confirms
+// short text passes through untouched, and over-limit text is cut down
+// to (well under) the real limit with a visible marker rather than
+// staying oversized and silently failing at the API layer.
+func TestTruncateForTelegram(t *testing.T) {
+	short := "лог пуст"
+	if got := truncateForTelegram(short); got != short {
+		t.Errorf("short text changed: got %q", got)
+	}
+
+	long := strings.Repeat("a", telegramTextLimit+500)
+	got := truncateForTelegram(long)
+	if n := len([]rune(got)); n > telegramTextLimit {
+		t.Errorf("truncated text is %d runes, want <= %d", n, telegramTextLimit)
+	}
+	if !strings.Contains(got, "обрезано") {
+		t.Errorf("truncated text has no truncation marker: %q...", got[:80])
+	}
+	if !strings.HasPrefix(got, strings.Repeat("a", 100)) {
+		t.Error("truncation dropped the start of the text instead of the tail")
+	}
+}
+
+// TestTelegramBot_Send_TruncatesOverLongMessages is BOT-05's integration
+// check: a genuinely oversized message (mirroring an unbounded daemonLog
+// tail) posted through the real send() path must arrive at the Telegram
+// API already within the length limit, not rejected server-side with
+// nothing shown in the chat.
+func TestTelegramBot_Send_TruncatesOverLongMessages(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	b := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, APIBase: srv.URL}
+	b.initClient()
+
+	huge := strings.Repeat("log line\n", 1000) // ~9000 chars, over the limit
+	b.send(context.Background(), 1, huge, inlineKeyboard{}, "")
+
+	texts := fake.sentTexts()
+	if len(texts) != 1 {
+		t.Fatalf("sent %d messages, want 1", len(texts))
+	}
+	if n := len([]rune(texts[0])); n > telegramTextLimit {
+		t.Errorf("message actually posted to the API is %d runes, want <= %d", n, telegramTextLimit)
+	}
+}
+
 func newBotStore(t *testing.T) *Store {
 	t.Helper()
 	store, err := LoadStore("")

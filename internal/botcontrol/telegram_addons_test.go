@@ -209,6 +209,25 @@ func TestAddonScreenKB_Buttons(t *testing.T) {
 	}
 }
 
+// TestAddonScreenKB_CallbackDataFitsTelegramLimit is BOT-04's regression
+// test: adnx (id+addonID+"router-dns=off", the longest addon that gets
+// this button) is the longest composite callback_data this project
+// builds from a router ID. Telegram rejects callback_data over 64 bytes
+// outright -- at the router ID's old 64-char cap this button would have
+// silently broken; confirms it stays under the limit at the new cap
+// (maxRouterIDLen) with real margin to spare.
+func TestAddonScreenKB_CallbackDataFitsTelegramLimit(t *testing.T) {
+	const telegramCallbackDataLimit = 64
+	id := strings.Repeat("a", maxRouterIDLen)
+	for _, row := range addonScreenKB(id, "dnscrypt").InlineKeyboard {
+		for _, b := range row {
+			if n := len(b.CallbackData); n > telegramCallbackDataLimit {
+				t.Errorf("callback_data %q is %d bytes, want <= %d", b.CallbackData, n, telegramCallbackDataLimit)
+			}
+		}
+	}
+}
+
 func TestTelegramBot_AddonsScreen_UnboundRouterDNSButton(t *testing.T) {
 	fake, _, rec := newAddonTestBot(t)
 	msgID := openMenu(t, fake)

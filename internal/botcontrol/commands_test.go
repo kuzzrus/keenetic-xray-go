@@ -551,6 +551,42 @@ func TestRouterHandler_AdaptiveRouteSetBlockThreshold_RejectsGarbage(t *testing.
 	}
 }
 
+func TestRouterHandler_AdaptiveRouteSetKnownRangeWidth(t *testing.T) {
+	h := &RouterHandler{Config: config.Default(), ConfigPath: filepath.Join(t.TempDir(), "c.json")}
+
+	out, err := h.Handle(context.Background(), Command{Action: ActionAdaptiveRouteSetKnownRangeWidth, Args: []string{"22"}})
+	if err != nil {
+		t.Fatalf("adrt_kwid: %v", err)
+	}
+	if !strings.Contains(out, "22") {
+		t.Errorf("out = %q, want it to mention the new width", out)
+	}
+	if h.Config.AdaptiveRoute.KnownRangeMaxWidthBits != 22 {
+		t.Errorf("KnownRangeMaxWidthBits = %d, want 22", h.Config.AdaptiveRoute.KnownRangeMaxWidthBits)
+	}
+	saved, err := config.Load(h.ConfigPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if saved.AdaptiveRoute.KnownRangeMaxWidthBits != 22 {
+		t.Errorf("saved KnownRangeMaxWidthBits = %d, want 22", saved.AdaptiveRoute.KnownRangeMaxWidthBits)
+	}
+}
+
+// TestRouterHandler_AdaptiveRouteSetKnownRangeWidth_RejectsOutOfRange
+// covers the one real difference from adrt_blockthr: there's no
+// meaningful "disabled" sentinel to alias 0/negative onto here (that's
+// adrt_blockthr's own job) -- anything outside 1-32 is just invalid.
+func TestRouterHandler_AdaptiveRouteSetKnownRangeWidth_RejectsOutOfRange(t *testing.T) {
+	h := &RouterHandler{Config: config.Default(), ConfigPath: filepath.Join(t.TempDir(), "c.json")}
+
+	for _, args := range [][]string{nil, {"not-a-number"}, {"0"}, {"-1"}, {"33"}} {
+		if _, err := h.Handle(context.Background(), Command{Action: ActionAdaptiveRouteSetKnownRangeWidth, Args: args}); err == nil {
+			t.Errorf("adrt_kwid with args=%v should have errored", args)
+		}
+	}
+}
+
 func TestRouterHandler_AdaptiveRouteOn_RefusesWhenSusaninConfigured(t *testing.T) {
 	orig := susaninConfiguredFn
 	t.Cleanup(func() { susaninConfiguredFn = orig })
@@ -622,6 +658,18 @@ func TestRouterHandler_AdaptiveRouteShow_IncludesBlockThreshold(t *testing.T) {
 	if !strings.Contains(out, "укрупнение блока от 4 адресов") {
 		t.Errorf("adrt_show output = %q, want it to mention the default block threshold (4)", out)
 	}
+	if !strings.Contains(out, "потолок /18") {
+		t.Errorf("adrt_show output = %q, want it to mention the default known-range width cap (/18)", out)
+	}
+
+	h.Config.AdaptiveRoute.KnownRangeMaxWidthBits = 24
+	out, err = h.Handle(context.Background(), Command{Action: ActionAdaptiveRouteShow})
+	if err != nil {
+		t.Fatalf("adrt_show: %v", err)
+	}
+	if !strings.Contains(out, "потолок /24") {
+		t.Errorf("adrt_show output = %q, want it to mention the customized width cap (/24)", out)
+	}
 
 	h.Config.AdaptiveRoute.BlockThreshold = -1
 	out, err = h.Handle(context.Background(), Command{Action: ActionAdaptiveRouteShow})
@@ -630,6 +678,9 @@ func TestRouterHandler_AdaptiveRouteShow_IncludesBlockThreshold(t *testing.T) {
 	}
 	if !strings.Contains(out, "укрупнение блоков: выкл") {
 		t.Errorf("adrt_show output = %q, want it to mention block-widening is off", out)
+	}
+	if strings.Contains(out, "потолок") {
+		t.Errorf("adrt_show output = %q, the width cap is meaningless with widening off, should not be mentioned", out)
 	}
 }
 

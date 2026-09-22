@@ -196,6 +196,12 @@ func adaptiveRouteScreenText(id string) string {
 		"мультисервисного провайдера (Яндекс, Ozon, ...) так может задеть и никогда не " +
 		"блокировавшиеся соседние сервисы. Откл — только точные адреса, без укрупнения вообще; " +
 		"чем выше порог, тем менее охотно срабатывает укрупнение — кнопки ниже.\n\n" +
+		"Потолок расширения блока — отдельная ручка: если классификатор узнал реальный диапазон " +
+		"провайдера (не просто /24-догадку) и укрупнение выше сработало, он может забрать в " +
+		"туннель диапазон целиком, вплоть до этого потолка. /24 — практически не расширяет за " +
+		"пределы обычной /24-догадки; /16 — разрешает забрать весь крупный провайдерский блок. " +
+		"Не отключает укрупнение (для этого — порог выше), только ограничивает, насколько широко " +
+		"оно может зайти — кнопки ниже.\n\n" +
 		"🔍 L7 SNI — отдельная, независимо включаемая надстройка: читает TLS SNI/HTTP Host " +
 		"прямо с провода (NFLOG) и досылает в тот же список адресов совпадения с твоими routes, " +
 		"даже если DNS-запрос сам роутер не видел (DoH/DoT-клиенты, приложения с зашитым IP). " +
@@ -210,6 +216,8 @@ func adaptiveRouteScreenKB(id string) inlineKeyboard {
 			{Text: "18ч", CallbackData: "adttl:" + id + ":18"}, {Text: "24ч", CallbackData: "adttl:" + id + ":24"}},
 		{{Text: "Блок: Откл", CallbackData: "adblk:" + id + ":-1"}, {Text: "4", CallbackData: "adblk:" + id + ":4"},
 			{Text: "8", CallbackData: "adblk:" + id + ":8"}, {Text: "16", CallbackData: "adblk:" + id + ":16"}},
+		{{Text: "Потолок: /24", CallbackData: "adwid:" + id + ":24"}, {Text: "/20", CallbackData: "adwid:" + id + ":20"},
+			{Text: "/18 (по умолч.)", CallbackData: "adwid:" + id + ":18"}, {Text: "/16", CallbackData: "adwid:" + id + ":16"}},
 		{{Text: "🔍 L7 SNI вкл", CallbackData: "act:l7sni_on:" + id}, {Text: "🔍 L7 SNI выкл", CallbackData: "act:l7sni_off:" + id}},
 		{{Text: "🧹 Очистить список", CallbackData: "act:adrt_flush:" + id}},
 		{{Text: "📊 Показать", CallbackData: "act:adrt_show:" + id}, {Text: "⬅️ Назад", CallbackData: "ptm:" + id}},
@@ -463,6 +471,14 @@ func (b *TelegramBot) handleCallback(ctx context.Context, cb tgCallbackQuery) {
 			return
 		}
 		b.enqueueCardArgs(ctx, cb, id, ActionAdaptiveRouteSetBlockThreshold, []string{n})
+	case strings.HasPrefix(data, "adwid:"):
+		rest := strings.TrimPrefix(data, "adwid:")
+		id, n, ok := strings.Cut(rest, ":")
+		if !ok {
+			b.editCB(ctx, cb, "плохая кнопка", mainMenuKB())
+			return
+		}
+		b.enqueueCardArgs(ctx, cb, id, ActionAdaptiveRouteSetKnownRangeWidth, []string{n})
 	case strings.HasPrefix(data, "corem:"):
 		id := strings.TrimPrefix(data, "corem:")
 		if !b.Store.HasRouter(id) {

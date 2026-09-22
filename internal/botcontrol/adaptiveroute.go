@@ -87,7 +87,7 @@ func (h *RouterHandler) adaptiveRouteShow(ctx context.Context) (string, error) {
 	fmt.Fprintf(&b, "Адаптивная маршрутизация: вкл — xray :%d, TTL подтверждённых адресов %s",
 		a.EffectivePort(), a.EffectiveOKTTL())
 	if bt := a.EffectiveBlockThreshold(); bt > 0 {
-		fmt.Fprintf(&b, ", укрупнение блока от %d адресов", bt)
+		fmt.Fprintf(&b, ", укрупнение блока от %d адресов (потолок /%d)", bt, a.EffectiveKnownRangeMinPrefixBits())
 	} else {
 		b.WriteString(", укрупнение блоков: выкл")
 	}
@@ -329,4 +329,33 @@ func (h *RouterHandler) adaptiveRouteSetBlockThreshold(args []string) (string, e
 		return "укрупнение блоков отключено — в туннель будут попадать только точные подтверждённые адреса", nil
 	}
 	return fmt.Sprintf("порог укрупнения блока: %d адресов", n), nil
+}
+
+// adaptiveRouteSetKnownRangeWidth caps how wide a promoted block may
+// become when it matches a real provider CIDR
+// (AdaptiveRoute.KnownRangeMaxWidthBits -- classifier.Config's own
+// KnownRangeMinPrefixBits, "min prefix bits" and "max width" naming the
+// same knob from opposite ends). Independent of adaptiveRouteSetBlock
+// Threshold: that one is whether widening happens at all; this one is
+// how far it's allowed to go when it does -- narrowing it doesn't
+// disable widening, it just makes a known-range match less likely to
+// qualify (see the field's own doc comment for why there's no separate
+// "exact IP only" value here: that's BlockThreshold's job). Unlike
+// SetBlockThreshold, an out-of-range value is rejected outright rather
+// than accepted as a sentinel -- there's no meaningful "disabled" state
+// to alias onto. Same live-apply, no-rebindXray reasoning as
+// adaptiveRouteSetTTL/SetBlockThreshold.
+func (h *RouterHandler) adaptiveRouteSetKnownRangeWidth(args []string) (string, error) {
+	if len(args) == 0 {
+		return "", fmt.Errorf("usage: adrt_kwid <бит>")
+	}
+	n, err := strconv.Atoi(args[0])
+	if err != nil || n < 1 || n > 32 {
+		return "", fmt.Errorf("ширина должна быть числом от 1 до 32 (длина префикса сети), получено %q", args[0])
+	}
+	h.Config.AdaptiveRoute.KnownRangeMaxWidthBits = n
+	if err := h.Config.Save(h.ConfigPath); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("потолок расширения блока: /%d (шире не расширит, даже если сработает укрупнение)", n), nil
 }

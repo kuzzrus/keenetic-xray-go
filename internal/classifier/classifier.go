@@ -569,6 +569,25 @@ func ClrBlockPromote(cfg *Config, state *State, now time.Time) []Action {
 					promoted = known
 				}
 			}
+			// A promoted block is a single ipset entry covering every
+			// address inside it, and the REDIRECT rule matches all of
+			// them -- so an excluded range anywhere in it rides along,
+			// with the per-flow veto never consulted. See
+			// ExcludedRangeOverlap. Narrow back to the naive block
+			// first: a KnownRangeLookup match is far wider and much
+			// likelier to straddle a boundary, and the naive block is
+			// often clean when the wide one is not. Give up on widening
+			// only when that is tainted too. Either way the confirmed
+			// addresses that drove the count keep the individual
+			// promotions they already earned -- only the widening is
+			// lost, which is the correct trade: widening is an
+			// optimization, redirecting Russian traffic is a defect.
+			if promoted != block && isExcludedBlock(cfg, promoted) {
+				promoted = block
+			}
+			if isExcludedBlock(cfg, promoted) {
+				continue
+			}
 			if state.Blocks[i].has(promoted, now) {
 				continue
 			}

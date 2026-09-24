@@ -48,3 +48,16 @@ func equal(a, b []string) bool {
 	}
 	return true
 }
+
+// covers reports whether any of nets contains ip -- the assertion that
+// actually matters for the veto, as opposed to matching a CIDR string
+// that merely looks right.
+func covers(nets []*net.IPNet, ip string) bool {
+	parsed := net.ParseIP(ip)
+	for _, n := range nets {
+		if n.Contains(parsed) {
+			return true
+		}
+	}
+	return false
+}

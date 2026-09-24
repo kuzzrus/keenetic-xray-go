@@ -102,6 +102,30 @@ type Config struct {
 	// only so georanges.Lookup's existing signature (shared with
 	// KnownRangeLookup) can be wired in directly with no adapter.
 	ExcludedRangeLookup func(ip string) (cidr string, ok bool)
+
+	// ExcludedRangeOverlap is ExcludedRangeLookup's block-level
+	// counterpart, consulted by ClrBlockPromote before it widens a
+	// threshold-crossing block into the tunnel. Both are needed because
+	// they answer different questions at different moments, and the
+	// address-level one alone left a hole wide enough to drive the
+	// original incident straight back through.
+	//
+	// ExcludedRangeLookup gates *classification*: a Russian destination
+	// never earns a Test/OK entry of its own. But ClrBlockPromote does
+	// not classify -- it takes a block that crossed BlockThreshold and
+	// emits one ActionAddIP covering the whole CIDR, and internal/
+	// adaptiveroute's REDIRECT rule then matches every address inside
+	// it. A Russian address sitting inside a promoted neighbour's /24
+	// (or, through a KnownRangeLookup match, its /18) was therefore
+	// still redirected, with the address-level veto working exactly as
+	// designed and simply never asked. Mixed legacy space makes that
+	// ordinary rather than exotic: 138.124.0.0/17 alone is split between
+	// 36 ASNs, 7 of them Russian, across 82 separate /24s.
+	//
+	// nil -> no block-level check, the original behavior every existing
+	// test exercises. Shaped to take georanges.Overlaps directly, same
+	// no-adapter convention as the two lookups above.
+	ExcludedRangeOverlap func(cidr string) bool
 }
 
 // DefaultConfig mirrors config_set_defaults' thresholds (src/config.c)
@@ -210,6 +234,17 @@ func isExcludedDst(cfg *Config, dst string) bool {
 	}
 	_, ok := cfg.ExcludedRangeLookup(dst)
 	return ok
+}
+
+// isExcludedBlock reports whether cfg.ExcludedRangeOverlap (when set)
+// flags cidr as touching excluded space. The block-level sibling of
+// isExcludedDst; see ExcludedRangeOverlap's doc comment for why one
+// does not imply the other.
+func isExcludedBlock(cfg *Config, cidr string) bool {
+	if cfg.ExcludedRangeOverlap == nil {
+		return false
+	}
+	return cfg.ExcludedRangeOverlap(cidr)
 }
 
 // fromLAN reports whether src falls in one of cfg's LAN subnets.

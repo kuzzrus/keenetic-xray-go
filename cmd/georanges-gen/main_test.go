@@ -54,7 +54,7 @@ func TestCidrsForRange_SingleAddress(t *testing.T) {
 // actually matters for the veto: over-claiming would exclude somebody
 // else's addresses from the tunnel.
 func TestCidrsForRange_NeverCoversMoreThanAsked(t *testing.T) {
-	for _, count := range []uint32{1, 3, 5, 100, 255, 256, 1000, 1536, 4097, 65535} {
+	for _, count := range []uint64{1, 3, 5, 100, 255, 256, 1000, 1536, 4097, 65535} {
 		got := renderNets(cidrsForRange(ipv4("172.16.3.0"), count))
 		if total := addresses(got); total != int(count) {
 			t.Errorf("count %d: blocks cover %d addresses (%v)", count, total, got)

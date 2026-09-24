@@ -1,25 +1,31 @@
 name: georanges-update
 
 # Rebuilds internal/georanges/data/ru-ipv4.txt from the RIR delegated-
-# statistics files (see cmd/georanges-gen) and commits it straight to
-# main. Runs weekly, not daily like geo-update.yml's presets: RIR
-# delegations change far more slowly than the domain/CDN lists that
-# workflow refreshes, and the list is also embedded straight into the
-# binary (internal/georanges/embedded.go) -- staying a few days behind
-# the true delegated-stats state costs nothing the embedded fallback
-# doesn't already accept.
+# statistics files and iptoasn.com's prefix-to-ASN map (see
+# cmd/georanges-gen) and commits it straight to main.
+#
+# Daily, not weekly as it was while the RIR files were the only source.
+# That old cadence rested on delegations changing far more slowly than
+# the domain/CDN lists geo-update.yml refreshes, which is still true of
+# the registry layer -- but the ASN layer tracks which prefixes Russian
+# networks actually originate, upstream rebuilds it hourly, and a weekly
+# pull would make this workflow the slowest hop in a chain that is
+# otherwise hourly upstream and daily on the router.
 #
 # No "high churn -> open a PR instead" branch like geo-update.yml has:
 # that guard exists there because a preset source changing format can
-# silently produce garbage lists. cmd/georanges-gen already refuses to
-# write a suspiciously short file on its own (minRanges), which is the
-# equivalent protection for a single well-understood, machine-generated
-# source -- day-to-day churn here is just RIR reassignments, expected to
-# be a small fraction of ~11k entries every run.
+# silently produce garbage lists. cmd/georanges-gen refuses to write a
+# suspiciously short list on its own (minRanges) or a suspiciously thin
+# one (minAddresses, the guard that matters now that entries are
+# coalesced and a few huge bogus blocks could hold the line count up),
+# and it fails outright rather than quietly shipping the registry layer
+# alone if the ASN source is unreachable. Day-to-day churn here is RIR
+# reassignments plus ordinary BGP movement, a small fraction of ~10.5k
+# merged entries every run.
 
 on:
   schedule:
-    - cron: '43 6 * * 1' # weekly, Monday 06:43 UTC
+    - cron: '43 6 * * *' # daily, 06:43 UTC
   workflow_dispatch:
 
 permissions:

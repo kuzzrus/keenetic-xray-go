@@ -35,6 +35,21 @@ func exclusionLookupFor(cfg *config.Config) func(string) (string, bool) {
 	return georanges.Lookup
 }
 
+// exclusionOverlapFor is exclusionLookupFor's block-level counterpart --
+// what ClrBlockPromote consults before widening a block into the tunnel
+// (see classifier.Config.ExcludedRangeOverlap). Driven by the same
+// DisableRussianExclusion setting, and deliberately a separate function
+// of it rather than a bool threaded through one: keeping the two wired
+// independently means neither can be left behind when the other is
+// updated, which is exactly how the per-tick refresh came to be missing
+// ExcludedRangeLookup for a while (AR-06).
+func exclusionOverlapFor(cfg *config.Config) func(string) bool {
+	if cfg.AdaptiveRoute.DisableRussianExclusion {
+		return nil
+	}
+	return georanges.Overlaps
+}
+
 // warnIfExclusionInert says so, in the log the operator actually reads,
 // when the Russian-exclusion veto is switched on but has no data behind
 // it and is therefore doing nothing at all.
@@ -508,6 +523,7 @@ func adaptiveRouteClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 		// daemon restart (AdaptiveRoute.Enabled off/on again) silently
 		// did nothing.
 		clsCfg.ExcludedRangeLookup = exclusionLookupFor(cfg)
+		clsCfg.ExcludedRangeOverlap = exclusionOverlapFor(cfg)
 		warnIfExclusionInert(clsCfg, &inertWarnedAt, logf)
 
 		now := time.Now()

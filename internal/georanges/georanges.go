@@ -162,3 +162,50 @@ func Lookup(ip string) (cidr string, ok bool) { return current.Load().Lookup(ip)
 // CurrentLen reports how many ranges the current table holds, for
 // status/diag reporting (0 before the first successful load).
 func CurrentLen() int { return current.Load().Len() }
+
+// Overlaps reports whether cidr intersects any Russian range in t. The
+// per-flow Lookup above answers "is this one address Russian"; this
+// answers "does this whole network touch Russian space", which is a
+// different question with a different caller: internal/classifier's
+// ClrBlockPromote, which redirects an entire CIDR at once.
+//
+// That distinction is the whole reason this method exists. The veto
+// Lookup backs is applied during classification, to individual flows --
+// but ClrBlockPromote widens a threshold-crossing block into a single
+// ipset entry covering every address inside it, and the kernel's
+// REDIRECT rule then matches all of them. A Russian address sitting in
+// a promoted neighbour's /24 (or, via a known-range match, its /18) was
+// therefore still swept into the tunnel with the veto working exactly
+// as designed and never consulted. Mixed legacy space makes that the
+// normal case rather than a corner one: 138.124.0.0/17 alone is split
+// between 36 ASNs, 7 of them Russian, across 82 separate /24s.
+//
+// Returns false for an unparseable or non-IPv4 cidr -- a caller that
+// cannot describe the block it wants to promote gets no veto, same
+// tolerant-of-bad-input convention as Lookup and Parse.
+func (t *Table) Overlaps(cidr string) bool {
+	if t == nil {
+		return false
+	}
+	_, n, err := net.ParseCIDR(cidr)
+	if err != nil || n.IP.To4() == nil {
+		return false
+	}
+	for _, octet := range spanningFirstOctets(n) {
+		for _, ru := range t.buckets[octet] {
+			// Two CIDRs are aligned prefixes: they are either disjoint
+			// or one contains the other's base address, so checking
+			// containment both ways is a complete overlap test.
+			if ru.Contains(n.IP) || n.Contains(ru.IP) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Overlaps consults the current table, the package-level counterpart to
+// Lookup -- the exact shape internal/classifier.Config.
+// ExcludedRangeOverlap wants, wired in directly with no adapter. Safe
+// before any successful load for the same reason Lookup is.
+func Overlaps(cidr string) bool { return current.Load().Overlaps(cidr) }

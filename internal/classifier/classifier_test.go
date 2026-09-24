@@ -881,3 +881,113 @@ func TestContainingBlock(t *testing.T) {
 		t.Error("containingBlock on an IPv6 address should report ok=false")
 	}
 }
+
+// --- ClrBlockPromote: the block-level Russian exclusion (ExcludedRangeOverlap) ---
+
+// excludeCIDRs builds an ExcludedRangeOverlap that flags a block when it
+// intersects any of the given networks -- the same both-ways containment
+// test georanges.Table.Overlaps performs, kept local so this package
+// stays free of a dependency on that one.
+func excludeCIDRs(cidrs ...string) func(string) bool {
+	var nets []*net.IPNet
+	for _, c := range cidrs {
+		if _, n, err := net.ParseCIDR(c); err == nil {
+			nets = append(nets, n)
+		}
+	}
+	return func(cidr string) bool {
+		_, want, err := net.ParseCIDR(cidr)
+		if err != nil {
+			return false
+		}
+		for _, n := range nets {
+			if n.Contains(want.IP) || want.Contains(n.IP) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// TestClrBlockPromote_ExcludedBlockNotPromoted is the defect this field
+// closes. Four confirmed addresses in a /24 would ordinarily widen the
+// whole /24 into the tunnel as one ipset entry, and the REDIRECT rule
+// then matches every address inside it -- including the Russian one the
+// per-flow veto had correctly refused to classify all along.
+func TestClrBlockPromote_ExcludedBlockNotPromoted(t *testing.T) {
+	cfg, state, now := testConfig(), NewState(), time.Now()
+	cfg.ExcludedRangeOverlap = excludeCIDRs("1.2.3.0/28")
+	addOK(state, 0, now, cfg.OKTTL, "1.2.3.100", "1.2.3.101", "1.2.3.102", "1.2.3.103")
+
+	if got := ClrBlockPromote(cfg, state, now); len(got) != 0 {
+		t.Errorf("actions = %+v, want none -- the /24 straddles excluded space", got)
+	}
+	if state.Blocks[0].has("1.2.3.0/24", now) {
+		t.Error("a refused block must not be recorded in state.Blocks either")
+	}
+}
+
+// TestClrBlockPromote_ExcludedKnownRangeNarrowsToTheNaiveBlock: a
+// KnownRangeLookup match is far wider than the naive /24 and much more
+// likely to straddle a boundary. When it does, the fix is to fall back
+// to the narrow block rather than abandon the promotion -- the widening
+// is an optimization, and the naive block here is clean.
+func TestClrBlockPromote_ExcludedKnownRangeNarrowsToTheNaiveBlock(t *testing.T) {
+	cfg, state, now := testConfig(), NewState(), time.Now()
+	cfg.KnownRangeLookup = func(string) (string, bool) { return "1.2.0.0/18", true }
+	cfg.ExcludedRangeOverlap = excludeCIDRs("1.2.60.0/24") // inside the /18, outside the /24
+	addOK(state, 0, now, cfg.OKTTL, "1.2.3.1", "1.2.3.2", "1.2.3.3", "1.2.3.4")
+
+	actions := ClrBlockPromote(cfg, state, now)
+	if len(actions) != 1 {
+		t.Fatalf("actions = %+v, want exactly one promotion", actions)
+	}
+	if actions[0].IP != "1.2.3.0/24" {
+		t.Errorf("promoted %q, want the naive 1.2.3.0/24 -- the known range straddles excluded space", actions[0].IP)
+	}
+}
+
+// TestClrBlockPromote_CleanKnownRangeStillWidens: the exclusion must not
+// cost anything when nothing Russian is anywhere near, or it would
+// quietly disable the known-range widening this project deliberately
+// kept.
+func TestClrBlockPromote_CleanKnownRangeStillWidens(t *testing.T) {
+	cfg, state, now := testConfig(), NewState(), time.Now()
+	cfg.KnownRangeLookup = func(string) (string, bool) { return "1.2.0.0/18", true }
+	cfg.ExcludedRangeOverlap = excludeCIDRs("77.88.0.0/24") // nowhere near
+	addOK(state, 0, now, cfg.OKTTL, "1.2.3.1", "1.2.3.2", "1.2.3.3", "1.2.3.4")
+
+	actions := ClrBlockPromote(cfg, state, now)
+	if len(actions) != 1 || actions[0].IP != "1.2.0.0/18" {
+		t.Fatalf("actions = %+v, want the known range 1.2.0.0/18 promoted unchanged", actions)
+	}
+}
+
+// TestClrBlockPromote_BothTaintedGivesUpEntirely: when even the naive
+// block overlaps excluded space there is nothing safe left to widen to.
+// The confirmed addresses keep the individual promotions they already
+// earned; only the widening is lost.
+func TestClrBlockPromote_BothTaintedGivesUpEntirely(t *testing.T) {
+	cfg, state, now := testConfig(), NewState(), time.Now()
+	cfg.KnownRangeLookup = func(string) (string, bool) { return "1.2.0.0/18", true }
+	cfg.ExcludedRangeOverlap = excludeCIDRs("1.2.3.128/25") // inside both
+	addOK(state, 0, now, cfg.OKTTL, "1.2.3.1", "1.2.3.2", "1.2.3.3", "1.2.3.4")
+
+	if got := ClrBlockPromote(cfg, state, now); len(got) != 0 {
+		t.Errorf("actions = %+v, want none -- neither the known range nor the naive block is clean", got)
+	}
+}
+
+// TestClrBlockPromote_NilOverlapKeepsOldBehavior guards the zero value:
+// every pre-existing caller and test leaves this field nil and must see
+// exactly what it always saw.
+func TestClrBlockPromote_NilOverlapKeepsOldBehavior(t *testing.T) {
+	cfg, state, now := testConfig(), NewState(), time.Now()
+	cfg.ExcludedRangeOverlap = nil
+	addOK(state, 0, now, cfg.OKTTL, "1.2.3.1", "1.2.3.2", "1.2.3.3", "1.2.3.4")
+
+	actions := ClrBlockPromote(cfg, state, now)
+	if len(actions) != 1 || actions[0].IP != "1.2.3.0/24" {
+		t.Fatalf("actions = %+v, want the unchanged 1.2.3.0/24 promotion", actions)
+	}
+}

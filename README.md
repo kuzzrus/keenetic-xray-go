@@ -2,6 +2,10 @@
   <img src="docs/banner.svg" alt="keenetic-xray-go" width="760">
 </p>
 
+<p align="center">
+  <a href="https://www.tbank.ru/cf/2qxNvGa3fSX"><img src="https://img.shields.io/badge/%E2%9D%A4%EF%B8%8F_%D0%9F%D0%BE%D0%B4%D0%B4%D0%B5%D1%80%D0%B6%D0%B0%D1%82%D1%8C_%D0%BF%D1%80%D0%BE%D0%B5%D0%BA%D1%82-Donate_%D1%87%D0%B5%D1%80%D0%B5%D0%B7_T--Bank-FFDD2D?style=for-the-badge&labelColor=1a1a1a" alt="Донат через T-Bank"></a>
+</p>
+
 # keenetic-xray-go
 
 Установщик и менеджер Xray (VLESS) с автоматическим failover для роутеров
@@ -336,6 +340,12 @@ sh packaging/build-ipk.sh <version> aarch64-3.10 dist/keenetic-xray-linux-arm64 
 Отдельный проект с нуля, тот же автор. Код не общий; `keenetic_xray_installer`
 остаётся полезным референсом по проверенным решениям (флаги сборки, форма
 CI, дизайн безопасности failover), но ничего не скопировано.
+
+## Поддержать проект
+
+Проект бесплатный, делается в свободное время и живёт на обратной связи с
+реальных роутеров. Если он оказался полезен — [донат через
+T-Bank](https://www.tbank.ru/cf/2qxNvGa3fSX).
 
 ## Лицензия
 

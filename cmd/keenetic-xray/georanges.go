@@ -2,10 +2,16 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/georanges"
 	"github.com/kuzzrus/keenetic-xray-go/internal/knownranges"
+	"github.com/kuzzrus/keenetic-xray-go/internal/version"
 )
 
 // georangesSourceURL serves this project's own generated Russia IPv4
@@ -26,14 +32,47 @@ import (
 // longer depends on this URL being reachable at all on first boot).
 const georangesSourceURL = "https://raw.githubusercontent.com/kuzzrus/keenetic-xray-go/main/internal/georanges/data/ru-ipv4.txt"
 
+// georangesFetchURL is where both the daemon's refresh and `georanges
+// refresh` fetch from -- georangesSourceURL, overridable by tests.
+var georangesFetchURL = georangesSourceURL
+
 // georangesRefreshInterval mirrors knownRangesRefreshInterval -- the
 // upstream source updates on weekdays at most.
 const georangesRefreshInterval = 24 * time.Hour
 
+// georangesRefreshSettle is when georangesRefreshLoop makes its first
+// attempt after a start that loaded the list from local disk or from
+// the embedded snapshot -- same settle-then-refresh shape as
+// knownRangesRefreshDelay.
+//
+// Until 2026-09-26 that first attempt came a full georangesRefreshInterval
+// after startup instead, and every daemon restart started the 24h over.
+// Self-updates restart the daemon, and in an active week they land more
+// than once a day -- so a router's cache could stop refreshing entirely,
+// indefinitely, while every log line claimed a healthy loaded table.
+const georangesRefreshSettle = 90 * time.Second
+
+// georangesCacheWatchInterval is how often georangesRefreshLoop checks
+// whether somebody else rewrote the on-disk cache -- which is how
+// `keenetic-xray georanges refresh` hands a freshly fetched list to the
+// running daemon.
+//
+// Polling a file rather than signalling on purpose. SIGHUP is taken, and
+// its handler ends in failover.Daemon.ReloadConfig, which always
+// re-applies the live profile (xray config, naive sidecar) and drops any
+// pool-substitute backup -- nothing a data refresh should ever trigger.
+// A new signal such as SIGUSR2 is worse: its default action is to
+// terminate the process, and the daemon writes its pidfile well before
+// it could register a handler, while during a self-update the process
+// still running is the *old* binary, which never registers one at all.
+// A stat every few seconds costs nothing next to the 500ms conntrack
+// scan the classify loop already does.
+const georangesCacheWatchInterval = 15 * time.Second
+
 // georangesBootstrapFetchTimeout bounds georangesBootstrap's own network
-// fetch attempt (only reached when no cache exists yet) -- shorter than
-// runGeorangesRefresh's usual 2-minute ceiling so a dead network can't
-// hold up daemon startup.
+// fetch attempt (only reached when no usable cache exists yet) --
+// shorter than runGeorangesRefresh's usual 2-minute ceiling so a dead
+// network can't hold up daemon startup.
 //
 // Was 8s until 2026-09-16, which was simply too tight: on the real
 // router this timed out every time ("georanges: refresh failed:
@@ -66,14 +105,120 @@ var georangesRetryBackoff = []time.Duration{
 	15 * time.Minute,
 }
 
+// georangesEmbeddedAsOf reports when the snapshot built into this binary
+// was current: the commit time of the build. The data file is embedded
+// from that very commit and the cache is fetched from the same file on
+// main, which only moves forward -- so a cache fetched before that time
+// is necessarily older than the snapshot, and one fetched after it is
+// at least as new. A test hook over version.BuildTime.
+var georangesEmbeddedAsOf = version.BuildTime
+
+// georangesCacheSeen is the on-disk cache's mtime (unix nanoseconds, 0 =
+// none) as of the last time this process loaded it, passed it over for
+// the embedded snapshot, or wrote it itself. georangesRefreshLoop's
+// watch compares against it to tell "somebody else rewrote the cache"
+// -- `georanges refresh` from the CLI -- from "nothing changed".
+// Deliberately an identity check, not a newer-than comparison: it needs
+// no trustworthy clock, and it can never swap a fresher in-memory table
+// (a fetch that succeeded but failed to persist) for the older file it
+// could not replace.
+var georangesCacheSeen atomic.Int64
+
+// errNoUsableRanges is what fetchGeoranges reports for a response that
+// parsed to nothing -- never allowed to replace a working table.
+var errNoUsableRanges = errors.New("the list parsed to no usable ranges")
+
+// georangesSource is which local copy a daemon start runs on.
+type georangesSource int
+
+const (
+	georangesFromEmbedded georangesSource = iota
+	georangesFromCache
+)
+
+// pickGeorangesSource chooses between the on-disk cache and the
+// snapshot embedded in this binary. The cache wins unless it is
+// provably older than the snapshot: see georangesEmbeddedAsOf for why
+// comparing the cache's mtime to the build's commit time is a sound
+// test, and why an unknown build time (a dev build) keeps the cache --
+// without it there is nothing to prove the snapshot is newer.
+//
+// Before 2026-09-26 any cache at all won outright. After an update that
+// meant the new binary's newer snapshot sat unused behind the old
+// cache for up to a day -- the exact case that had to be worked around
+// by hand (deleting the cache) to test the 2026-09-24 ASN layer.
+func pickGeorangesSource(cacheUsable bool, cacheMTime time.Time, asOf time.Time, asOfKnown bool) georangesSource {
+	if !cacheUsable {
+		return georangesFromEmbedded
+	}
+	if asOfKnown && cacheMTime.Before(asOf) {
+		return georangesFromEmbedded
+	}
+	return georangesFromCache
+}
+
+// readGeorangesCache loads and parses the on-disk cache. A cache that
+// parses to nothing (truncated, corrupted -- the refresh path never
+// writes an empty one itself) is reported as not usable rather than
+// loaded, so it can never replace the embedded snapshot with an empty
+// table and switch the veto off.
+func readGeorangesCache() (table *georanges.Table, mtime time.Time, err error) {
+	path := georangesCachePath()
+	st, err := os.Stat(path)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	raw, err := knownranges.LoadCacheRaw(path)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	table = georanges.Parse(raw)
+	if table.Len() == 0 {
+		return nil, st.ModTime(), errNoUsableRanges
+	}
+	return table, st.ModTime(), nil
+}
+
+// georangesLoadLocal puts the better local copy -- cache or embedded
+// snapshot, see pickGeorangesSource -- in place, logs which and why, and
+// reports whether a usable cache was on disk at all.
+func georangesLoadLocal(logf func(string, ...any)) (cacheUsable bool) {
+	cache, mtime, err := readGeorangesCache()
+	cacheUsable = err == nil
+	if cacheUsable {
+		georangesCacheSeen.Store(mtime.UnixNano())
+	}
+	asOf, asOfKnown := georangesEmbeddedAsOf()
+
+	if pickGeorangesSource(cacheUsable, mtime, asOf, asOfKnown) == georangesFromCache {
+		georanges.SetCurrent(cache)
+		logf("georanges: loaded %d Russian ranges from cache (fetched %s)", cache.Len(), fmtUTC(mtime))
+		return true
+	}
+
+	embedded := georanges.Embedded()
+	georanges.SetCurrent(embedded)
+	switch {
+	case cacheUsable:
+		logf("georanges: cache on disk (fetched %s) is older than this build's embedded snapshot (%s) -- using the %d embedded ranges until a fresher copy is fetched",
+			fmtUTC(mtime), fmtUTC(asOf), embedded.Len())
+	case errors.Is(err, errNoUsableRanges):
+		logf("georanges: cache on disk is unusable (no ranges in it) -- using %d Russian ranges embedded in this build while a fresher copy is fetched", embedded.Len())
+	default:
+		logf("georanges: no cache on disk -- using %d Russian ranges embedded in this build while a fresher copy is fetched", embedded.Len())
+	}
+	return cacheUsable
+}
+
 // georangesBootstrap makes sure ExcludedRangeLookup has *some* real
-// table loaded before returning -- cache if one exists (near-instant,
-// local disk), else the snapshot embedded in this binary
-// (internal/georanges.Embedded, also near-instant, zero network
-// involved), topped up by one best-effort bounded network fetch either
-// way. Called synchronously from main, BEFORE adaptiveRouteClassifyLoop
-// is spawned, specifically so ClrFast/ClrSoft's veto is never racing its
-// own data source.
+// table loaded before returning -- the fresher of the on-disk cache and
+// the snapshot embedded in this binary (georangesLoadLocal, both
+// near-instant, zero network involved), topped up by one best-effort
+// bounded network fetch when no usable cache exists at all. Reports
+// whether that fetch happened and succeeded, so georangesRefreshLoop
+// does not immediately repeat it. Called synchronously from main, BEFORE
+// adaptiveRouteClassifyLoop is spawned, specifically so ClrFast/
+// ClrSoft's veto is never racing its own data source.
 //
 // Found live (2026-09-16), three times over, each fix closing a
 // narrower version of the same mistake: georangesRefreshLoop used to
@@ -85,46 +230,56 @@ var georangesRetryBackoff = []time.Duration{
 // list's original host at all, so the "one bounded fetch" this function
 // used to rely on as its entire strategy never once succeeded, and
 // ExcludedRangeLookup matched nothing all day despite the feature
-// looking fully configured. The embedded fallback below closes *that*
-// gap -- the veto no longer depends on any network call succeeding,
-// ever, ever having to. A confirmed address stays redirected for its
-// full ~6h OKTTL regardless of when real data finally loads, which is
-// exactly why "eventually" was never good enough here. See the
-// russia-ip-exclusion-plan memory for the full incident.
+// looking fully configured. The embedded fallback closes *that* gap --
+// the veto no longer depends on any network call succeeding, ever. A
+// confirmed address stays redirected for its full ~6h OKTTL regardless
+// of when real data finally loads, which is exactly why "eventually"
+// was never good enough here. See the russia-ip-exclusion-plan memory
+// for the full incident.
 //
 // Deliberately unconditional (not gated on cfg.AdaptiveRoute.Enabled):
 // that flag can be toggled on later, live, without a daemon restart
 // (adaptiveRouteClassifyLoop is already always running, it just no-ops
 // while disabled) -- gating this on today's Enabled value would just
 // move the same race to "whenever the operator turns adaptive routing
-// on", not remove it. The cost of always paying this is small and
-// mostly one-time in practice: georangesBootstrapFetchTimeout only
-// matters on a router that has never successfully fetched this table
-// before, every later restart finds a cache and returns near-instantly.
-func georangesBootstrap(ctx context.Context, logf func(string, ...any)) {
-	if raw, err := knownranges.LoadCacheRaw(georangesCachePath()); err == nil {
-		georanges.SetCurrent(georanges.Parse(raw))
-		logf("georanges: loaded %d Russian ranges from cache", georanges.CurrentLen())
-		return
+// on", not remove it. The synchronous fetch is skipped whenever a usable
+// cache exists -- including when the embedded snapshot beat it, the
+// normal case right after an update -- so an ordinary restart never
+// waits on the network; georangesRefreshLoop fetches shortly after
+// instead.
+func georangesBootstrap(ctx context.Context, logf func(string, ...any)) (fetched bool) {
+	if georangesLoadLocal(logf) {
+		return false
 	}
-
-	embedded := georanges.Embedded()
-	georanges.SetCurrent(embedded)
-	logf("georanges: no cache on disk -- using %d Russian ranges embedded in this build while a fresher copy is fetched", embedded.Len())
-
 	bctx, cancel := context.WithTimeout(ctx, georangesBootstrapFetchTimeout)
 	defer cancel()
-	runGeorangesRefresh(bctx, logf)
+	return runGeorangesRefresh(bctx, logf)
+}
+
+// georangesFirstRefreshDelay is when georangesRefreshLoop makes its
+// first attempt. An empty table (the veto is off) retries on the backoff
+// right away; a table georangesBootstrap just fetched is fresh already;
+// anything loaded from disk or the embedded snapshot gets refreshed once
+// the daemon has settled -- see georangesRefreshSettle.
+func georangesFirstRefreshDelay(bootstrapFetched bool, loaded int) time.Duration {
+	switch {
+	case loaded == 0:
+		return georangesRetryBackoff[0]
+	case bootstrapFetched:
+		return georangesRefreshInterval
+	default:
+		return georangesRefreshSettle
+	}
 }
 
 // georangesRefreshLoop keeps internal/georanges' process-wide table
-// fresh going forward. georangesBootstrap (called synchronously before
-// this is even spawned, see main.go) already made the first load
-// attempt, so from here on this either tops the table up daily or, if
-// there is still no table at all, keeps retrying on
-// georangesRetryBackoff until there is one -- see that var's doc
-// comment for why the difference matters so much.
-func georangesRefreshLoop(ctx context.Context, logf func(string, ...any)) {
+// fresh going forward: a first refresh shortly after startup (see
+// georangesFirstRefreshDelay), daily after that, or on
+// georangesRetryBackoff while there is still no table at all -- see
+// that var's doc comment for why the difference matters so much. It also
+// picks up a cache rewritten from outside (see
+// georangesCacheWatchInterval).
+func georangesRefreshLoop(ctx context.Context, logf func(string, ...any), bootstrapFetched bool) {
 	retries := 0
 	next := func() time.Duration {
 		if georanges.CurrentLen() > 0 {
@@ -136,12 +291,17 @@ func georangesRefreshLoop(ctx context.Context, logf func(string, ...any)) {
 		return d
 	}
 
-	timer := time.NewTimer(next())
+	timer := time.NewTimer(georangesFirstRefreshDelay(bootstrapFetched, georanges.CurrentLen()))
 	defer timer.Stop()
+	watch := time.NewTicker(georangesCacheWatchInterval)
+	defer watch.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-watch.C:
+			reloadGeorangesIfCacheChanged(logf)
+			continue
 		case <-timer.C:
 		}
 		runGeorangesRefresh(ctx, logf)
@@ -149,25 +309,160 @@ func georangesRefreshLoop(ctx context.Context, logf func(string, ...any)) {
 	}
 }
 
-func runGeorangesRefresh(ctx context.Context, logf func(string, ...any)) {
+// reloadGeorangesIfCacheChanged loads the on-disk cache if it is no
+// longer the file this process last saw (see georangesCacheSeen). Runs
+// every georangesCacheWatchInterval, so it stays silent unless it
+// actually does something: no cache, an unchanged cache, or an
+// unreadable one between writes are all quiet no-ops.
+func reloadGeorangesIfCacheChanged(logf func(string, ...any)) bool {
+	st, err := os.Stat(georangesCachePath())
+	if err != nil || st.ModTime().UnixNano() == georangesCacheSeen.Load() {
+		return false
+	}
+	table, mtime, err := readGeorangesCache()
+	if err != nil {
+		if errors.Is(err, errNoUsableRanges) {
+			// Remember it anyway, or the same bad file would be re-read
+			// and re-logged every tick until something replaced it.
+			georangesCacheSeen.Store(mtime.UnixNano())
+			logf("georanges: cache on disk changed but has no usable ranges -- keeping the current %d", georanges.CurrentLen())
+		}
+		return false
+	}
+	georanges.SetCurrent(table)
+	georangesCacheSeen.Store(mtime.UnixNano())
+	logf("georanges: cache on disk changed -- reloaded %d Russian ranges (fetched %s)", table.Len(), fmtUTC(mtime))
+	return true
+}
+
+// fetchGeoranges pulls the list from url and parses it, refusing a
+// response that parses to nothing. Shared by the daemon's refresh and
+// `georanges refresh`, so both apply the same test before anything
+// reaches the cache.
+func fetchGeoranges(ctx context.Context, url string) (table *georanges.Table, raw string, err error) {
+	raw, err = knownranges.FetchRaw(ctx, url)
+	if err != nil {
+		return nil, "", err
+	}
+	table = georanges.Parse(raw)
+	if table.Len() == 0 {
+		return nil, "", errNoUsableRanges
+	}
+	return table, raw, nil
+}
+
+// runGeorangesRefresh fetches the list, persists it, and swaps it in,
+// reporting whether a fresh table is now loaded.
+func runGeorangesRefresh(ctx context.Context, logf func(string, ...any)) bool {
 	rctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	raw, err := knownranges.FetchRaw(rctx, georangesSourceURL)
+	table, raw, err := fetchGeoranges(rctx, georangesFetchURL)
+	if errors.Is(err, errNoUsableRanges) {
+		logf("georanges: refresh returned no usable ranges -- keeping the previous copy")
+		return false
+	}
 	if err != nil {
 		logf("georanges: refresh failed: %v", err)
-		return
-	}
-	table := georanges.Parse(raw)
-	if table.Len() == 0 {
-		logf("georanges: refresh returned no usable ranges -- keeping the previous copy")
-		return
+		return false
 	}
 	if err := knownranges.SaveCacheRaw(georangesCachePath(), raw); err != nil {
 		// The freshly fetched table is still good even if persisting it
 		// failed -- no reason to throw away a successful fetch over a
 		// disk write error, only the next restart loses the head start.
+		// georangesCacheSeen stays on the old file, so the cache watch
+		// cannot swap this fresher table back out for it.
 		logf("georanges: could not persist cache: %v", err)
+	} else if st, err := os.Stat(georangesCachePath()); err == nil {
+		// Our own write -- the cache watch must not treat it as news.
+		georangesCacheSeen.Store(st.ModTime().UnixNano())
 	}
 	georanges.SetCurrent(table)
 	logf("georanges: refreshed, %d Russian ranges loaded", table.Len())
+	return true
+}
+
+// cmdGeoranges is `keenetic-xray georanges {show|refresh}`.
+func cmdGeoranges(args []string) error {
+	action := "show"
+	if len(args) > 0 {
+		action = args[0]
+	}
+	switch action {
+	case "show":
+		georangesShow(os.Stdout, time.Now())
+		return nil
+	case "refresh":
+		return georangesRefreshCLI(context.Background(), os.Stdout)
+	default:
+		return fmt.Errorf("usage: keenetic-xray georanges {show|refresh}")
+	}
+}
+
+// georangesShow prints both local copies and which one a daemon start
+// would pick. It cannot report the running daemon's in-memory table --
+// this is a separate process -- and says so, pointing at the log line
+// that does.
+func georangesShow(w io.Writer, now time.Time) {
+	asOf, asOfKnown := georangesEmbeddedAsOf()
+	cache, mtime, err := readGeorangesCache()
+
+	fmt.Fprintf(w, "кэш:        %s\n", georangesCachePath())
+	switch {
+	case err == nil:
+		fmt.Fprintf(w, "            %d диапазонов, скачан %s (%s назад)\n", cache.Len(), fmtUTC(mtime), ageRU(now.Sub(mtime)))
+	case errors.Is(err, errNoUsableRanges):
+		fmt.Fprintln(w, "            есть, но непригоден (диапазонов нет)")
+	default:
+		fmt.Fprintln(w, "            нет")
+	}
+
+	embedded := georanges.Embedded()
+	if asOfKnown {
+		fmt.Fprintf(w, "встроенный: %d диапазонов, по состоянию на %s\n", embedded.Len(), fmtUTC(asOf))
+	} else {
+		fmt.Fprintf(w, "встроенный: %d диапазонов (время сборки неизвестно — dev-сборка)\n", embedded.Len())
+	}
+
+	if pickGeorangesSource(err == nil, mtime, asOf, asOfKnown) == georangesFromCache {
+		fmt.Fprintln(w, "при старте демон возьмёт: кэш")
+	} else {
+		fmt.Fprintln(w, "при старте демон возьмёт: встроенный")
+	}
+	fmt.Fprintln(w, "сколько загружено в работающем демоне: keenetic-xray logs 300 | grep georanges")
+}
+
+// georangesRefreshCLI fetches the list now and writes the cache. The
+// running daemon picks it up by itself within georangesCacheWatchInterval
+// -- see that constant for why this is not a signal.
+func georangesRefreshCLI(ctx context.Context, w io.Writer) error {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	table, raw, err := fetchGeoranges(ctx, georangesFetchURL)
+	if err != nil {
+		return fmt.Errorf("не удалось получить список: %w", err)
+	}
+	if err := knownranges.SaveCacheRaw(georangesCachePath(), raw); err != nil {
+		return fmt.Errorf("список получен (%d диапазонов), но не сохранился в %s: %w", table.Len(), georangesCachePath(), err)
+	}
+	fmt.Fprintf(w, "сохранено: %d диапазонов → %s\n", table.Len(), georangesCachePath())
+	fmt.Fprintf(w, "работающий демон подхватит его в течение %d с; проверить: keenetic-xray logs 100 | grep georanges\n",
+		int(georangesCacheWatchInterval.Seconds()))
+	return nil
+}
+
+func fmtUTC(t time.Time) string { return t.UTC().Format("2006-01-02 15:04 UTC") }
+
+// ageRU renders d the way a person reads an age off a status line:
+// the largest unit or two, nothing finer.
+func ageRU(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "меньше минуты"
+	case d < time.Hour:
+		return fmt.Sprintf("%d мин", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%d ч %d мин", int(d.Hours()), int(d.Minutes())%60)
+	default:
+		return fmt.Sprintf("%d д %d ч", int(d.Hours())/24, int(d.Hours())%24)
+	}
 }

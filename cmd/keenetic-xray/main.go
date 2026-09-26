@@ -93,6 +93,8 @@ func run(args []string) error {
 		return cmdAddon(rest)
 	case "rci":
 		return cmdRCI(rest)
+	case "georanges":
+		return cmdGeoranges(rest)
 	case "diag":
 		return cmdDiag(rest)
 	case "internal":
@@ -135,6 +137,7 @@ commands:
   addon {list|show <id>|status <id>|install <id>|remove <id>|configure <id> <k=v>…}
                                                   optional router-side components: unbound (local DNS), nfqws2 (DPI bypass), conntrack, cron
   rci {show|probe [url]|enable [url]|disable}     read the router config over the local RCI JSON API instead of ndmc (hedge for ndmc-sandboxed firmware)
+  georanges {show|refresh}                        Russian IPv4 list behind adaptive routing's exclusion: cache vs built-in copy; fetch the latest now
   diag                                            one-shot diagnostic bundle to stdout (config with secrets redacted + resolver/addon/rci/keenetic state + log tail)`)
 }
 
@@ -250,7 +253,7 @@ func cmdDaemon(args []string) error {
 	// why ClrFast/ClrSoft's ExcludedRangeLookup veto must never race its
 	// own data source the way it used to -- it still needs to finish
 	// before adaptiveRouteClassifyLoop starts, just below.
-	georangesBootstrap(ctx, logf)
+	georangesFetched := georangesBootstrap(ctx, logf)
 	go adaptiveRouteClassifyLoop(ctx, logf)
 	go l7SNIClassifyLoop(ctx, logf)
 	// Only built when the agent can actually deliver it -- presetRefreshLoop
@@ -263,7 +266,7 @@ func cmdDaemon(args []string) error {
 	go routerReconcileLoop(ctx, d, logf)
 	go presetRefreshLoop(ctx, logf, presetDrift)
 	go knownRangesRefreshLoop(ctx, logf)
-	go georangesRefreshLoop(ctx, logf)
+	go georangesRefreshLoop(ctx, logf, georangesFetched)
 	startQualitySweep(ctx, cfg, logf)
 	watchReconcileSignal(ctx, func() { reconcileOnce(ctx, d, logf) }) // SIGUSR1 from the netfilter.d hook
 

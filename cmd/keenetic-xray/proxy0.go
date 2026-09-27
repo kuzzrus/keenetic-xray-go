@@ -34,7 +34,7 @@ func cmdProxy0(args []string) error {
 	case "off", "disable":
 		return proxy0Off(cfg)
 	default:
-		return fmt.Errorf("usage: keenetic-xray proxy0 {show|set [--lan-ip=192.168.x.1] [--protocol=socks5|http] [--interface=Proxy0]|off}")
+		return fmt.Errorf("usage: keenetic-xray proxy0 {show|set [--lan-ip=192.168.x.1] [--protocol=socks5|http] [--interface=Proxy0] [--health-check=on|off]|off}")
 	}
 }
 
@@ -65,6 +65,12 @@ func proxy0Show(cfg *config.Config) error {
 	} else {
 		fmt.Printf("%s upstream: not set\n", iface)
 	}
+	if cfg.Proxy0.DisableHealthCheck {
+		fmt.Println("health check: disabled in config -- no ISP fallback while xray is down")
+	} else {
+		_, msg := proxy0HealthLine(ctx, iface)
+		fmt.Println(msg)
+	}
 	return nil
 }
 
@@ -79,8 +85,17 @@ func proxy0Set(cfg *config.Config, args []string) error {
 			cfg.Proxy0.Protocol = strings.TrimPrefix(a, "--protocol=")
 		case strings.HasPrefix(a, "--interface="):
 			cfg.Proxy0.Interface = strings.TrimPrefix(a, "--interface=")
+		case strings.HasPrefix(a, "--health-check="):
+			switch v := strings.TrimPrefix(a, "--health-check="); v {
+			case "on":
+				cfg.Proxy0.DisableHealthCheck = false
+			case "off":
+				cfg.Proxy0.DisableHealthCheck = true
+			default:
+				return fmt.Errorf("--health-check %q: want on or off", v)
+			}
 		default:
-			return fmt.Errorf("unknown argument %q (want --lan-ip=, --protocol=socks5|http, --interface=Proxy0)", a)
+			return fmt.Errorf("unknown argument %q (want --lan-ip=, --protocol=socks5|http, --interface=Proxy0, --health-check=on|off)", a)
 		}
 	}
 	switch cfg.Proxy0.Protocol {
@@ -134,7 +149,9 @@ func proxy0Set(cfg *config.Config, args []string) error {
 		return err
 	}
 	fmt.Printf("%s (%s) -> %s:%d\n", cfg.Proxy0.IfaceName(), cfg.Proxy0.ProtoName(), ip, port)
-	applyMSSClamp(cfg, func(f string, a ...any) { fmt.Printf(f+"\n", a...) })
+	printf := func(f string, a ...any) { fmt.Printf(f+"\n", a...) }
+	applyProxy0HealthCheck(ctx, cfg, printf, false)
+	applyMSSClamp(cfg, printf)
 	applyDaemonChange(bufio.NewReader(os.Stdin), true)
 	return nil
 }
@@ -208,4 +225,5 @@ func applyProxy0AtStartup(cfg *config.Config, logf func(string, ...any)) {
 		return
 	}
 	logf("proxy0: %s -> %s:%d", cfg.Proxy0.IfaceName(), ip, cfg.Proxy0Port())
+	applyProxy0HealthCheck(ctx, cfg, logf, false)
 }

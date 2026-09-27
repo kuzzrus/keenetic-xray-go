@@ -126,7 +126,8 @@ commands:
   doctor                                            run diagnostic checks
   variant {show|set mini|set full}
   agent {configure <url> <router-id> <fingerprint> <token>|enable|disable|status}
-  proxy0 {show|set [--lan-ip=192.168.x.1]|off}   point Keenetic's Proxy0 at the local inbound
+  proxy0 {show|set [--lan-ip=192.168.x.1] [--health-check=on|off]|off}
+                                                  point Keenetic's Proxy0 at the local inbound; the health check lets its routes fall back to the ISP while xray is down
   failover {show|set <key> <value>}              tune health-check thresholds (applies live)
   watchdog {show|enable|disable|log}              cron entry that restarts the daemon if it's not running
   logs [N]                                        last N lines of the daemon's rolling log (default 200)

@@ -128,28 +128,37 @@ func reconcileSusanin(ctx context.Context, logf func(string, ...any)) {
 	}
 }
 
-// reconcileProxy0 re-points the Proxy interface at the local inbound only
-// when its upstream has drifted from the detected LAN IP / configured
-// port.
+// reconcileProxy0 keeps the Proxy interface's two router-side pieces in
+// line with cfg, each on its own: the upstream pointing at the local
+// inbound, and the health check that lets `auto` routes fall back to the
+// ISP while xray is down (applyProxy0HealthCheck). Both are a single
+// read on the healthy path.
 func reconcileProxy0(ctx context.Context, cfg *config.Config, logf func(string, ...any)) {
 	if !cfg.Proxy0.Enabled {
 		return
 	}
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+	reconcileProxy0Upstream(cctx, cfg, logf)
+	applyProxy0HealthCheck(cctx, cfg, logf, true)
+}
 
-	ip, err := keenetic.LANIP(cctx, cfg.Proxy0.LANIP)
+// reconcileProxy0Upstream re-points the Proxy interface at the local
+// inbound only when its upstream has drifted from the detected LAN IP /
+// configured port.
+func reconcileProxy0Upstream(ctx context.Context, cfg *config.Config, logf func(string, ...any)) {
+	ip, err := keenetic.LANIP(ctx, cfg.Proxy0.LANIP)
 	if err != nil {
 		return
 	}
-	host, port, ok, err := keenetic.Proxy0Upstream(cctx, cfg.Proxy0.Interface)
+	host, port, ok, err := keenetic.Proxy0Upstream(ctx, cfg.Proxy0.Interface)
 	if err != nil {
 		return
 	}
 	if ok && host == ip && port == cfg.Proxy0Port() {
 		return
 	}
-	if err := keenetic.ConfigureProxy0(cctx, keenetic.Proxy0Options{
+	if err := keenetic.ConfigureProxy0(ctx, keenetic.Proxy0Options{
 		Interface:    cfg.Proxy0.Interface,
 		UpstreamHost: ip,
 		UpstreamPort: cfg.Proxy0Port(),

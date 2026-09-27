@@ -3,6 +3,7 @@ package keenetic
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -73,10 +74,8 @@ const realShowPingCheck = `
 func tlsProfileOutput(status string, fails int) string {
 	return strings.Replace(strings.Replace(realShowPingCheck, "mode: connect", "mode: tls", 1),
 		"failcount: 0\n                   status: pass\n\n                  ipcache: \n                         host: 1.1.1.1",
-		"failcount: "+itoa(fails)+"\n                   status: "+status+"\n\n                  ipcache: \n                         host: 1.1.1.1", 1)
+		"failcount: "+strconv.Itoa(fails)+"\n                   status: "+status+"\n\n                  ipcache: \n                         host: 1.1.1.1", 1)
 }
-
-func itoa(n int) string { return strings.TrimSpace(strings.Repeat(" ", 0) + string(rune('0'+n))) }
 
 func TestParsePingCheck_RealRouterOutput(t *testing.T) {
 	ps := parsePingCheck(realShowPingCheck)
@@ -191,8 +190,9 @@ func TestEnsureHealthCheck_TLSRejectedLeavesNothingBound(t *testing.T) {
 func TestRemoveHealthCheck_UnbindsThenDeletes(t *testing.T) {
 	f := &fakeRouter{pingCheck: realShowPingCheck}
 	f.install(t)
-	if err := RemoveHealthCheck(context.Background()); err != nil {
-		t.Fatal(err)
+	removed, err := RemoveHealthCheck(context.Background())
+	if err != nil || !removed {
+		t.Fatalf("removed=%v err=%v", removed, err)
 	}
 	joined := strings.Join(f.sent, "\n")
 	iUnbind := strings.Index(joined, "interface Proxy0 no ping-check profile kxray")
@@ -216,5 +216,55 @@ func TestProxyIPLayer_RealRouterOutput(t *testing.T) {
 	got, err := ProxyIPLayer(context.Background(), "Proxy0")
 	if err != nil || got != "pending" {
 		t.Errorf("ProxyIPLayer = %q, %v; want pending", got, err)
+	}
+}
+
+// TestEnsureHealthCheck_MovesBindingToNewInterface: after `proxy0 set
+// --interface=Proxy1` the check must follow the interface, not stay on the
+// old one as well.
+func TestEnsureHealthCheck_MovesBindingToNewInterface(t *testing.T) {
+	onProxy0 := tlsProfileOutput("pass", 0)
+	onProxy1 := strings.Replace(onProxy0, "name: Proxy0", "name: Proxy1", 1)
+	f := &fakeRouter{pingCheck: onProxy0}
+	f.install(t)
+	origRun := ndmcRun
+	reads := 0
+	ndmcRun = func(ctx context.Context, cmd string) (string, error) {
+		if cmd == "show ping-check" {
+			reads++
+			if reads > 1 {
+				f.sent = append(f.sent, cmd)
+				return onProxy1, nil
+			}
+		}
+		return origRun(ctx, cmd)
+	}
+
+	changed, err := EnsureProxy0HealthCheck(context.Background(), "Proxy1")
+	if err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	joined := strings.Join(f.sent, "\n")
+	for _, want := range []string{
+		"interface Proxy0 no ping-check profile kxray",
+		"interface Proxy1 ping-check profile kxray",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("missing %q:\n%s", want, joined)
+		}
+	}
+}
+
+// TestEnsureHealthCheck_BadReadBackRemovesIt: if the router does not show
+// the settings just written, the check must not be left bound in whatever
+// state it is actually in.
+func TestEnsureHealthCheck_BadReadBackRemovesIt(t *testing.T) {
+	f := &fakeRouter{pingCheck: ""} // no profile yet, and the read-back never shows one either
+	f.install(t)
+	if _, err := EnsureProxy0HealthCheck(context.Background(), "Proxy0"); err == nil {
+		t.Fatal("want an error when the read-back does not show the profile")
+	}
+	if !strings.Contains(strings.Join(f.sent, "\n"), "no ping-check profile kxray") {
+		t.Errorf("profile not removed after a failed read-back:\n%s", strings.Join(f.sent, "\n"))
 	}
 }

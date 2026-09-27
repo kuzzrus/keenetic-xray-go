@@ -210,13 +210,20 @@ func EnsureProxy0HealthCheck(ctx context.Context, iface string) (changed bool, e
 }
 
 // RemoveHealthCheck unbinds HealthCheckProfile from every interface it is
-// bound to and deletes it. A no-op when it does not exist.
-func RemoveHealthCheck(ctx context.Context) error {
+// bound to and deletes it, reporting whether there was anything to
+// remove. A no-op when it does not exist.
+func RemoveHealthCheck(ctx context.Context) (removed bool, err error) {
 	cur, ok, err := Proxy0HealthCheck(ctx)
 	if err != nil || !ok {
-		return err
+		return false, err
 	}
-	return removeHealthCheck(ctx, cur)
+	return true, removeHealthCheck(ctx, cur)
+}
+
+// HealthCheckSummary describes the check for log lines and status
+// output, e.g. "tls 1.1.1.1:443".
+func HealthCheckSummary() string {
+	return fmt.Sprintf("%s %s:%d", healthCheckMode, healthCheckHost, healthCheckPort)
 }
 
 func removeHealthCheck(ctx context.Context, cur PingCheckProfile) error {

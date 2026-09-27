@@ -878,8 +878,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 		}
 	}
 
-	if err := d.actions.SwitchLiveTo(ctx, RolePrimary); err != nil {
-		return fmt.Errorf("starting production instance: %w", err)
+	if err := d.startProduction(ctx); err != nil {
+		return err
 	}
 	defer d.actions.prod.Stop()
 	defer d.actions.stopProdNaive()
@@ -919,5 +919,49 @@ func (d *Daemon) Run(ctx context.Context) error {
 			cmd.fn(ctx)
 			close(cmd.done)
 		}
+	}
+}
+
+// startRetryMin and startRetryMax bound startProduction's backoff; vars
+// so tests can shrink them.
+var (
+	startRetryMin = 5 * time.Second
+	startRetryMax = time.Minute
+)
+
+// startProduction brings the primary's production instance up, retrying
+// with a growing pause rather than giving up.
+//
+// A failed first start used to return from Run -- and with it end the
+// whole daemon, bot and reconcile included -- over things as fixable as
+// a missing xray-core binary or a port still held by an orphaned xray
+// (2026-09-27 external review, BOOT-03). The router was then left with
+// no daemon at all, and nothing but SSH to find out why. Now the daemon
+// stays up, keeps serving commands while it waits -- so the bot can
+// still install the core or switch profile, and a ReloadConfig can land
+// -- and tries again. Returns nil once production is up, or ctx's error.
+func (d *Daemon) startProduction(ctx context.Context) error {
+	wait := startRetryMin
+	for {
+		err := d.actions.SwitchLiveTo(ctx, RolePrimary)
+		if err == nil {
+			return nil
+		}
+		fmt.Printf("failover: starting production instance: %v -- retrying in %s\n", err, wait)
+		timer := time.NewTimer(wait)
+	waiting:
+		for {
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case cmd := <-d.commands:
+				cmd.fn(ctx)
+				close(cmd.done)
+			case <-timer.C:
+				break waiting
+			}
+		}
+		wait = min(wait*2, startRetryMax)
 	}
 }

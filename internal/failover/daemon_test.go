@@ -1264,3 +1264,68 @@ func TestDaemon_XrayCrashLoop(t *testing.T) {
 		t.Fatal("crash-loop detector did not re-arm after a quiet window")
 	}
 }
+
+// TestDaemon_Run_RetriesAFailedFirstStart is BOOT-03 (2026-09-27
+// external review): a failed first SwitchLiveTo used to return from Run
+// and end the whole daemon -- bot, reconcile and all. It must now keep
+// retrying, keep answering commands meanwhile, and come up once the
+// cause goes away.
+func TestDaemon_Run_RetriesAFailedFirstStart(t *testing.T) {
+	origMin, origMax := startRetryMin, startRetryMax
+	startRetryMin, startRetryMax = 20*time.Millisecond, 80*time.Millisecond
+	t.Cleanup(func() { startRetryMin, startRetryMax = origMin, origMax })
+
+	dir := t.TempDir()
+	confDir := filepath.Join(dir, "not-there-yet")
+	cfg := config.Default()
+	cfg.Profiles = []config.Profile{
+		{UUID: "p", Address: "primary.invalid", Port: 443, Network: "tcp", Security: "none", Encryption: "none", Remark: "solo"},
+	}
+	cfg.PrimaryIndex, cfg.BackupIndex = 0, 0 // single profile
+	paths := Paths{
+		XrayBinary:       os.Args[0],
+		ProductionConfig: filepath.Join(confDir, "production.json"), // unwritable until confDir exists
+		PretestConfig:    filepath.Join(dir, "pretest.json"),
+		Env:              []string{"FAILOVER_TEST_HELPER=1"},
+	}
+	d := NewDaemon(paths, cfg)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runErr := make(chan error, 1)
+	go func() { runErr <- d.Run(ctx) }()
+
+	time.Sleep(300 * time.Millisecond) // several failed attempts by now
+	select {
+	case err := <-runErr:
+		t.Fatalf("Run gave up after a failed first start: %v", err)
+	default:
+	}
+	if _, ran := d.Snapshot(ctx); !ran {
+		t.Fatal("the daemon stopped answering commands while retrying the start")
+	}
+
+	if err := os.MkdirAll(confDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, err := os.Stat(paths.ProductionConfig); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("production never came up once its config could be written")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	cancel()
+	select {
+	case err := <-runErr:
+		if err != context.Canceled {
+			t.Errorf("Run returned %v, want context.Canceled", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("Run did not return after cancel")
+	}
+}

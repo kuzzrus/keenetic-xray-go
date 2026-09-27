@@ -4,6 +4,8 @@ package install
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -238,45 +240,54 @@ func TestInitScript_FailedStartSaysWhy(t *testing.T) {
 	}
 }
 
-// TestWatchdogScript_EndToEnd runs the script writeWatchdogScript
-// generates, against the real init script, with a stand-in for the
-// binary whose restart hook does what cmdWatchdogRestartHook does on an
-// ordinary restart: become the init script's `start`. A healthy tick
-// must stay silent; a tick that finds the daemon down must bring it back
-// and say so.
-func TestWatchdogScript_EndToEnd(t *testing.T) {
+// withHook is fakeDaemon plus the restart hook, doing what
+// cmdWatchdogRestartHook does on an ordinary restart: become the init
+// script's `start`.
+var withHook = strings.Replace(fakeDaemon, "sleep 30\n",
+	`if [ "$1 $2" = "internal watchdog-restart-hook" ]; then exec sh "$KX_INIT" start watchdog; fi
+sleep 30
+`, 1)
+
+// watchdogBench writes the script writeWatchdogScript generates for e,
+// pointed at the real init script, and returns a func running one cron
+// tick of it plus the log it writes.
+func watchdogBench(t *testing.T, e *initEnv) (tick func(), logFile string) {
+	t.Helper()
 	initPath, err := filepath.Abs(filepath.Join("..", "..", "packaging", "init.d", "S99keenetic-xray"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	withHook := strings.Replace(fakeDaemon, "sleep 30\n",
-		`if [ "$1 $2" = "internal watchdog-restart-hook" ]; then exec sh "$KX_INIT" start watchdog; fi
-sleep 30
-`, 1)
-	e := newInitEnv(t, withHook)
 	e.env = append(e.env, "KX_INIT="+initPath)
 	sh := shell()
-	wrapper := filepath.Join(e.dir, "S99keenetic-xray")
 	// The generated script calls $INIT directly, so give it an executable
 	// that runs the real init script under the shell being tested.
+	wrapper := filepath.Join(e.dir, "S99keenetic-xray")
 	if err := os.WriteFile(wrapper, []byte("#!/bin/sh\nexec "+strings.Join(sh, " ")+" "+initPath+" \"$@\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	script, logFile := filepath.Join(e.dir, "watchdog.sh"), filepath.Join(e.logDir, "watchdog.log")
+	script := filepath.Join(e.dir, "watchdog.sh")
+	logFile = filepath.Join(e.logDir, "watchdog.log")
 	if err := writeWatchdogScript(script, wrapper, logFile, e.bin); err != nil {
 		t.Fatal(err)
 	}
-	tick := func() {
+	if err := os.MkdirAll(e.logDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return func() {
 		t.Helper()
 		cmd := exec.Command(sh[0], append(sh[1:], script)...)
 		cmd.Env = e.env
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("watchdog tick: %v: %s", err, out)
 		}
-	}
-	if err := os.MkdirAll(e.logDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	}, logFile
+}
+
+// TestWatchdogScript_EndToEnd: a healthy tick must stay silent; a tick
+// that finds the daemon down must bring it back and say so.
+func TestWatchdogScript_EndToEnd(t *testing.T) {
+	e := newInitEnv(t, withHook)
+	tick, logFile := watchdogBench(t, &e)
 
 	tick() // daemon down: the tick must bring it back
 	if pid := e.daemonPID(t); pid == 0 || !alive(pid) {
@@ -292,5 +303,53 @@ sleep 30
 	tick() // daemon up: nothing to do, nothing to write
 	if log, _ = os.ReadFile(logFile); len(log) != before {
 		t.Errorf("a healthy tick wrote to the log:\n%s", log[before:])
+	}
+}
+
+// TestWatchdogScript_ShellRollbackWhenTheBinaryCannotRun is UPD-02's
+// remainder: an update whose binary can't run at all can't roll itself
+// back -- the hook *is* that binary. The script must do it from shell
+// using the update marker, exactly once.
+func TestWatchdogScript_ShellRollbackWhenTheBinaryCannotRun(t *testing.T) {
+	e := newInitEnv(t, withHook)
+	tick, logFile := watchdogBench(t, &e)
+	if err := os.Chmod(e.bin, 0o644); err != nil { // the "new version": can't execute
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("old-ipk")) }))
+	defer srv.Close()
+	marker := filepath.Join(e.logDir, "self-update.json")
+	if err := os.WriteFile(marker, []byte(`{"prev_version":"0.32.82","ipk_url":"`+srv.URL+`/old.ipk","arch":"x"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// opkg "installing the old version" puts a runnable binary back.
+	fakeBin := filepath.Join(e.dir, "fakebin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fakeBin, "opkg"), []byte("#!/bin/sh\necho \"opkg $*\"\nchmod +x \"$KEENETIC_XRAY_BIN\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for i, kv := range e.env {
+		if strings.HasPrefix(kv, "PATH=") {
+			e.env[i] = "PATH=" + fakeBin + ":" + strings.TrimPrefix(kv, "PATH=")
+		}
+	}
+
+	tick()
+	log, _ := os.ReadFile(logFile)
+	for _, want := range []string{"rolling back to " + srv.URL, "opkg install --force-downgrade --force-reinstall", "rollback installed"} {
+		if !strings.Contains(string(log), want) {
+			t.Errorf("log lacks %q:\n%s", want, log)
+		}
+	}
+	if pid := e.daemonPID(t); pid == 0 || !alive(pid) {
+		t.Errorf("no daemon after the shell rollback; log:\n%s", log)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Error("the marker survived: a still-broken build would be reinstalled on every tick")
+	}
+	if _, err := os.Stat(filepath.Join(e.logDir, "rollback.ipk")); !os.IsNotExist(err) {
+		t.Error("the downloaded .ipk was left behind")
 	}
 }

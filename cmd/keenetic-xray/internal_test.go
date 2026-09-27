@@ -169,6 +169,13 @@ func TestCmdInternal_PrermCleanupRemovesAllNdmHooks(t *testing.T) {
 	nf := filepath.Join(dir, "ndm", "netfilter.d", "50-keenetic-xray.sh")
 	t.Setenv("KEENETIC_XRAY_NETFILTER_HOOK", nf)
 	t.Setenv("KEENETIC_XRAY_CONFIG", filepath.Join(dir, "etc", "config.json"))
+	// prerm-cleanup also drops the watchdog's cron entry; without these it
+	// wrote the real /opt/var/spool/cron/crontabs/root whenever the suite
+	// ran as root (2026-09-27 external review, N3 -- and it did, on a dev
+	// box).
+	t.Setenv("KEENETIC_XRAY_CRON_FILE", filepath.Join(dir, "cron", "root"))
+	t.Setenv("KEENETIC_XRAY_WATCHDOG_SCRIPT", filepath.Join(dir, "watchdog.sh"))
+	t.Setenv("KEENETIC_XRAY_WATCHDOG_LOG", filepath.Join(dir, "watchdog.log"))
 
 	hooks := ndmHookPaths()
 	for _, h := range hooks {

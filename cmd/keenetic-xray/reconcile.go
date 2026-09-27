@@ -225,7 +225,12 @@ func pushRekeyedWGConfig(ctx context.Context, d *failover.Daemon, cfg *config.Co
 // "coming back after a while".
 func reconcileMSSClamp(ctx context.Context, cfg *config.Config, logf func(string, ...any)) {
 	mss := cfg.Proxy0.MSSClampValue()
-	if !cfg.Proxy0.Enabled || mss <= 0 || !keenetic.IptablesPresent() {
+	// keenetic.Available(), not just iptables: the clamp exists for
+	// Keenetic's own forwarded Proxy0 traffic. On any other Linux box with
+	// iptables -- a dev machine, CI running as root -- this used to put a
+	// live TCPMSS rule into that host's FORWARD chain (2026-09-27, found
+	// by TestReconcileSteps_NoRouterIsNoop run as root on a dev box).
+	if !cfg.Proxy0.Enabled || mss <= 0 || !keenetic.Available() || !keenetic.IptablesPresent() {
 		return
 	}
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)

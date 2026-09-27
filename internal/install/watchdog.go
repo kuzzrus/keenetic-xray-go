@@ -129,6 +129,15 @@ func selfBinaryPath() string {
 // get "restarting" written *before* the hook ran and nothing after, and
 // the hook's own output went to /dev/null -- now both what the hook said
 // and whether the daemon is actually back afterwards end up in it.
+//
+// The one case the hook can't handle is the binary itself being unable
+// to run -- exit 126 (not executable), 127 (missing), 128+ (killed at
+// start) -- since the hook *is* that binary (UPD-02, whose Go half was
+// fixed 2026-09-20; this is the rest the 2026-09-27 review pointed at).
+// Then, if a self-update left its marker next to this log, the script
+// rolls back on its own: the marker's ipk_url, opkg, init start. Once per
+// marker -- it's renamed before the attempt -- so a version that is
+// broken too can't turn every tick into another download and reinstall.
 func writeWatchdogScript(scriptPath, initScript, logFile, binaryPath string) error {
 	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o755); err != nil {
 		return fmt.Errorf("creating script directory: %w", err)
@@ -151,9 +160,26 @@ echo "$(date '+%%Y-%%m-%%d %%H:%%M:%%S') daemon not running -- restart hook:" >>
 rc=$?
 if "$INIT" status >/dev/null 2>&1; then
 	echo "$(date '+%%Y-%%m-%%d %%H:%%M:%%S') daemon running again (hook exit $rc)" >>"$LOG"
-else
-	echo "$(date '+%%Y-%%m-%%d %%H:%%M:%%S') daemon STILL not running (hook exit $rc)" >>"$LOG"
+	exit 0
 fi
+echo "$(date '+%%Y-%%m-%%d %%H:%%M:%%S') daemon STILL not running (hook exit $rc)" >>"$LOG"
+# The binary itself can't run, so it can't roll itself back -- do it here.
+MARKER="${LOG%%/*}/self-update.json"
+[ "$rc" -ge 126 ] && [ -f "$MARKER" ] || exit 0
+ps | grep -q '[o]pkg' && exit 0
+url=$(sed -n 's/.*"ipk_url": *"\([^"]*\)".*/\1/p' "$MARKER" | head -n 1)
+mv "$MARKER" "$MARKER.shell-rollback"
+[ -n "$url" ] || exit 0
+echo "$(date '+%%Y-%%m-%%d %%H:%%M:%%S') the binary cannot run -- rolling back to $url" >>"$LOG"
+ipk="${LOG%%/*}/rollback.ipk"
+if { curl -fsSL --connect-timeout 15 --max-time 180 -o "$ipk" "$url" || wget -q -T 180 -O "$ipk" "$url"; } >>"$LOG" 2>&1 &&
+	opkg install --force-downgrade --force-reinstall "$ipk" >>"$LOG" 2>&1; then
+	echo "$(date '+%%Y-%%m-%%d %%H:%%M:%%S') rollback installed" >>"$LOG"
+else
+	echo "$(date '+%%Y-%%m-%%d %%H:%%M:%%S') rollback FAILED" >>"$LOG"
+fi
+rm -f "$ipk"
+"$INIT" start >>"$LOG" 2>&1
 `, WatchdogMarker, initScript, logFile, binaryPath)
 	if err := os.WriteFile(scriptPath, []byte(body), 0o755); err != nil {
 		return fmt.Errorf("writing %s: %w", scriptPath, err)

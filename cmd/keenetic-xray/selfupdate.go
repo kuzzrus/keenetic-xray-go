@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
+	"os/signal"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/botcontrol"
@@ -165,15 +167,37 @@ func trimV(s string) string {
 }
 
 // cmdSelfRollback reinstalls the .ipk recorded in the self-update marker
-// -- the recovery path when an update left the daemon unable to start.
+// -- the recovery path when an update left the daemon unable to start --
+// then starts whatever is installed, the same way the watchdog hook does
+// and for the same reason (see execInitStart).
 func cmdSelfRollback(args []string) error {
 	if len(args) != 0 {
 		return fmt.Errorf("usage: keenetic-xray internal self-rollback")
 	}
+	if err := runRollback(selfUpdateMarkerPath()); err != nil {
+		fmt.Printf("откат не выполнен: %v\n", err)
+	}
+	return execInitStart("self-rollback")
+}
+
+// runRollback runs selfupdate.Rollback for both callers, the watchdog
+// hook and `internal self-rollback`, with opkg's output kept in its own
+// log file (rollbackLogPath).
+//
+// It also ignores the signals an init script's stop can send while opkg
+// runs the package's prerm. The init script shipped since 2026-09-27
+// stops only the verified daemon PID, but an rc.func-era one --
+// possibly the very version being rolled back to, if a later step
+// reinstalls it -- killed every process named keenetic-xray, this one
+// included, mid-install (N2).
+func runRollback(markerPath string) error {
+	signal.Ignore(syscall.SIGTERM, syscall.SIGHUP, syscall.SIGPIPE)
+	defer signal.Reset(syscall.SIGTERM, syscall.SIGHUP, syscall.SIGPIPE)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	return selfupdate.Rollback(ctx, selfUpdateMarkerPath(), selfupdate.RollbackOptions{
-		Log: func(format string, a ...any) { fmt.Printf(format+"\n", a...) },
+	return selfupdate.Rollback(ctx, markerPath, selfupdate.RollbackOptions{
+		OpkgLog: rollbackLogPath(),
+		Log:     func(format string, a ...any) { fmt.Printf(format+"\n", a...) },
 	})
 }
 
@@ -198,18 +222,72 @@ func markerIsFreshForRollback(m selfupdate.Marker, ok bool, currentVersion strin
 	return ok && time.Since(m.StartedAt) <= autoRollbackMarkerWindow && m.PrevVersion != currentVersion
 }
 
+// rollbackConfirmDelay is how long decideWatchdog waits before looking
+// again when a fresh update marker would otherwise make it roll back. A
+// daemon legitimately restarting -- self-update's own postinst, a config
+// change -- looks dead for a few seconds, and a rollback is the one
+// thing here that must never fire on a false alarm (N1).
+var rollbackConfirmDelay = 20 * time.Second
+
+// decideWatchdog's view of the system -- vars so its decision is testable
+// without a router.
+var (
+	watchdogDaemonAlive = func() bool { _, err := runningDaemonPID(); return err == nil }
+	watchdogOpkgBusy    = func() bool { return processNamed("opkg") }
+	watchdogSleep       = time.Sleep
+)
+
+type watchdogAction int
+
+const (
+	watchdogLeaveAlone watchdogAction = iota
+	watchdogStart
+	watchdogRollback
+)
+
+// decideWatchdog decides what cmdWatchdogRestartHook does, checking for
+// itself rather than trusting whoever called it.
+//
+// It used to trust the cron script's verdict outright -- and that
+// verdict came from `S99keenetic-xray status`, which the rc.func-based
+// init script didn't implement, so it said "down" on every tick (BOOT-02).
+// Inside the rollback window after an update, a healthy new version was
+// then rolled back (N1). Now: a daemon that is actually running (its own
+// pidfile, verified) is left alone; so is anything while opkg runs,
+// since an install in progress legitimately has the daemon stopped for a
+// while; and a rollback needs the daemon found dead twice,
+// rollbackConfirmDelay apart.
+func decideWatchdog(markerFresh bool) (watchdogAction, string) {
+	if watchdogDaemonAlive() {
+		return watchdogLeaveAlone, "the daemon is running -- nothing to do"
+	}
+	if watchdogOpkgBusy() {
+		return watchdogLeaveAlone, "opkg is running (an install or update in progress) -- not touching the daemon mid-way"
+	}
+	if !markerFresh {
+		return watchdogStart, ""
+	}
+	watchdogSleep(rollbackConfirmDelay)
+	if watchdogDaemonAlive() {
+		return watchdogLeaveAlone, "the daemon came up while confirming -- no rollback"
+	}
+	if watchdogOpkgBusy() {
+		return watchdogLeaveAlone, "opkg started while confirming -- no rollback"
+	}
+	return watchdogRollback, ""
+}
+
 // cmdWatchdogRestartHook is what the watchdog's cron script calls
 // instead of a bare `<initScript> start` whenever it finds the daemon
 // not running (see internal/install.writeWatchdogScript). If a
 // self-update marker is present and fresh, the daemon being down right
 // now is treated as evidence *this specific update* broke startup --
 // rather than blindly restart the same broken build every 2 minutes
-// forever, this rolls back to the version the marker recorded instead
-// (Rollback's own postinst restarts the daemon, so nothing else is
-// needed on success). Any other case -- no marker, a stale one, or the
-// rollback attempt itself failing -- falls through to an ordinary
-// `<initScript> start`, so a plain crash unrelated to any update is
-// still just a plain restart, never a rollback.
+// forever, this rolls back to the version the marker recorded instead.
+// Any other case -- no marker, a stale one, or the rollback attempt
+// itself failing -- is an ordinary start, so a plain crash unrelated to
+// any update is still just a plain restart, never a rollback. See
+// decideWatchdog for when it does nothing at all.
 //
 // Runs as its own one-shot process spawned by cron, deliberately not as
 // code inside the long-running daemon: if the new build is broken badly
@@ -223,30 +301,43 @@ func cmdWatchdogRestartHook(args []string) error {
 	}
 	markerPath := selfUpdateMarkerPath()
 	m, ok := selfupdate.ReadMarker(markerPath)
-	fresh := markerIsFreshForRollback(m, ok, trimV(version.Version))
 
-	if fresh {
+	action, why := decideWatchdog(markerIsFreshForRollback(m, ok, trimV(version.Version)))
+	switch action {
+	case watchdogLeaveAlone:
+		fmt.Println("watchdog:", why)
+		return nil
+	case watchdogRollback:
 		fmt.Printf("watchdog: daemon down with an unresolved update marker (%s -> %s, started %s ago) -- rolling back instead of restarting\n",
 			m.PrevVersion, trimV(version.Version), time.Since(m.StartedAt).Round(time.Second))
-		rctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		err := selfupdate.Rollback(rctx, markerPath, selfupdate.RollbackOptions{
-			Log: func(format string, a ...any) { fmt.Printf(format+"\n", a...) },
-		})
-		cancel()
-		if err == nil {
-			if nerr := writeAutoRollbackNotice(trimV(version.Version), m.PrevVersion); nerr != nil {
-				fmt.Printf("watchdog: rollback succeeded but couldn't record a notice for the next boot: %v\n", nerr)
-			}
-			return nil // Rollback's own postinst already restarts the daemon
+		if err := runRollback(markerPath); err != nil {
+			fmt.Printf("watchdog: auto-rollback failed (%v) -- starting whatever is installed now\n", err)
+		} else if nerr := writeAutoRollbackNotice(trimV(version.Version), m.PrevVersion); nerr != nil {
+			fmt.Printf("watchdog: rollback succeeded but couldn't record a notice for the next boot: %v\n", nerr)
 		}
-		fmt.Printf("watchdog: auto-rollback failed (%v) -- falling back to a normal restart of the current build\n", err)
 	}
+	// Both an ordinary restart and the end of a rollback land here. The
+	// rolled-back package's postinst has usually started the daemon
+	// already, and then this is a harmless "already running".
+	return execInitStart("watchdog")
+}
 
-	out, err := exec.Command(initScript, "start").CombinedOutput()
+// processNamed reports whether any running process's /proc/<pid>/comm
+// is name. False wherever /proc isn't there (off Linux).
+func processNamed(name string) bool {
+	entries, err := os.ReadDir("/proc")
 	if err != nil {
-		return fmt.Errorf("%s start: %w: %s", initScript, err, strings.TrimSpace(string(out)))
+		return false
 	}
-	return nil
+	for _, e := range entries {
+		if _, err := strconv.Atoi(e.Name()); err != nil {
+			continue
+		}
+		if b, err := os.ReadFile("/proc/" + e.Name() + "/comm"); err == nil && strings.TrimSpace(string(b)) == name {
+			return true
+		}
+	}
+	return false
 }
 
 // autoRollbackNotice is what cmdWatchdogRestartHook leaves behind after a

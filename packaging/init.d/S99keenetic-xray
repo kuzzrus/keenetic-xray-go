@@ -1,16 +1,197 @@
 #!/opt/bin/sh
-# Entware rc.func-based init script: daemonization and the pidfile come
-# from rc.func for free, so `daemon` just runs in the foreground.
+# keenetic-xray init script. Self-contained on purpose -- NOT built on
+# Entware's rc.func.
 #
-# Verified on real router hardware (aarch64 Keenetic/Entware): `start`
-# succeeds and the daemon process stays running.
+# rc.func decides "is it running" with `pidof keenetic-xray` and stops
+# with `killall keenetic-xray`, and both match *any* process of that
+# name. This binary is also every CLI command, the watchdog's restart
+# hook and the self-rollback, so (2026-09-27 external review):
+#   - the watchdog hook asking rc.func to start the daemon was itself
+#     taken for the daemon -- "already running", nothing started, ever
+#     (BOOT-01);
+#   - stop killed whatever CLI process happened to be alive, including a
+#     rollback halfway through opkg (N2);
+#   - rc.func has no `status` at all, so the watchdog's check failed on
+#     every tick, healthy daemon or not (BOOT-02).
+# Everything below identifies the daemon by the pidfile it writes itself
+# (cmd/keenetic-xray writeDaemonPIDFile): the PID, its process name, its
+# `daemon` argument, and its start time, so a recycled PID can't pass.
+#
+# Actions: start|stop|restart|status|check|kill|reconfigure -- the same
+# set rc.func offered, plus `status`. An optional second argument names
+# the caller (rc.unslung passes one); it only goes into boot.log.
 
 ENABLED=yes
-PROCS=keenetic-xray
-ARGS="daemon"
-PREARGS=""
-DESC=$PROCS
+
 PATH=/opt/sbin:/opt/bin:/opt/usr/sbin:/opt/usr/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-# shellcheck source=/opt/etc/init.d/rc.func
-. /opt/etc/init.d/rc.func
+# Overridable for tests only (the daemon reads the same variables); a
+# router always runs with the defaults.
+BIN=${KEENETIC_XRAY_BIN:-/opt/sbin/keenetic-xray}
+PIDFILE=${KEENETIC_XRAY_PID_FILE:-${KEENETIC_XRAY_RUN_DIR:-/opt/var/run}/keenetic-xray.pid}
+LOGDIR=${KEENETIC_XRAY_LOG_DIR:-/opt/var/log/keenetic-xray}
+BOOTLOG=$LOGDIR/boot.log
+# /tmp, not next to the pidfile: /opt is persistent flash, and a lock
+# surviving a power cut would hold up the very next boot's start.
+LOCKDIR=${KEENETIC_XRAY_INIT_LOCK:-/tmp/keenetic-xray.init.lock}
+# How long start waits for the pidfile; overridden only by tests.
+START_WAIT=${KEENETIC_XRAY_START_WAIT:-15}
+
+ACTION=${1:-}
+CALLER=${2:-}
+
+# daemon_pid prints the daemon's PID if, and only if, the pidfile points
+# at a live `keenetic-xray daemon` process -- the very one that wrote it.
+daemon_pid() {
+	[ -r "$PIDFILE" ] || return 1
+	_kx_p='' _kx_tok=''
+	{ read -r _kx_p; read -r _kx_tok; } <"$PIDFILE" 2>/dev/null
+	case $_kx_p in '' | *[!0-9]*) return 1 ;; esac
+	read -r _kx_comm <"/proc/$_kx_p/comm" 2>/dev/null || return 1
+	[ "$_kx_comm" = keenetic-xray ] || return 1
+	tr '\0' '\n' <"/proc/$_kx_p/cmdline" 2>/dev/null | grep -qx daemon || return 1
+	if [ -n "$_kx_tok" ]; then
+		read -r _kx_stat <"/proc/$_kx_p/stat" 2>/dev/null || return 1
+		# Field 22 (start time) is the 20th after "(comm) " -- comm may
+		# itself contain spaces or ')', hence cutting at the last ") ".
+		# shellcheck disable=SC2086 # word-splitting the fields is the point
+		set -- ${_kx_stat##*) }
+		[ $# -ge 20 ] || return 1
+		shift 19
+		[ "$1" = "$_kx_tok" ] || return 1
+	fi
+	echo "$_kx_p"
+}
+
+say() {
+	echo "keenetic-xray: $*"
+	logger -t keenetic-xray "$*" 2>/dev/null
+}
+
+# lock serializes start/stop/restart, so cron's watchdog, a package
+# install and a user can't launch two daemons at once. A lock whose
+# holder is gone (killed mid-way) is stale and taken over.
+lock() {
+	_kx_n=0
+	until mkdir "$LOCKDIR" 2>/dev/null; do
+		_kx_owner=$(cat "$LOCKDIR/pid" 2>/dev/null)
+		if [ -n "$_kx_owner" ] && ! kill -0 "$_kx_owner" 2>/dev/null; then
+			rm -rf "$LOCKDIR"
+			continue
+		fi
+		_kx_n=$((_kx_n + 1))
+		if [ "$_kx_n" -ge 60 ]; then
+			say "another start/stop has held $LOCKDIR for 60s -- giving up"
+			return 1
+		fi
+		sleep 1
+	done
+	echo $$ >"$LOCKDIR/pid"
+}
+
+unlock() { rm -rf "$LOCKDIR"; }
+
+do_start() {
+	if [ "$ENABLED" != yes ]; then
+		echo "keenetic-xray: disabled (ENABLED=$ENABLED in $0)"
+		return 0
+	fi
+	if _kx_pid=$(daemon_pid); then
+		echo "keenetic-xray: already running (pid $_kx_pid)"
+		return 0
+	fi
+	mkdir -p "$LOGDIR" "${PIDFILE%/*}"
+	# Keep boot.log small on flash: past 64 KB, keep its last 200 lines.
+	if [ -f "$BOOTLOG" ] && [ "$(wc -c <"$BOOTLOG")" -gt 65536 ]; then
+		tail -n 200 "$BOOTLOG" >"$BOOTLOG.tmp" && mv "$BOOTLOG.tmp" "$BOOTLOG"
+	fi
+	echo "$(date '+%Y-%m-%d %H:%M:%S') start${CALLER:+ (from $CALLER)}" >>"$BOOTLOG"
+	# stderr to boot.log, stdout discarded: stdout repeats every line the
+	# daemon already keeps in its own rotated daemon.log, but stderr is
+	# where a fatal startup error goes -- including one raised before
+	# daemon.log even exists, which rc.func used to throw away (BOOT-04).
+	# Own session where setsid exists: no terminal whose hangup can reach
+	# the daemon when this was run from SSH.
+	if command -v setsid >/dev/null 2>&1; then
+		setsid "$BIN" daemon </dev/null >/dev/null 2>>"$BOOTLOG" &
+	else
+		"$BIN" daemon </dev/null >/dev/null 2>>"$BOOTLOG" &
+	fi
+	_kx_i=0
+	while [ "$_kx_i" -lt "$START_WAIT" ]; do
+		sleep 1
+		if _kx_pid=$(daemon_pid); then
+			say "started (pid $_kx_pid)"
+			return 0
+		fi
+		_kx_i=$((_kx_i + 1))
+	done
+	say "failed to start -- last lines of $BOOTLOG:"
+	tail -n 5 "$BOOTLOG" 2>/dev/null
+	return 1
+}
+
+do_stop() {
+	if ! _kx_pid=$(daemon_pid); then
+		echo "keenetic-xray: not running"
+		return 0
+	fi
+	# The verified daemon PID only -- never a name-wide killall. SIGTERM
+	# lets the daemon take its xray child down with it; `kill` below is
+	# the explicit last resort, same split rc.func had.
+	kill "$_kx_pid" 2>/dev/null
+	_kx_i=0
+	while [ "$_kx_i" -lt 20 ] && daemon_pid >/dev/null; do
+		sleep 1
+		_kx_i=$((_kx_i + 1))
+	done
+	if daemon_pid >/dev/null; then
+		say "still running 20s after SIGTERM (pid $_kx_pid) -- '$0 kill' forces it"
+		return 1
+	fi
+	say "stopped"
+	return 0
+}
+
+case $ACTION in
+start | stop | restart)
+	lock || exit 1
+	case $ACTION in
+	start) do_start ;;
+	stop) do_stop ;;
+	restart)
+		do_stop
+		do_start
+		;;
+	esac
+	_kx_rc=$?
+	unlock
+	exit $_kx_rc
+	;;
+status | check)
+	if _kx_pid=$(daemon_pid); then
+		echo "keenetic-xray: running (pid $_kx_pid)"
+		exit 0
+	fi
+	echo "keenetic-xray: stopped"
+	exit 1
+	;;
+kill)
+	_kx_pid=$(daemon_pid) || {
+		echo "keenetic-xray: not running"
+		exit 0
+	}
+	kill -9 "$_kx_pid" && say "killed (pid $_kx_pid)"
+	;;
+reconfigure)
+	_kx_pid=$(daemon_pid) || {
+		echo "keenetic-xray: not running"
+		exit 1
+	}
+	kill -HUP "$_kx_pid"
+	;;
+*)
+	echo "Usage: $0 {start|stop|restart|status|check|kill|reconfigure}"
+	exit 1
+	;;
+esac

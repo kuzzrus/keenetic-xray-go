@@ -215,3 +215,59 @@ func TestWatchPostUpdate_StaleMarkerTidiedSilently(t *testing.T) {
 		t.Error("stale marker should be cleared")
 	}
 }
+
+// stubWatchdog replaces decideWatchdog's view of the system: alive and
+// opkg answer successive calls from the given sequences (the last value
+// repeats), and the confirmation pause is recorded instead of slept.
+func stubWatchdog(t *testing.T, alive, opkg []bool) (slept *bool) {
+	t.Helper()
+	next := func(seq []bool) func() bool {
+		i := 0
+		return func() bool {
+			v := seq[min(i, len(seq)-1)]
+			i++
+			return v
+		}
+	}
+	origAlive, origOpkg, origSleep := watchdogDaemonAlive, watchdogOpkgBusy, watchdogSleep
+	t.Cleanup(func() { watchdogDaemonAlive, watchdogOpkgBusy, watchdogSleep = origAlive, origOpkg, origSleep })
+	var s bool
+	watchdogDaemonAlive, watchdogOpkgBusy = next(alive), next(opkg)
+	watchdogSleep = func(time.Duration) { s = true }
+	return &s
+}
+
+// TestDecideWatchdog is N1 (2026-09-27 external review): the hook used
+// to trust the cron script's "daemon down" -- which was always wrong,
+// since the rc.func-based init script had no `status` -- and inside the
+// rollback window after an update it rolled back a healthy new version.
+func TestDecideWatchdog(t *testing.T) {
+	cases := []struct {
+		name       string
+		alive      []bool
+		opkg       []bool
+		fresh      bool
+		want       watchdogAction
+		wantPaused bool
+	}{
+		{"daemon actually running, fresh marker", []bool{true}, []bool{false}, true, watchdogLeaveAlone, false},
+		{"daemon actually running, no marker", []bool{true}, []bool{false}, false, watchdogLeaveAlone, false},
+		{"opkg mid-install", []bool{false}, []bool{true}, true, watchdogLeaveAlone, false},
+		{"down, no marker: plain restart", []bool{false}, []bool{false}, false, watchdogStart, false},
+		{"down twice with a fresh marker: rollback", []bool{false, false}, []bool{false}, true, watchdogRollback, true},
+		{"came up while confirming", []bool{false, true}, []bool{false}, true, watchdogLeaveAlone, true},
+		{"opkg started while confirming", []bool{false, false}, []bool{false, true}, true, watchdogLeaveAlone, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			slept := stubWatchdog(t, c.alive, c.opkg)
+			got, why := decideWatchdog(c.fresh)
+			if got != c.want {
+				t.Errorf("got %v (%s), want %v", got, why, c.want)
+			}
+			if *slept != c.wantPaused {
+				t.Errorf("paused to confirm = %v, want %v", *slept, c.wantPaused)
+			}
+		})
+	}
+}

@@ -7,9 +7,10 @@ import (
 	"syscall"
 )
 
-// restartDetached puts the deferred `init.d restart` in its own session
-// so rc.func's name-matching stop (PROCS=keenetic-xray) can't reach back
-// and kill the CLI process that scheduled it.
+// restartDetached puts the deferred `init.d restart` in its own session,
+// so the CLI process that scheduled it isn't tied to the restart's fate
+// -- see offerDaemonRestart for why that matters with an rc.func-era init
+// script.
 func restartDetached(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 }

@@ -131,10 +131,13 @@ func TestRollback(t *testing.T) {
 		t.Error("marker should be cleared after a successful rollback")
 	}
 
-	// fetch failure: marker must survive
+	// fetch failure: marker must survive. DownloadPath is set in every
+	// case -- the default is /opt/keenetic-xray-rollback.ipk, and a test
+	// has no business writing there (2026-09-27 external review, N3).
 	writeMarkerT(t, path, m)
 	err := Rollback(context.Background(), path, RollbackOptions{
-		Fetch: func(context.Context, string, string) error { return errors.New("network down") },
+		DownloadPath: filepath.Join(t.TempDir(), "rb.ipk"),
+		Fetch:        func(context.Context, string, string) error { return errors.New("network down") },
 	})
 	if err == nil {
 		t.Error("Rollback should propagate a fetch error")
@@ -146,8 +149,9 @@ func TestRollback(t *testing.T) {
 	// install failure: marker must survive
 	writeMarkerT(t, path, m)
 	err = Rollback(context.Background(), path, RollbackOptions{
-		Fetch:       func(_ context.Context, _, dest string) error { return writeRaw(dest, "x") },
-		OpkgInstall: func(context.Context, string) error { return errors.New("opkg refused") },
+		DownloadPath: filepath.Join(t.TempDir(), "rb.ipk"),
+		Fetch:        func(_ context.Context, _, dest string) error { return writeRaw(dest, "x") },
+		OpkgInstall:  func(context.Context, string) error { return errors.New("opkg refused") },
 	})
 	if err == nil {
 		t.Error("Rollback should propagate an opkg error")

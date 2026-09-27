@@ -57,6 +57,13 @@ func selfUpdateMarkerPath() string {
 	return envOr("KEENETIC_XRAY_SELFUPDATE_MARKER", logDir()+"/self-update.json")
 }
 
+// rollbackLogPath is where a rollback's opkg run writes its output --
+// a file of its own, never a pipe into the process that started it (N2;
+// see internal/selfupdate's opkgInstallToFile).
+func rollbackLogPath() string {
+	return envOr("KEENETIC_XRAY_ROLLBACK_LOG", logDir()+"/rollback.log")
+}
+
 // autoRollbackNoticePath is where cmdWatchdogRestartHook leaves a small
 // note after a successful auto-rollback, for watchAutoRollbackNotice (a
 // goroutine on the next successful boot, mirroring watchPostUpdate) to
@@ -225,9 +232,11 @@ func cronFilePath() string {
 // pidFilePath is where `keenetic-xray daemon` records its own PID, so a
 // CLI command run afterward (setup, subscription, proxy0, failover set)
 // can find it and signal a live config reload -- see signalDaemonReload
-// in daemonctl.go. Deliberately project-controlled rather than reusing
-// whatever pidfile rc.func manages internally: that path/format isn't
-// part of any documented contract here.
+// in daemonctl.go. Since 2026-09-27 it is also how the init script
+// itself tells the daemon apart from every other process named
+// keenetic-xray (packaging/init.d/S99keenetic-xray's daemon_pid), so its
+// two-line format -- PID, then start-time token -- is a contract with
+// that script: change one, change the other.
 func pidFilePath() string {
 	return envOr("KEENETIC_XRAY_PID_FILE", runDir()+"/keenetic-xray.pid")
 }

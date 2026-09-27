@@ -47,8 +47,14 @@ func TestSetWatchdogCron_EnableOnFreshFile(t *testing.T) {
 		t.Fatalf("reading the watchdog script: %v", err)
 	}
 	s := string(script)
-	if !strings.Contains(s, testInitScript+" status") || !strings.Contains(s, "internal watchdog-restart-hook") {
+	if !strings.Contains(s, "INIT="+testInitScript) || !strings.Contains(s, `"$INIT" status`) || !strings.Contains(s, "internal watchdog-restart-hook") {
 		t.Errorf("script = %q, want both a status check and the restart-hook call", s)
+	}
+	// The hook's own output and the outcome belong in the log -- it used
+	// to go to /dev/null, with only a "restarting" line written before
+	// the attempt and nothing after it.
+	if strings.Contains(s, "watchdog-restart-hook >/dev/null") || !strings.Contains(s, "hook exit $rc") {
+		t.Errorf("script = %q, want the hook's output and its outcome logged", s)
 	}
 	if !strings.Contains(s, testWatchdogLog) {
 		t.Errorf("script = %q, want it to log restarts to %s", s, testWatchdogLog)

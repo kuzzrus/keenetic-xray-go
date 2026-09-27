@@ -2,9 +2,3 @@
 # before `cd`) is the correct way to `cd` without CDPATH's stdout side
 # effect; shellcheck misparses it as a stray `VAR=cd` assignment attempt.
 disable=SC1007
-
-# SC2034: ENABLED/ARGS/PREARGS/DESC in packaging/init.d/S99keenetic-xray
-# are read by /opt/etc/init.d/rc.func after it sources this file -- that
-# file only exists on a real Entware router, so shellcheck can't see the
-# use and reports them as unused.
-disable=SC2034

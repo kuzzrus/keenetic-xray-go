@@ -20,9 +20,9 @@ set -e
 # ensure-xray-core's own best-effort framing above.
 
 # Tells applyDaemonChange (called at the end of `setup`) not to restart
-# the daemon: postinst starts it itself a few lines below, and rc.func's
-# stop matches by process name -- an in-wizard restart would kill the
-# running `keenetic-xray setup` process.
+# the daemon: postinst starts it itself a few lines below, so an
+# in-wizard restart is wasted work (and with an rc.func-era init script
+# it killed the running `keenetic-xray setup` process by name).
 export KEENETIC_XRAY_POSTINST=1
 
 # If install.sh was given a link (--sub=/--vless=), do the whole first-run

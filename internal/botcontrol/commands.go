@@ -1273,10 +1273,11 @@ func (h *RouterHandler) selfUpdate() (string, error) {
 	// outlive the request that started it).
 	octx, cancel := context.WithTimeout(context.Background(), selfUpdateOverallTimeout)
 	c := exec.CommandContext(octx, "sh", "-c", cmd)
-	// Its own session: packaging/ipk/prerm stops *this* process
-	// (rc.func's name-matching `stop`, PROCS=keenetic-xray) partway
-	// through this exact chain (curl -> install.sh -> opkg install ->
-	// [prerm runs here] -> postinst -> S99 start). Without this, the
+	// Its own session: packaging/ipk/prerm stops *this* process -- the
+	// daemon -- partway through this exact chain (curl -> install.sh ->
+	// opkg install -> [prerm runs here] -> postinst -> S99 start); the
+	// prerm that runs is the *outgoing* version's, which until 2026-09-27
+	// stopped by name via rc.func (PROCS=keenetic-xray). Without this, the
 	// child stays in this process's session/group -- one more thing that
 	// could reach back and disrupt it beyond the pipe issue below.
 	detach(c)

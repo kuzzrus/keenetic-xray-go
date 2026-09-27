@@ -61,9 +61,10 @@ func applyDaemonChange(in *bufio.Reader, interactive bool) {
 		return
 	}
 	// Fresh install: postinst runs `S99keenetic-xray start` right after
-	// the wizard, so there's nothing to restart -- and restarting here
-	// would be actively harmful, since rc.func's stop matches by process
-	// name and kills the running `keenetic-xray setup` process itself.
+	// the wizard, so there's nothing to restart -- and with an rc.func-era
+	// init script (still what a rollback to an older version reinstalls)
+	// restarting here would kill the running `keenetic-xray setup`
+	// process itself: its stop matched processes by name.
 	if os.Getenv("KEENETIC_XRAY_POSTINST") == "1" {
 		fmt.Println("демон запустится сразу после установки — рестарт не нужен")
 		return
@@ -189,10 +190,13 @@ func offerDaemonRestart(in *bufio.Reader) {
 		fmt.Printf("не перезапущен — применить позже:  %s restart\n", initScript)
 		return
 	}
-	// Detached, after a beat: rc.func's stop kills processes by name
-	// (PROCS=keenetic-xray), so a synchronous restart here would take
-	// this very process (`keenetic-xray setup` / `proxy0 set` / …) down
-	// with the daemon. Let the caller return first, then restart.
+	// Detached, after a beat: an rc.func-era init script's stop killed
+	// processes by name (PROCS=keenetic-xray), so a synchronous restart
+	// here would take this very process (`keenetic-xray setup` / `proxy0
+	// set` / …) down with the daemon. The current script stops only the
+	// verified daemon PID, but an older version -- reinstalled by a
+	// rollback -- still carries that one. Let the caller return first,
+	// then restart.
 	cmd := exec.Command("/bin/sh", "-c", fmt.Sprintf("sleep 1; %s restart", initScript))
 	restartDetached(cmd)
 	if err := cmd.Start(); err != nil {

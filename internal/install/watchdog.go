@@ -109,10 +109,10 @@ func selfBinaryPath() string {
 }
 
 // writeWatchdogScript (re)generates the tiny shell script the cron entry
-// invokes. Kept deliberately dumb -- one status check, one conditional
-// log line, one hook call -- so the interesting part (when it runs, what
-// a non-empty log means) stays documented on SetWatchdogCron rather than
-// spread across a shell file nobody reads.
+// invokes. Kept deliberately dumb -- one status check, then the hook and
+// a line saying how it went -- so the interesting part (when it runs,
+// what a non-empty log means) stays documented on SetWatchdogCron rather
+// than spread across a shell file nobody reads.
 //
 // Calls `<binaryPath> internal watchdog-restart-hook` rather than a bare
 // `<initScript> start`: that hook is what actually decides between an
@@ -121,6 +121,14 @@ func selfBinaryPath() string {
 // that decision in Go, not shell, is what keeps it unit-testable, the
 // same reasoning SetWatchdogCron's own doc comment already gives for
 // EnsureCron/SetWatchdogCron themselves.
+//
+// `status` only means something since the init script stopped being
+// built on Entware's rc.func (2026-09-27): rc.func has no such action,
+// answered every call with its usage text and exit 1, and so this check
+// failed on every tick, healthy daemon or not (BOOT-02). The log used to
+// get "restarting" written *before* the hook ran and nothing after, and
+// the hook's own output went to /dev/null -- now both what the hook said
+// and whether the daemon is actually back afterwards end up in it.
 func writeWatchdogScript(scriptPath, initScript, logFile, binaryPath string) error {
 	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o755); err != nil {
 		return fmt.Errorf("creating script directory: %w", err)
@@ -129,11 +137,23 @@ func writeWatchdogScript(scriptPath, initScript, logFile, binaryPath string) err
 # %s -- managed by keenetic-xray; regenerated on every install and on
 # `+"`watchdog enable`"+`, so local edits here do not stick. Restarts the
 # failover daemon if its init script reports it stopped (or rolls back a
-# bad self-update instead -- see internal watchdog-restart-hook); appends
-# to the log only on an actual restart, never on a healthy tick.
-%s status >/dev/null 2>&1 && exit 0
-echo "$(date '+%%Y-%%m-%%d %%H:%%M:%%S') restarting -- status check failed" >> %s
-%s internal watchdog-restart-hook >/dev/null 2>&1
+# bad self-update instead -- see internal watchdog-restart-hook); writes
+# to the log only when the daemon was found down, never on a healthy tick.
+INIT=%s
+LOG=%s
+"$INIT" status >/dev/null 2>&1 && exit 0
+# Keep the log small on flash: past 64 KB, keep its last 200 lines.
+if [ -f "$LOG" ] && [ "$(wc -c <"$LOG")" -gt 65536 ]; then
+	tail -n 200 "$LOG" >"$LOG.tmp" && mv "$LOG.tmp" "$LOG"
+fi
+echo "$(date '+%%Y-%%m-%%d %%H:%%M:%%S') daemon not running -- restart hook:" >>"$LOG"
+%s internal watchdog-restart-hook >>"$LOG" 2>&1
+rc=$?
+if "$INIT" status >/dev/null 2>&1; then
+	echo "$(date '+%%Y-%%m-%%d %%H:%%M:%%S') daemon running again (hook exit $rc)" >>"$LOG"
+else
+	echo "$(date '+%%Y-%%m-%%d %%H:%%M:%%S') daemon STILL not running (hook exit $rc)" >>"$LOG"
+fi
 `, WatchdogMarker, initScript, logFile, binaryPath)
 	if err := os.WriteFile(scriptPath, []byte(body), 0o755); err != nil {
 		return fmt.Errorf("writing %s: %w", scriptPath, err)
@@ -164,9 +184,9 @@ func WatchdogEnabled(cronFile string) (bool, error) {
 	return false, nil
 }
 
-// CronInitScript is Entware's cron init script -- rc.func provides
-// `status`/`enable`/`start` for free, the same mechanism the watchdog
-// cron entry above relies on to check the keenetic-xray daemon itself.
+// CronInitScript is Entware's cron init script, built on Entware's
+// rc.func -- which offers start/stop/restart/check/kill/reconfigure and
+// nothing else: no `status`, no `enable`.
 const CronInitScript = "/opt/etc/init.d/S10cron"
 
 // cronOpkgTimeout bounds cronOpkgInstall's own opkg calls -- see that
@@ -181,7 +201,7 @@ const cronOpkgTimeout = 2 * time.Minute
 // opkg, and rc.func aren't available in CI or on the Windows box this
 // is developed on.
 var (
-	cronInitStatus   = func() error { return exec.Command(CronInitScript, "status").Run() }
+	cronInitStatus   = func() error { return exec.Command(CronInitScript, "check").Run() } // rc.func has no `status`
 	cronInitEnable   = func() error { return exec.Command(CronInitScript, "enable").Run() }
 	cronInitStart    = func() error { return exec.Command(CronInitScript, "start").Run() }
 	cronRunningViaPS = func() bool {

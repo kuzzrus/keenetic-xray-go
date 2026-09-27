@@ -125,6 +125,7 @@ func NewMarker(version string, runOpkg func(args ...string) (string, error)) (Ma
 // real thing.
 type RollbackOptions struct {
 	DownloadPath string // where the .ipk is fetched to; "" -> /opt/keenetic-xray-rollback.ipk
+	OpkgLog      string // where opkg's own output goes; "" -> /opt/var/log/keenetic-xray/rollback.log
 	Fetch        func(ctx context.Context, url, dest string) error
 	OpkgInstall  func(ctx context.Context, ipkPath string) error
 	Log          func(string, ...any)
@@ -153,20 +154,22 @@ func Rollback(ctx context.Context, markerPath string, o RollbackOptions) error {
 	}
 	install := o.OpkgInstall
 	if install == nil {
+		logPath := o.OpkgLog
+		if logPath == "" {
+			logPath = "/opt/var/log/keenetic-xray/rollback.log"
+		}
 		install = func(ctx context.Context, ipkPath string) error {
-			out, err := exec.CommandContext(ctx, "opkg", "install", "--force-downgrade", "--force-reinstall", ipkPath).CombinedOutput()
-			if err != nil {
-				return fmt.Errorf("opkg install %s: %w: %s", ipkPath, err, strings.TrimSpace(string(out)))
-			}
-			return nil
+			return opkgInstallToFile(ctx, ipkPath, logPath)
 		}
 	}
 
+	// Before the fetch, not after it: a download that fails half-way
+	// must not leave a partial .ipk behind on the router's flash.
+	defer os.Remove(dest)
 	logf("откат: качаю %s", m.IPKURL)
 	if err := fetch(ctx, m.IPKURL, dest); err != nil {
 		return fmt.Errorf("скачивание %s: %w", m.IPKURL, err)
 	}
-	defer os.Remove(dest)
 
 	logf("откат: opkg install %s (форс-даунгрейд до %s)", filepath.Base(dest), m.PrevVersion)
 	if err := install(ctx, dest); err != nil {
@@ -177,11 +180,55 @@ func Rollback(ctx context.Context, markerPath string, o RollbackOptions) error {
 	return nil
 }
 
+// opkgInstallToFile runs the forced reinstall with opkg's output going to
+// logPath, in a session of its own.
+//
+// Not CombinedOutput -- not a pipe into this process at all (N2,
+// 2026-09-27 external review). The package's prerm stops the daemon
+// while opkg runs, and an rc.func-era init script did that with
+// `killall keenetic-xray`, which also killed the process reading opkg's
+// output; opkg's next write then died of SIGPIPE, leaving the package
+// half-installed and the daemon stopped. Same fix UPD-01 already made
+// for the update path: a real file, not an in-process buffer.
+func opkgInstallToFile(ctx context.Context, ipkPath, logPath string) error {
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		return fmt.Errorf("opkg log directory: %w", err)
+	}
+	f, err := os.Create(logPath)
+	if err != nil {
+		return fmt.Errorf("opening %s: %w", logPath, err)
+	}
+	cmd := exec.CommandContext(ctx, "opkg", "install", "--force-downgrade", "--force-reinstall", ipkPath)
+	cmd.Stdout, cmd.Stderr = f, f
+	ownSession(cmd)
+	err = cmd.Run()
+	_ = f.Close()
+	if err != nil {
+		return fmt.Errorf("opkg install %s: %w -- last lines of %s:\n%s", ipkPath, err, logPath, tailLines(logPath, 15))
+	}
+	return nil
+}
+
+// tailLines returns the last n lines of path, or "" if it can't be read.
+func tailLines(path string, n int) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
+}
+
 // curlOrWget mirrors install.sh's fetch(): curl first (some routers'
-// busybox wget can't do HTTPS), wget as the fallback.
+// busybox wget can't do HTTPS), wget as the fallback. Bounded either way
+// -- a stalled download must not hold a rollback, and the router
+// waiting on it, open-ended.
 func curlOrWget(ctx context.Context, url, dest string) error {
 	if _, err := exec.LookPath("curl"); err == nil {
-		return exec.CommandContext(ctx, "curl", "-fsSL", url, "-o", dest).Run()
+		return exec.CommandContext(ctx, "curl", "-fsSL", "--connect-timeout", "15", "--max-time", "180", url, "-o", dest).Run()
 	}
-	return exec.CommandContext(ctx, "wget", "-q", url, "-O", dest).Run()
+	return exec.CommandContext(ctx, "wget", "-q", "-T", "180", url, "-O", dest).Run()
 }

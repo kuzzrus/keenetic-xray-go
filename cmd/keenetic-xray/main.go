@@ -142,22 +142,39 @@ commands:
   diag                                            one-shot diagnostic bundle to stdout (config with secrets redacted + resolver/addon/rci/keenetic state + log tail)`)
 }
 
-func cmdDaemon(args []string) error {
-	cfg, err := config.Load(configPath())
-	if err != nil {
-		return err
-	}
-
+func cmdDaemon(args []string) (err error) {
 	// The daemon keeps its own rolling log (and xray-core's stderr) so
 	// `keenetic-xray logs` / the bot's 📜 Логи can show recent activity
 	// without SSH. Best-effort: a directory it can't create just means
 	// stdout only.
+	//
+	// Opened first, before anything that can fail (2026-09-27 external
+	// review, BOOT-04): config.Load used to run before this log existed,
+	// so a broken config.json stopped the daemon with nothing in
+	// daemon.log -- and its stderr went to /dev/null under the old init
+	// script, so nowhere at all.
 	var dlog *applog.Writer
 	if w, e := applog.New(daemonLogPath(), 0); e == nil {
 		dlog = w
 		defer dlog.Close()
 	} else {
 		fmt.Fprintln(os.Stderr, "warning: daemon log file unavailable:", e)
+	}
+	restoreStdio, stdioTeed := teeStdio(dlog)
+	defer restoreStdio()
+	fmt.Printf("%s daemon start: %s, pid %d\n", time.Now().Format("15:04:05"), version.String(), os.Getpid())
+	// Deferred after teeStdio's own restore, so it runs first -- while
+	// stdout still reaches daemon.log.
+	defer func() {
+		if err != nil {
+			fmt.Printf("%s daemon exiting: %v\n", time.Now().Format("15:04:05"), err)
+			sysLog("daemon exiting: " + err.Error())
+		}
+	}()
+
+	cfg, err := config.Load(configPath())
+	if err != nil {
+		return err
 	}
 
 	d := failover.NewDaemon(failover.Paths{
@@ -204,7 +221,10 @@ func cmdDaemon(args []string) error {
 		fmt.Printf("starting failover daemon (primary=%s, backup=%s)\n", p.Remark, b.Remark)
 	}
 
-	logw := io.MultiWriter(os.Stdout, applog.Tee(dlog))
+	var logw io.Writer = os.Stdout // teeStdio already copies it into daemon.log
+	if !stdioTeed {
+		logw = io.MultiWriter(os.Stdout, applog.Tee(dlog))
+	}
 	logf := func(format string, a ...any) {
 		fmt.Fprintf(logw, time.Now().Format("15:04:05")+" "+format+"\n", a...)
 	}
@@ -231,12 +251,24 @@ func cmdDaemon(args []string) error {
 	// started only after this whole chain, further below) unreachable
 	// for the entire wait. Concurrent, the wall-clock cost collapses from
 	// the sum of all six to roughly the slowest one.
+	//
+	// And xray no longer waits for any of it (2026-09-27 external review,
+	// BOOT-03): the failover daemon -- the production instance -- starts
+	// right after the WG-transport step and alongside the rest. That one
+	// step has to go first: it may re-key the Keenetic side and save the
+	// new key into cfg, which the production config is generated from.
+	// The other five only touch Keenetic's own settings and only read
+	// cfg, so they run fine next to a production instance that is
+	// already up -- and until they finish, Proxy0's health check keeps
+	// clients on the ISP rather than on a dead proxy.
 	startupBegin := time.Now()
+	applyWGTransportAtStartup(cfg, logf)
+	runErr := make(chan error, 1)
+	go func() { runErr <- d.Run(ctx) }()
 	var startupWG sync.WaitGroup
 	for _, fn := range []func(){
 		func() { applyProxy0AtStartup(cfg, logf) },
 		func() { applyRoutesAtStartup(cfg, logf) },
-		func() { applyWGTransportAtStartup(cfg, logf) },
 		func() { applyMSSClamp(cfg, logf) },
 		func() { applyDNSAtStartup(cfg, logf) },
 		func() { applyAdaptiveRouteAtStartup(cfg, logf) },
@@ -248,7 +280,7 @@ func cmdDaemon(args []string) error {
 		}(fn)
 	}
 	startupWG.Wait()
-	logf("startup: reconciled proxy0/routes/wg-transport/mss/dns/adaptive-route in %s", time.Since(startupBegin).Round(time.Millisecond))
+	logf("startup: reconciled wg-transport, then proxy0/routes/mss/dns/adaptive-route alongside xray, in %s", time.Since(startupBegin).Round(time.Millisecond))
 	// Synchronous, bounded, and deliberately AFTER the group above rather
 	// than folded into it: see georangesBootstrap's own doc comment for
 	// why ClrFast/ClrSoft's ExcludedRangeLookup veto must never race its
@@ -272,60 +304,17 @@ func cmdDaemon(args []string) error {
 	watchReconcileSignal(ctx, func() { reconcileOnce(ctx, d, logf) }) // SIGUSR1 from the netfilter.d hook
 
 	if cfg.Agent.Enabled {
-		opts, err := loadAgentOptions(cfg)
+		h, err := startAgent(ctx, cfg, d, logf, presetDrift)
 		if err != nil {
-			return fmt.Errorf("agent is enabled but misconfigured: %w", err)
+			// Used to be `return err` (2026-09-27 external review,
+			// BOOT-03): the whole daemon, proxy included, down over a
+			// bot setting. The bot is a convenience; the proxy is the job.
+			logf("agent: %v -- running without the bot, the proxy is unaffected; fix the agent settings and restart the daemon", err)
+			sysLog("agent not started: " + err.Error())
+			go drainEvents(ctx, presetDrift) // nobody else will read it now
+		} else {
+			handler = h
 		}
-		postUpd := make(chan botcontrol.Event, 1)
-		go watchPostUpdate(ctx, d.State, postUpdateProbe(cfg), selfUpdateMarkerPath(), postUpd, logf)
-		autoRollback := make(chan botcontrol.Event, 1)
-		go watchAutoRollbackNotice(ctx, autoRollback)
-		selfUpdateFail := make(chan botcontrol.Event, 1)
-		opts.Events = botcontrol.Merge(ctx,
-			botcontrol.WatchStuckPrimary(ctx, d.Snapshot,
-				cfg.Failover.PrimaryStuckWarnAfter(),
-				botcontrol.FailoverEvents(ctx, d.Events())),
-			postUpd,
-			autoRollback,
-			presetDrift,
-			selfUpdateFail,
-		)
-		// CFG-01: RouterHandler gets its own independently-loaded config,
-		// never the same *config.Config pointer as the daemon's cfg above
-		// -- see RouterHandler.Config's own doc comment for why sharing
-		// it was a real data race (this handler's command dispatch runs
-		// on its own goroutine, unsynchronized with the daemon's Run
-		// goroutine).
-		botCfg, err := config.Load(configPath())
-		if err != nil {
-			return fmt.Errorf("agent is enabled but config could not be loaded a second time: %w", err)
-		}
-		handler = &botcontrol.RouterHandler{
-			Daemon: d, Config: botCfg, ConfigPath: configPath(),
-			XrayBinary: xrayBinaryPath(), OptPath: optPath(),
-			InitScript:             initScript,
-			CronFile:               cronFilePath(),
-			WatchdogScript:         watchdogScriptPath(),
-			WatchdogLog:            watchdogLogPath(),
-			DaemonLog:              daemonLogPath(),
-			Logf:                   logf,
-			QualityStatePath:       qualityStatePath(),
-			SelfUpdateMarker:       selfUpdateMarkerPath(),
-			SelfUpdateLog:          selfUpdateLogPath(),
-			SelfUpdateLock:         selfUpdateLockPath(),
-			SelfUpdateEvents:       selfUpdateFail,
-			AdaptiveRouteStatePath: adaptiveRouteStatePath(),
-		}
-		opts.StatusFunc = func(ctx context.Context) string {
-			out, _ := handler.Handle(ctx, botcontrol.Command{Action: botcontrol.ActionStatus})
-			return out
-		}
-		go func() {
-			if err := botcontrol.Run(ctx, opts, handler); err != nil && ctx.Err() == nil {
-				fmt.Fprintln(os.Stderr, "agent stopped:", err)
-			}
-		}()
-		fmt.Println("bot-control agent enabled, polling", opts.ControlServerURL)
 	}
 
 	go func() {
@@ -367,8 +356,71 @@ func cmdDaemon(args []string) error {
 		}
 	}()
 
-	if err := d.Run(ctx); err != nil && ctx.Err() == nil {
+	// Run was started right after the WG-transport step, see above.
+	if err := <-runErr; err != nil && ctx.Err() == nil {
 		return err
 	}
 	return nil
+}
+
+// startAgent wires up and launches the bot-control agent, returning its
+// command handler. Both config reads happen before anything is started,
+// so an error leaves nothing half-running; cmdDaemon then carries on
+// without the agent.
+func startAgent(ctx context.Context, cfg *config.Config, d *failover.Daemon, logf func(string, ...any), presetDrift chan botcontrol.Event) (*botcontrol.RouterHandler, error) {
+	opts, err := loadAgentOptions(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("enabled but misconfigured: %w", err)
+	}
+	// CFG-01: RouterHandler gets its own independently-loaded config,
+	// never the same *config.Config pointer as the daemon's cfg -- see
+	// RouterHandler.Config's own doc comment for why sharing it was a real
+	// data race (this handler's command dispatch runs on its own
+	// goroutine, unsynchronized with the daemon's Run goroutine).
+	botCfg, err := config.Load(configPath())
+	if err != nil {
+		return nil, fmt.Errorf("enabled but config could not be loaded a second time: %w", err)
+	}
+
+	postUpd := make(chan botcontrol.Event, 1)
+	go watchPostUpdate(ctx, d.State, postUpdateProbe(cfg), selfUpdateMarkerPath(), postUpd, logf)
+	autoRollback := make(chan botcontrol.Event, 1)
+	go watchAutoRollbackNotice(ctx, autoRollback)
+	selfUpdateFail := make(chan botcontrol.Event, 1)
+	opts.Events = botcontrol.Merge(ctx,
+		botcontrol.WatchStuckPrimary(ctx, d.Snapshot,
+			cfg.Failover.PrimaryStuckWarnAfter(),
+			botcontrol.FailoverEvents(ctx, d.Events())),
+		postUpd,
+		autoRollback,
+		presetDrift,
+		selfUpdateFail,
+	)
+	handler := &botcontrol.RouterHandler{
+		Daemon: d, Config: botCfg, ConfigPath: configPath(),
+		XrayBinary: xrayBinaryPath(), OptPath: optPath(),
+		InitScript:             initScript,
+		CronFile:               cronFilePath(),
+		WatchdogScript:         watchdogScriptPath(),
+		WatchdogLog:            watchdogLogPath(),
+		DaemonLog:              daemonLogPath(),
+		Logf:                   logf,
+		QualityStatePath:       qualityStatePath(),
+		SelfUpdateMarker:       selfUpdateMarkerPath(),
+		SelfUpdateLog:          selfUpdateLogPath(),
+		SelfUpdateLock:         selfUpdateLockPath(),
+		SelfUpdateEvents:       selfUpdateFail,
+		AdaptiveRouteStatePath: adaptiveRouteStatePath(),
+	}
+	opts.StatusFunc = func(ctx context.Context) string {
+		out, _ := handler.Handle(ctx, botcontrol.Command{Action: botcontrol.ActionStatus})
+		return out
+	}
+	go func() {
+		if err := botcontrol.Run(ctx, opts, handler); err != nil && ctx.Err() == nil {
+			fmt.Fprintln(os.Stderr, "agent stopped:", err)
+		}
+	}()
+	fmt.Println("bot-control agent enabled, polling", opts.ControlServerURL)
+	return handler, nil
 }

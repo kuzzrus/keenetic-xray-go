@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -33,8 +34,14 @@ func TestCmdTransport_ModeOverride(t *testing.T) {
 func TestCmdTransport_MSSClamp(t *testing.T) {
 	cfgFile := filepath.Join(t.TempDir(), "config.json")
 	t.Setenv("KEENETIC_XRAY_CONFIG", cfgFile)
-	// Proxy0 is disabled by default, so `transport mss` only persists the
-	// value and never touches iptables here.
+	// Proxy0 is *on* in config.Default() -- this used to say the opposite
+	// -- and `transport mss` then applies the clamp to the real firewall.
+	// Run as root on a Linux box, that left a live TCPMSS rule behind
+	// (2026-09-27, found on a dev box: the external review's N3, the
+	// iptables edition). Off here, so the command only persists the value.
+	if err := os.WriteFile(cfgFile, []byte(`{"proxy0":{"enabled":false}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := run([]string{"transport", "mss", "1400"}); err != nil {
 		t.Fatalf("transport mss 1400: %v", err)

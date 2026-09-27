@@ -169,6 +169,11 @@ func applyMSSClamp(cfg *config.Config, logf func(string, ...any)) {
 		}
 		return
 	}
+	// Only on a Keenetic router -- see reconcileMSSClamp. Clearing our own
+	// rule above stays unconditional: harmless anywhere.
+	if !keenetic.Available() {
+		return
+	}
 	if err := keenetic.EnsureIptables(ctx); err != nil {
 		logf("mss-clamp: iptables unavailable, skipping (%v)", err)
 		return

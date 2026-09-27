@@ -147,8 +147,9 @@ func Proxy0HealthCheck(ctx context.Context) (p PingCheckProfile, ok bool, err er
 
 // unbindCmd takes whatever ping-check profile iface has off it. No
 // argument: KeeneticOS rejects the profile name in this position
-// ("Command::Base error[7405602]: argument parse error", confirmed on a
-// real router 2026-09-27).
+// ("Command::Base error[7405602]: argument parse error"), while the bare
+// form answers "Reset ping-check profile for interface" -- both
+// confirmed on a real router 2026-09-27.
 func unbindCmd(iface string) string { return "interface " + iface + " no ping-check profile" }
 
 // EnsureProxy0HealthCheck makes sure HealthCheckProfile exists with the
@@ -239,8 +240,9 @@ func HealthCheckSummary() string {
 
 // removeHealthCheck deletes the profile, unbinding it first where it can.
 // The delete is the part that has to succeed, and it does even while the
-// profile is still bound (confirmed on a real router 2026-09-27); the
-// unbind is best-effort tidiness in front of it.
+// profile is still bound -- taking the binding with it, no dangling
+// reference left in the interface config (both confirmed on a real
+// router 2026-09-27). The unbind is best-effort tidiness in front of it.
 func removeHealthCheck(ctx context.Context, cur PingCheckProfile) error {
 	for _, b := range cur.Bindings {
 		_, _ = ndmcRun(ctx, unbindCmd(b.Interface))

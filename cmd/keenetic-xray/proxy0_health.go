@@ -12,7 +12,7 @@ import (
 
 // proxy0HealthRetryAfter is how long reconcile leaves the health check
 // alone after an attempt to install it failed. An attempt that gets past
-// the initial read writes several ndmc commands and a `system
+// the initial reads writes several ndmc commands and a `system
 // configuration save` -- a flash write -- so a failure that persists (a
 // firmware whose `show ping-check` the parser misreads, say) must not
 // repeat on every reconcileInterval tick. Daemon startup and the CLI
@@ -74,16 +74,35 @@ func (s *proxy0HealthState) firmwareOK(ctx context.Context) (ok, first bool) {
 	return true, false
 }
 
+// proxy0InUse reports whether the Proxy interface cfg names exists on the
+// router and points at this project's inbound -- the condition under
+// which a dead xray black-holes whatever is routed through it, and so
+// the condition for needing the health check.
+//
+// Deliberately not cfg.Proxy0.Enabled. That flag only says whether the
+// daemon manages the upstream, and the setup wizard's WG-transport and
+// "leave Keenetic alone" choices, `install.sh --no-proxy0` and `proxy0
+// off` all clear it without the interface necessarily going away.
+// Confirmed on a real router (2026-09-27): proxy0.enabled false, Proxy0
+// up at 192.168.1.1:10081 with twenty object-groups routed through it --
+// exactly the setup that took the network down when the USB failed to
+// mount, and one the first version of this check would have skipped.
+func proxy0InUse(ctx context.Context, cfg *config.Config) (bool, error) {
+	_, port, ok, err := keenetic.Proxy0Upstream(ctx, cfg.Proxy0.Interface)
+	if err != nil {
+		return false, err
+	}
+	return ok && port == cfg.Proxy0Port(), nil
+}
+
 // applyProxy0HealthCheck brings the Keenetic-side health check on the
-// Proxy interface in line with cfg: installed and bound by default,
-// removed when proxy0.disable_health_check is set. Quiet whenever nothing
-// changes, since reconcile calls it every tick. fromReconcile honours
+// Proxy interface in line with cfg: installed and bound whenever the
+// interface is in use (proxy0InUse), removed when
+// proxy0.disable_health_check is set. Quiet whenever nothing changes,
+// since reconcile calls it every tick. fromReconcile honours
 // proxy0HealthRetryAfter after a failure; startup and the CLI always try.
 // See keenetic.HealthCheckProfile for what the check does and why.
 func applyProxy0HealthCheck(ctx context.Context, cfg *config.Config, logf func(string, ...any), fromReconcile bool) {
-	if !cfg.Proxy0.Enabled {
-		return
-	}
 	iface := cfg.Proxy0.IfaceName()
 
 	if cfg.Proxy0.DisableHealthCheck {
@@ -99,6 +118,9 @@ func applyProxy0HealthCheck(ctx context.Context, cfg *config.Config, logf func(s
 
 	now := time.Now()
 	if fromReconcile && !proxy0Health.due(now) {
+		return
+	}
+	if inUse, err := proxy0InUse(ctx, cfg); err != nil || !inUse {
 		return
 	}
 	if ok, first := proxy0Health.firmwareOK(ctx); !ok {
@@ -123,17 +145,23 @@ func applyProxy0HealthCheck(ctx context.Context, cfg *config.Config, logf func(s
 // purgeProxy0 is prerm --purge's share of the Proxy interface. Nothing
 // used to touch it there, so after a purge it stayed up pointing at an
 // inbound that no longer existed -- and every route the operator still
-// sent through it black-holed. It goes down first; the health check is
-// removed only once it is, because the check is exactly what keeps a
-// Proxy interface that is still up from black-holing. Never leave one up
-// without the other.
+// sent through it black-holed. It goes down first when it is ours (by
+// proxy0InUse, not proxy0.enabled -- same reasoning), and the health
+// check is removed only after that, because the check is exactly what
+// keeps a Proxy interface that is still up from black-holing. Never
+// leave one up without the other.
 func purgeProxy0(ctx context.Context) {
 	cfg, err := config.Load(configPath())
 	if err != nil {
 		fmt.Println("warning: could not read the config, leaving the Proxy interface and its health check as they are:", err)
 		return
 	}
-	if cfg.Proxy0.Enabled {
+	inUse, err := proxy0InUse(ctx, cfg)
+	if err != nil {
+		fmt.Println("warning: could not read the Proxy interface, leaving it and its health check as they are:", err)
+		return
+	}
+	if inUse {
 		if err := keenetic.DisableProxy0(ctx, cfg.Proxy0.Interface); err != nil {
 			fmt.Printf("warning: could not bring %s down, keeping its health check so it can still fall back to the ISP: %v\n",
 				cfg.Proxy0.IfaceName(), err)
@@ -145,24 +173,28 @@ func purgeProxy0(ctx context.Context) {
 	}
 }
 
-// checkProxy0Health is doctor's line for the health check.
+// checkProxy0Health is doctor's line for the health check. Silent when
+// the Proxy interface is not in use -- there is nothing to protect.
 func checkProxy0Health(cfg *config.Config, check func(bool, string)) {
-	iface := cfg.Proxy0.IfaceName()
-	if cfg.Proxy0.DisableHealthCheck {
-		check(true, fmt.Sprintf("%s health check disabled in config -- listed traffic has no ISP fallback while xray is down", iface))
-		return
-	}
 	if !keenetic.Available() {
-		return // checkProxy0 already reported this
+		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	check(proxy0HealthLine(ctx, iface))
+	if inUse, err := proxy0InUse(ctx, cfg); err != nil || !inUse {
+		return
+	}
+	check(proxy0HealthLine(ctx, cfg))
 }
 
 // proxy0HealthLine renders the check's live state as doctor's (ok, msg)
-// pair; `proxy0 show` prints the same message.
-func proxy0HealthLine(ctx context.Context, iface string) (bool, string) {
+// pair; `proxy0 show` prints the same message. Assumes the interface is
+// in use.
+func proxy0HealthLine(ctx context.Context, cfg *config.Config) (bool, string) {
+	iface := cfg.Proxy0.IfaceName()
+	if cfg.Proxy0.DisableHealthCheck {
+		return true, fmt.Sprintf("%s health check disabled in config -- listed traffic has no ISP fallback while xray is down", iface)
+	}
 	hc, ok, err := keenetic.Proxy0HealthCheck(ctx)
 	if err != nil {
 		return false, fmt.Sprintf("%s health check: could not read `show ping-check`: %v", iface, err)

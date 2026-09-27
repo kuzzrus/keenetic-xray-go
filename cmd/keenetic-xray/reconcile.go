@@ -130,16 +130,16 @@ func reconcileSusanin(ctx context.Context, logf func(string, ...any)) {
 
 // reconcileProxy0 keeps the Proxy interface's two router-side pieces in
 // line with cfg, each on its own: the upstream pointing at the local
-// inbound, and the health check that lets `auto` routes fall back to the
-// ISP while xray is down (applyProxy0HealthCheck). Both are a single
-// read on the healthy path.
+// inbound (only while proxy0.enabled -- the daemon manages it), and the
+// health check that lets `auto` routes fall back to the ISP while xray
+// is down (applyProxy0HealthCheck -- whenever the interface is in use,
+// enabled or not; see proxy0InUse). Reads only, on the healthy path.
 func reconcileProxy0(ctx context.Context, cfg *config.Config, logf func(string, ...any)) {
-	if !cfg.Proxy0.Enabled {
-		return
-	}
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	reconcileProxy0Upstream(cctx, cfg, logf)
+	if cfg.Proxy0.Enabled {
+		reconcileProxy0Upstream(cctx, cfg, logf)
+	}
 	applyProxy0HealthCheck(cctx, cfg, logf, true)
 }
 

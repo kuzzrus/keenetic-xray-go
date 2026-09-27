@@ -65,10 +65,8 @@ func proxy0Show(cfg *config.Config) error {
 	} else {
 		fmt.Printf("%s upstream: not set\n", iface)
 	}
-	if cfg.Proxy0.DisableHealthCheck {
-		fmt.Println("health check: disabled in config -- no ISP fallback while xray is down")
-	} else {
-		_, msg := proxy0HealthLine(ctx, iface)
+	if ok && port == cfg.Proxy0Port() { // in use, enabled or not -- see proxy0InUse
+		_, msg := proxy0HealthLine(ctx, cfg)
 		fmt.Println(msg)
 	}
 	return nil
@@ -201,15 +199,22 @@ func proxy0Off(cfg *config.Config) error {
 }
 
 // applyProxy0AtStartup is called by the daemon: if Proxy0 is enabled,
-// (re)assert the upstream so a firmware event that dropped it self-heals.
-// Best-effort -- failures are logged, not fatal.
+// (re)assert the upstream so a firmware event that dropped it self-heals;
+// then bring the health check in line, regardless of Enabled -- see
+// proxy0InUse for why. Best-effort -- failures are logged, not fatal.
 func applyProxy0AtStartup(cfg *config.Config, logf func(string, ...any)) {
-	if !cfg.Proxy0.Enabled || !keenetic.Available() {
+	if !keenetic.Available() {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	if cfg.Proxy0.Enabled {
+		configureProxy0AtStartup(ctx, cfg, logf)
+	}
+	applyProxy0HealthCheck(ctx, cfg, logf, false)
+}
 
+func configureProxy0AtStartup(ctx context.Context, cfg *config.Config, logf func(string, ...any)) {
 	ip, err := keenetic.LANIP(ctx, cfg.Proxy0.LANIP)
 	if err != nil {
 		logf("proxy0: LAN IP detection failed: %v", err)
@@ -225,5 +230,4 @@ func applyProxy0AtStartup(cfg *config.Config, logf func(string, ...any)) {
 		return
 	}
 	logf("proxy0: %s -> %s:%d", cfg.Proxy0.IfaceName(), ip, cfg.Proxy0Port())
-	applyProxy0HealthCheck(ctx, cfg, logf, false)
 }

@@ -194,12 +194,58 @@ func TestRemoveHealthCheck_UnbindsThenDeletes(t *testing.T) {
 	if err != nil || !removed {
 		t.Fatalf("removed=%v err=%v", removed, err)
 	}
-	joined := strings.Join(f.sent, "\n")
-	iUnbind := strings.Index(joined, "interface Proxy0 no ping-check profile kxray")
-	iDelete := strings.Index(joined, "\nno ping-check profile kxray")
+	iUnbind, iDelete := indexOf(f.sent, "interface Proxy0 no ping-check profile"), indexOf(f.sent, "no ping-check profile kxray")
 	if iUnbind < 0 || iDelete < 0 || iUnbind > iDelete {
-		t.Errorf("want unbind before delete:\n%s", joined)
+		t.Errorf("want unbind before delete: %q", f.sent)
 	}
+	// The router rejects the profile name in the unbind ("argument parse
+	// error", confirmed 2026-09-27) -- it must never come back.
+	if indexOf(f.sent, "interface Proxy0 no ping-check profile kxray") >= 0 {
+		t.Errorf("unbind carries the profile name, which the router rejects: %q", f.sent)
+	}
+}
+
+// TestRemoveHealthCheck_DeletesEvenIfUnbindFails: the delete works on a
+// still-bound profile (confirmed on a real router), so a failed unbind
+// must not stop it.
+func TestRemoveHealthCheck_DeletesEvenIfUnbindFails(t *testing.T) {
+	f := &fakeRouter{
+		pingCheck: realShowPingCheck,
+		fail:      map[string]error{"interface Proxy0 no ping-check profile": errors.New("argument parse error")},
+	}
+	f.install(t)
+	if _, err := RemoveHealthCheck(context.Background()); err != nil {
+		t.Fatalf("a failed unbind aborted the removal: %v", err)
+	}
+	if indexOf(f.sent, "no ping-check profile kxray") < 0 {
+		t.Errorf("profile never deleted: %q", f.sent)
+	}
+}
+
+// TestEnsureHealthCheck_LeftoverBindingIsNotChurn: a stale binding on a
+// former interface that can't be removed must not make every reconcile
+// tick rewrite the profile and save the config to flash.
+func TestEnsureHealthCheck_LeftoverBindingIsNotChurn(t *testing.T) {
+	two := strings.Replace(tlsProfileOutput("pass", 0), "name: Proxy0",
+		"name: Proxy1\n\n            interface:\n                     name: Proxy0", 1)
+	if ps := parsePingCheck(two); len(ps) != 3 || len(ps[2].Bindings) != 2 {
+		t.Fatalf("fixture should bind kxray to two interfaces, parsed %+v", ps)
+	}
+	f := &fakeRouter{pingCheck: two}
+	f.install(t)
+	changed, err := EnsureProxy0HealthCheck(context.Background(), "Proxy0")
+	if err != nil || changed || len(f.sent) != 1 {
+		t.Errorf("changed=%v err=%v sent=%q, want a read-only no-op", changed, err, f.sent)
+	}
+}
+
+func indexOf(cmds []string, want string) int {
+	for i, c := range cmds {
+		if c == want {
+			return i
+		}
+	}
+	return -1
 }
 
 func TestProxyIPLayer_RealRouterOutput(t *testing.T) {
@@ -246,7 +292,7 @@ func TestEnsureHealthCheck_MovesBindingToNewInterface(t *testing.T) {
 	}
 	joined := strings.Join(f.sent, "\n")
 	for _, want := range []string{
-		"interface Proxy0 no ping-check profile kxray",
+		"interface Proxy0 no ping-check profile",
 		"interface Proxy1 ping-check profile kxray",
 	} {
 		if !strings.Contains(joined, want) {

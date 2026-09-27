@@ -145,10 +145,16 @@ func Proxy0HealthCheck(ctx context.Context) (p PingCheckProfile, ok bool, err er
 	return PingCheckProfile{}, false, nil
 }
 
+// unbindCmd takes whatever ping-check profile iface has off it. No
+// argument: KeeneticOS rejects the profile name in this position
+// ("Command::Base error[7405602]: argument parse error", confirmed on a
+// real router 2026-09-27).
+func unbindCmd(iface string) string { return "interface " + iface + " no ping-check profile" }
+
 // EnsureProxy0HealthCheck makes sure HealthCheckProfile exists with the
-// verified settings and is bound to iface, and only iface. A no-op -- no
-// writes, no save -- when it already is, so it is cheap enough for every
-// reconcile tick. Reports whether it changed anything.
+// verified settings and is bound to iface. A no-op -- no writes, no save
+// -- when it already is, so it is cheap enough for every reconcile tick.
+// Reports whether it changed anything.
 //
 // Order matters: `mode tls` goes first and the bind goes last. A firmware
 // that rejects tls (KeeneticOS before 4.0) must never end up with the
@@ -163,7 +169,9 @@ func EnsureProxy0HealthCheck(ctx context.Context, iface string) (changed bool, e
 	if err != nil {
 		return false, err
 	}
-	if exists && cur.wanted() && cur.BoundTo(iface) != nil && len(cur.Bindings) == 1 {
+	// Extra bindings on other interfaces deliberately don't count against
+	// the no-op: see the best-effort unbind below.
+	if exists && cur.wanted() && cur.BoundTo(iface) != nil {
 		return false, nil
 	}
 
@@ -186,9 +194,12 @@ func EnsureProxy0HealthCheck(ctx context.Context, iface string) (changed bool, e
 	}
 	for _, b := range cur.Bindings {
 		if b.Interface != iface {
-			if _, err := ndmcRun(ctx, "interface "+b.Interface+" no ping-check profile "+HealthCheckProfile); err != nil {
-				return true, fmt.Errorf("unbinding %s from %s: %w", HealthCheckProfile, b.Interface, err)
-			}
+			// Best-effort: a check left on a former interface is
+			// harmless, nothing is routed through it any more. And since
+			// the no-op test above ignores such leftovers, a failure here
+			// can't turn into a rewrite -- and a flash write -- on every
+			// reconcile tick.
+			_, _ = ndmcRun(ctx, unbindCmd(b.Interface))
 		}
 	}
 	for _, c := range []string{"interface " + iface + " ping-check profile " + HealthCheckProfile, "system configuration save"} {
@@ -226,13 +237,15 @@ func HealthCheckSummary() string {
 	return fmt.Sprintf("%s %s:%d", healthCheckMode, healthCheckHost, healthCheckPort)
 }
 
+// removeHealthCheck deletes the profile, unbinding it first where it can.
+// The delete is the part that has to succeed, and it does even while the
+// profile is still bound (confirmed on a real router 2026-09-27); the
+// unbind is best-effort tidiness in front of it.
 func removeHealthCheck(ctx context.Context, cur PingCheckProfile) error {
-	var cmds []string
 	for _, b := range cur.Bindings {
-		cmds = append(cmds, "interface "+b.Interface+" no ping-check profile "+HealthCheckProfile)
+		_, _ = ndmcRun(ctx, unbindCmd(b.Interface))
 	}
-	cmds = append(cmds, "no ping-check profile "+HealthCheckProfile, "system configuration save")
-	for _, c := range cmds {
+	for _, c := range []string{"no ping-check profile " + HealthCheckProfile, "system configuration save"} {
 		if _, err := ndmcRun(ctx, c); err != nil {
 			return fmt.Errorf("ndmc %q: %w", c, err)
 		}

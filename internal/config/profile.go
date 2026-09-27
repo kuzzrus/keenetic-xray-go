@@ -491,6 +491,21 @@ type Proxy0Config struct {
 	// 0 -> the default DefaultMSSClamp; a negative value disables it;
 	// a positive value is used as-is (1200..1452).
 	MSSClamp int `json:"mss_clamp,omitempty"`
+
+	// DisableHealthCheck turns off the Keenetic-side connectivity check
+	// this project binds to the Proxy interface (internal/keenetic.
+	// HealthCheckProfile). With the check on -- the default -- a dead
+	// xray makes Keenetic drop the interface's IP layer and every `auto`
+	// route through it falls back to the ISP: blocked destinations stay
+	// unreachable, as they would without a tunnel, but everything else
+	// keeps working. Without it the interface stays up with nothing
+	// behind it -- its upstream is the router itself, always reachable --
+	// and every listed destination black-holes until xray is back, which
+	// took a whole network offline when the USB stick with Entware failed
+	// to mount at boot (2026-09-26). Set this only to get that behaviour
+	// on purpose, as a kill switch that never lets listed traffic leave
+	// through the ISP. See the proxy0-no-failover memory.
+	DisableHealthCheck bool `json:"disable_health_check,omitempty"`
 }
 
 // DefaultMSSClamp is the MSS applied when Proxy0.MSSClamp is 0. Chosen

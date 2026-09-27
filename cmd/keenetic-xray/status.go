@@ -125,6 +125,7 @@ func cmdDoctor(args []string) error {
 	if cfg.Proxy0.Enabled {
 		checkProxy0(cfg, check)
 	}
+	checkProxy0Health(cfg, check) // enabled or not -- see proxy0InUse
 
 	if cfg.RCI.Enabled {
 		if _, _, err := rciProbe(cfg.RCI.BaseURL()); err != nil {

@@ -237,6 +237,9 @@ func cmdPrermCleanup(args []string) error {
 		if err := l7capture.ClearRules(ctx); err != nil {
 			fmt.Println("warning: could not clear the L7 SNI capture rule:", err)
 		}
+		// The Proxy interface itself: down first, then its health check
+		// -- see purgeProxy0 for why that order.
+		purgeProxy0(ctx)
 	}
 	return install.PrermCleanup(installPaths(), purge)
 }

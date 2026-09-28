@@ -95,6 +95,18 @@ func proxy0InUse(ctx context.Context, cfg *config.Config) (bool, error) {
 	return ok && port == cfg.Proxy0Port(), nil
 }
 
+// proxy0PointsHere is proxy0InUse as the daemon's failover hook
+// (Daemon.SetProxyInUse): bounded, and false off a Keenetic router. It
+// runs on the failover goroutine, so it must not hang.
+func proxy0PointsHere(ctx context.Context, cfg *config.Config) (bool, error) {
+	if !keenetic.Available() {
+		return false, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	return proxy0InUse(ctx, cfg)
+}
+
 // applyProxy0HealthCheck brings the Keenetic-side health check on the
 // Proxy interface in line with cfg: installed and bound whenever the
 // interface is in use (proxy0InUse), removed when

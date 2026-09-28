@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
@@ -46,6 +47,16 @@ type realActions struct {
 	pretestNaive *xrayctl.Supervisor
 
 	liveRole Role // the role production was last successfully switched to
+
+	// proxyInUse, when set, reports whether Keenetic's Proxy interface
+	// points at the production inbound -- see lanInbound. nil (tests,
+	// anything off a router) means it never does.
+	proxyInUse func(ctx context.Context, cfg *config.Config) (bool, error)
+	// inboundOnLAN is whether the production config last written binds
+	// all interfaces rather than loopback. Written by SwitchLiveTo on the
+	// Run goroutine, read by the reconcile loop (Daemon.InboundOnLAN),
+	// hence atomic.
+	inboundOnLAN atomic.Bool
 
 	// probes is the recent health-check history, appended by ProbeLive /
 	// ProbeIsolated. Only ever touched on the Run goroutine (Tick calls
@@ -344,12 +355,10 @@ func (a *realActions) SwitchLiveTo(ctx context.Context, role Role) error {
 		sidecarPort = a.naiveProdPort()
 	}
 
-	// When Proxy0 or the WG transport is enabled the production inbound
-	// must be reachable from Keenetic over the LAN, so bind all
-	// interfaces rather than loopback. The pretest instance stays
-	// loopback-only.
+	// The pretest instance stays loopback-only.
+	lan := a.lanInbound(ctx)
 	listen := ""
-	if a.cfg.Proxy0.Enabled || a.cfg.WGTransport.Enabled {
+	if lan {
 		listen = "0.0.0.0"
 	}
 	data, err := config.GenerateXrayConfig(config.XrayConfigOptions{
@@ -369,12 +378,43 @@ func (a *realActions) SwitchLiveTo(ctx context.Context, role Role) error {
 	if err := os.WriteFile(a.paths.ProductionConfig, data, 0o600); err != nil {
 		return fmt.Errorf("writing production config: %w", err)
 	}
+	a.inboundOnLAN.Store(lan)
 
 	if err := a.prod.Restart(); err != nil {
 		return err
 	}
 	a.liveRole = role
 	return nil
+}
+
+// lanInbound reports whether the production inbound has to be reachable
+// from Keenetic over the LAN -- bound to all interfaces, not loopback.
+// It does whenever Proxy0 or the WG transport carries traffic into it.
+// proxy0.enabled and wg_transport.enabled say so directly, but Proxy0
+// can point at the inbound with proxy0.enabled off -- the flag only says
+// whether the daemon manages the upstream (see cmd/keenetic-xray's
+// proxy0InUse) -- so the router is asked about that too. Deciding by the
+// flags alone left a router set up that way (confirmed live, 2026-09-27)
+// working only for as long as the WG transport stayed on: turning it off
+// rebound xray to loopback, and Proxy0 got "connection refused". When
+// the router can't answer, the last decision stands.
+func (a *realActions) lanInbound(ctx context.Context) bool {
+	if a.cfg.Proxy0.Enabled || a.cfg.WGTransport.Enabled {
+		return true
+	}
+	if a.proxyInUse == nil {
+		return false
+	}
+	inUse, err := a.proxyInUse(ctx, a.cfg)
+	if err != nil {
+		prev, where := a.inboundOnLAN.Load(), "loopback"
+		if prev {
+			where = "all interfaces"
+		}
+		fmt.Printf("failover: can't tell whether %s points at the inbound (%v) -- keeping it on %s\n", a.cfg.Proxy0.IfaceName(), err, where)
+		return prev
+	}
+	return inUse
 }
 
 func (a *realActions) StartIsolatedPretest(ctx context.Context) error {
@@ -833,6 +873,36 @@ func (d *Daemon) ReloadConfig(ctx context.Context, fresh *config.Config) bool {
 			_ = d.actions.SwitchLiveTo(ctx, d.actions.liveRole)
 		}
 	})
+}
+
+// SetProxyInUse installs the check that tells whether Keenetic's Proxy
+// interface points at the production inbound, for the case the config
+// flags don't cover -- see realActions.lanInbound. Call before Run.
+func (d *Daemon) SetProxyInUse(fn func(ctx context.Context, cfg *config.Config) (bool, error)) {
+	d.actions.proxyInUse = fn
+}
+
+// InboundOnLAN reports whether the production config last written binds
+// all interfaces rather than loopback. Safe to call from any goroutine.
+func (d *Daemon) InboundOnLAN() bool { return d.actions.inboundOnLAN.Load() }
+
+// RebindInbound regenerates the production config on the role it is
+// already on, so realActions.lanInbound gets asked again -- for when
+// Proxy0 has come to point at a loopback-only inbound without anything
+// telling the daemon (set up by hand in the web UI with proxy0.enabled
+// off, say). A no-op unless production is running and on loopback.
+// Reports whether it moved the inbound to all interfaces.
+func (d *Daemon) RebindInbound(ctx context.Context) bool {
+	var rebound bool
+	d.do(ctx, func(ctx context.Context) {
+		if !d.actions.prod.Running() || d.actions.inboundOnLAN.Load() {
+			return
+		}
+		if d.actions.SwitchLiveTo(ctx, d.actions.liveRole) == nil {
+			rebound = d.actions.inboundOnLAN.Load()
+		}
+	})
+	return rebound
 }
 
 // Run starts the production xray-core process on primary and then drives

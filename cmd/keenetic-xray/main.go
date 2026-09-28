@@ -184,6 +184,7 @@ func cmdDaemon(args []string) (err error) {
 		PretestConfig:    pretestConfigPath(),
 		XrayStderr:       applog.Tee(dlog),
 	}, cfg)
+	d.SetProxyInUse(proxy0PointsHere)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

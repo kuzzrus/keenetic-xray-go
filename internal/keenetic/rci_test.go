@@ -135,7 +135,7 @@ func TestNdmcRun_RCIFallsThroughForOtherCommands(t *testing.T) {
 	for _, cmd := range []string{
 		"show interface Wireguard0",
 		"dns-proxy tls upstream 9.9.9.9 sni dns.quad9.net",
-		"show object-group fqdn keenetic-xray-telegram",
+		"show object-group fqdn",
 	} {
 		out, err := ndmcRun(ctx, cmd)
 		if err != nil || out != "exec:"+cmd {

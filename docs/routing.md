@@ -59,14 +59,21 @@ DNS-based routes only work when:
    (`opkg install conntrack` — Entware packages it as `conntrack`, not
    `conntrack-tools`), the tool clears the conntrack entries for the IPs
    currently resolved in the affected object-groups after any list change
-   (`conntrack -D -d <ip>`), so those flows re-evaluate on their next
-   packet and move onto the new route; unrelated connections keep their
-   NAT state. If it can't enumerate a useful IP set (nothing resolved
-   yet, CIDR-only list, or too many) it falls back to a full
-   `conntrack -F`. Without the package, stale flows just age out.
+   (`conntrack -D -d <ip>`, IPv6 addresses with `-f ipv6`; the set comes
+   from `show object-group fqdn`), so those flows re-evaluate on their
+   next packet and move onto the new route; unrelated connections keep
+   their NAT state. If it can't enumerate a useful IP set (the read
+   fails, nothing resolved yet, a subnet among the entries, or too many)
+   it falls back to a full `conntrack -F`. Without the package, stale
+   flows just age out.
 
 `*` wildcards aren't allowed; a domain automatically covers its
-subdomains. IDN must be entered in punycode (`xn--…`). IPv6 isn't
+subdomains. KeeneticOS also follows CNAME chains: a group lists runtime
+entries such as `a132.dscb.akamai.net` (parent `akamai.net`), names
+clients only ever reach as the CNAME target of some other site. So a CDN
+zone in a list (`akamaiedge.net`, `edgekey.net`, `cloudflare.net`, …)
+routes every site served through that CDN, not just the CDN's own
+domains. IDN must be entered in punycode (`xn--…`). IPv6 isn't
 supported in this version.
 
 ## Commands

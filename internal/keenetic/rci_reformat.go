@@ -20,7 +20,7 @@ import (
 // and extra fields are ignored.
 //
 // `show object-group fqdn` has no RCI node on the no-auth :79 port
-// (/rci/show/object-group is `{}` on 5.1.x), so objectGroupIPs keeps
+// (/rci/show/object-group is `{}` on 5.1.x), so objectGroupAddrs keeps
 // going through ndmc.
 
 // interfaceTextFromRCI renders /rci/show/interface/<iface> JSON as

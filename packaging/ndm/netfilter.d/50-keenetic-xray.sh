@@ -2,15 +2,19 @@
 # Keenetic's ndm runs every /opt/etc/ndm/netfilter.d/* script whenever it
 # rebuilds the firewall, exporting $type (iptables/ip6tables) and $table
 # (filter/nat/mangle/raw). When it touches a table this project keeps
-# rules in, nudge the daemon to re-assert its Proxy0 / MSS-clamp / route /
-# WG-transport config right away -- the daemon also polls every 2 minutes,
-# but this makes the common "rule vanished after a policy edit" case
-# self-heal within a second.
+# rules in, nudge the daemon to re-assert them right away -- the daemon
+# also polls every 2 minutes, but this makes the common "rule vanished
+# after a policy edit or a DHCP renew" case self-heal within a second.
+#
+# Our tables: filter (l7sni's NFLOG in FORWARD), mangle (the MSS clamp),
+# nat (adaptive routing's REDIRECT in PREROUTING). nat used to be missing
+# here, so a nat rebuild left adaptive-routed traffic going direct until
+# the next 2-minute poll.
 
 # shellcheck disable=SC2154  # $type / $table are exported by ndm
 [ "$type" = "iptables" ] || exit 0
 case "$table" in
-    mangle | filter) ;;
+    filter | mangle | nat) ;;
     *) exit 0 ;;
 esac
 

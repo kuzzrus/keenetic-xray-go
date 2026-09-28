@@ -94,13 +94,16 @@ func writeDiag(w io.Writer) {
 
 	fmt.Fprintln(w, "\n---- rci ----")
 	if cfgErr == nil && cfg.RCI.Enabled {
-		if base, _, err := rciProbe(cfg.RCI.BaseURL()); err == nil {
+		if base, _, err := rciProbe(cfg.RCI.BaseURL(), cfg.RCI.Token); err == nil {
 			fmt.Fprintf(w, "включён, отвечает: %s\n", base)
 		} else {
 			fmt.Fprintf(w, "включён, но: %v\n", err)
 		}
 	} else {
 		fmt.Fprintln(w, "выключен (читаем через ndmc)")
+	}
+	if cfgErr == nil {
+		fmt.Fprintln(w, "токен:", rciTokenState(cfg.RCI.Token))
 	}
 
 	fmt.Fprintln(w, "\n---- keenetic ----")

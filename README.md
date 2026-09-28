@@ -251,7 +251,15 @@ keenetic-xray routes {list|show [name]|new <name> [entries…]|add <name> <entri
 keenetic-xray routes preset {list|show <name>|add <name> [--ip] [--iface=…] [--exclusive]|sync [<name>|--all]|update}
 keenetic-xray dns {show|test|list|preset <id> [--dot|--doh|--both]|set dot <ip> <sni> …|set doh <url> …|off}
 keenetic-xray transport {show|mode auto|packet-up|stream-up|stream-one|mode-clear|mss <1200..1452|auto|off>|wg {show|on|off}}
+keenetic-xray rci {show|probe [url]|enable [url]|disable|token [<токен>|clear]}
 ```
+
+`rci` — чтение конфига роутера через локальный JSON-API Keenetic вместо
+`ndmc` (страховка для прошивок, где Entware отрезан от `ndmc`; записи всё
+равно идут через `ndmc`). KeeneticOS 5.2 пускает в RCI только с токеном
+доступа: веб-интерфейс → Пользователи и доступ → Токены доступа → Добавить
+токен, затем `keenetic-xray rci token <токен>` или в боте `🔌 RCI →
+🔑 Ввести токен` (сообщение с токеном бот сразу удаляет из чата).
 
 Ключи `failover set`: `check_interval_seconds`, `failures_required`,
 `recovery_successes_required`, `cooldown_cycles`, `rollback_backoff_seconds`,

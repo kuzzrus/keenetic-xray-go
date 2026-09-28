@@ -1,12 +1,16 @@
 package main
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
+	"github.com/kuzzrus/keenetic-xray-go/internal/keenetic"
 )
 
 func rciFakeRouter(t *testing.T) *httptest.Server {
@@ -25,7 +29,7 @@ func rciFakeRouter(t *testing.T) *httptest.Server {
 
 func TestRCIProbe_ExplicitURL(t *testing.T) {
 	srv := rciFakeRouter(t)
-	base, detail, err := rciProbe(srv.URL)
+	base, detail, err := rciProbe(srv.URL, "")
 	if err != nil {
 		t.Fatalf("rciProbe: %v", err)
 	}
@@ -39,7 +43,7 @@ func TestRCIProbe_ExplicitURL(t *testing.T) {
 
 func TestRCIProbe_AllCandidatesDown(t *testing.T) {
 	// 127.0.0.1:1 is not listening.
-	if _, _, err := rciProbe("http://127.0.0.1:1"); err == nil {
+	if _, _, err := rciProbe("http://127.0.0.1:1", ""); err == nil {
 		t.Error("expected an error when nothing answers")
 	}
 }
@@ -81,5 +85,79 @@ func TestRCIEnable_DefaultURLNotPinned(t *testing.T) {
 	c.URL = "http://127.0.0.1:80"
 	if c.BaseURL() != "http://127.0.0.1:80" {
 		t.Errorf("BaseURL() = %q, want the pinned value", c.BaseURL())
+	}
+}
+
+// captureStdout runs fn with os.Stdout redirected and returns what it
+// printed.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stdout
+	os.Stdout = w
+	done := make(chan string)
+	go func() {
+		b, _ := io.ReadAll(r)
+		done <- string(b)
+	}()
+	defer func() { os.Stdout = orig }()
+	fn()
+	_ = w.Close()
+	return <-done
+}
+
+// TestRCIToken_StoredNeverPrinted: `rci token` saves the token, checks
+// it against RCI, and never prints it back; without one, a 5.2-style
+// router's refusal comes with the way to fix it.
+func TestRCIToken_StoredNeverPrinted(t *testing.T) {
+	const token = "4RZVZobf1GUbarwNL0irYboZut05Aqpby8y"
+	inner := rciFakeRouter(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(keenetic.RCITokenHeader) != token {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		inner.Config.Handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("KEENETIC_XRAY_CONFIG", path)
+	cfg := config.Default()
+	cfg.RCI.URL = srv.URL
+	if err := cfg.Save(path); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := cmdRCI([]string{"enable", srv.URL}); err == nil || !strings.Contains(err.Error(), "rci token") {
+		t.Errorf("enable without a token: err = %v, want the `rci token` hint", err)
+	}
+	if err := cmdRCI([]string{"token", "not a token"}); err == nil {
+		t.Error("a malformed token was accepted")
+	}
+
+	var cmdErr error
+	out := captureStdout(t, func() { cmdErr = cmdRCI([]string{"token", token}) })
+	if cmdErr != nil || !strings.Contains(out, "RCI отвечает") {
+		t.Fatalf("rci token: %v\n%s", cmdErr, out)
+	}
+	if strings.Contains(out, token) {
+		t.Errorf("rci token printed the token:\n%s", out)
+	}
+	if saved, _ := config.Load(path); saved.RCI.Token != token {
+		t.Fatalf("saved token = %q", saved.RCI.Token)
+	}
+	if out := captureStdout(t, func() { _ = cmdRCI([]string{"show"}) }); strings.Contains(out, token) || !strings.Contains(out, "задан (") {
+		t.Errorf("rci show:\n%s", out)
+	}
+
+	if err := cmdRCI([]string{"token", "clear"}); err != nil {
+		t.Fatal(err)
+	}
+	if saved, _ := config.Load(path); saved.RCI.Token != "" {
+		t.Error("`rci token clear` kept the token")
 	}
 }

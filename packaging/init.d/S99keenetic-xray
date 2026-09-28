@@ -34,8 +34,10 @@ BOOTLOG=$LOGDIR/boot.log
 # /tmp, not next to the pidfile: /opt is persistent flash, and a lock
 # surviving a power cut would hold up the very next boot's start.
 LOCKDIR=${KEENETIC_XRAY_INIT_LOCK:-/tmp/keenetic-xray.init.lock}
-# How long start waits for the pidfile; overridden only by tests.
+# How long start waits for the pidfile, and how long lock waits for a
+# live holder; overridden only by tests.
 START_WAIT=${KEENETIC_XRAY_START_WAIT:-15}
+LOCK_WAIT=${KEENETIC_XRAY_LOCK_WAIT:-60}
 
 ACTION=${1:-}
 CALLER=${2:-}
@@ -51,16 +53,23 @@ daemon_pid() {
 	[ "$_kx_comm" = keenetic-xray ] || return 1
 	tr '\0' '\n' <"/proc/$_kx_p/cmdline" 2>/dev/null | grep -qx daemon || return 1
 	if [ -n "$_kx_tok" ]; then
-		read -r _kx_stat <"/proc/$_kx_p/stat" 2>/dev/null || return 1
-		# Field 22 (start time) is the 20th after "(comm) " -- comm may
-		# itself contain spaces or ')', hence cutting at the last ") ".
-		# shellcheck disable=SC2086 # word-splitting the fields is the point
-		set -- ${_kx_stat##*) }
-		[ $# -ge 20 ] || return 1
-		shift 19
-		[ "$1" = "$_kx_tok" ] || return 1
+		[ "$(proc_start "$_kx_p")" = "$_kx_tok" ] || return 1
 	fi
 	echo "$_kx_p"
+}
+
+# proc_start prints a process's start time -- /proc/<pid>/stat field 22,
+# ticks since boot -- which tells a PID apart from a later process that
+# got the same number. Nothing if it isn't running.
+proc_start() {
+	read -r _kx_stat <"/proc/$1/stat" 2>/dev/null || return 0
+	# Field 22 is the 20th after "(comm) " -- comm may itself contain
+	# spaces or ')', hence cutting at the last ") ".
+	# shellcheck disable=SC2086 # word-splitting the fields is the point
+	set -- ${_kx_stat##*) }
+	[ $# -ge 20 ] || return 0
+	shift 19
+	echo "$1"
 }
 
 say() {
@@ -69,24 +78,60 @@ say() {
 }
 
 # lock serializes start/stop/restart, so cron's watchdog, a package
-# install and a user can't launch two daemons at once. A lock whose
-# holder is gone (killed mid-way) is stale and taken over.
+# install and a user can't launch two daemons at once. The holder writes
+# "PID start-time" into it. A lock whose holder is gone is stale and
+# taken over (see lock_stale); only one waiter at a time does the taking
+# over ($LOCKDIR.guard), so two that both found it stale can't each
+# remove the lock the other one just took.
+#
+# It used to be stale only when `kill -0` found no process: a holder
+# whose PID was reused counted as alive, and one that died between mkdir
+# and writing its PID was never stale at all -- every later start/stop
+# then waited 60 s and gave up, the watchdog's included, until a reboot
+# cleared /tmp (found in the saymer-alt/keenetic-auto-setup study).
 lock() {
-	_kx_n=0
+	_kx_n=0 _kx_nopid=0 _kx_guard=0
 	until mkdir "$LOCKDIR" 2>/dev/null; do
-		_kx_owner=$(cat "$LOCKDIR/pid" 2>/dev/null)
-		if [ -n "$_kx_owner" ] && ! kill -0 "$_kx_owner" 2>/dev/null; then
-			rm -rf "$LOCKDIR"
-			continue
+		if lock_stale; then
+			if mkdir "$LOCKDIR.guard" 2>/dev/null; then
+				lock_stale && rm -rf "$LOCKDIR"
+				rmdir "$LOCKDIR.guard" 2>/dev/null
+				continue
+			fi
+			# Another waiter is taking it over. Its guard lives for two
+			# commands; one that outlasts a few checks lost its holder.
+			_kx_guard=$((_kx_guard + 1))
+			if [ "$_kx_guard" -ge 5 ]; then
+				rmdir "$LOCKDIR.guard" 2>/dev/null
+				_kx_guard=0
+			fi
 		fi
 		_kx_n=$((_kx_n + 1))
-		if [ "$_kx_n" -ge 60 ]; then
-			say "another start/stop has held $LOCKDIR for 60s -- giving up"
+		if [ "$_kx_n" -ge "$LOCK_WAIT" ]; then
+			say "another start/stop has held $LOCKDIR for ${LOCK_WAIT}s -- giving up"
 			return 1
 		fi
 		sleep 1
 	done
-	echo $$ >"$LOCKDIR/pid"
+	echo "$$ $(proc_start $$)" >"$LOCKDIR/pid"
+}
+
+# lock_stale reports whether $LOCKDIR's holder is gone: its PID doesn't
+# run, or now belongs to a later process (start time differs). A lock
+# with no PID in it yet is live for its first few checks -- the holder
+# writes it right after mkdir -- and dead after that (_kx_nopid counts
+# them, reset by lock). A lock from an older script has no start time;
+# for that one only the PID can tell.
+lock_stale() {
+	_kx_owner='' _kx_start=''
+	read -r _kx_owner _kx_start <"$LOCKDIR/pid" 2>/dev/null
+	if [ -z "$_kx_owner" ]; then
+		_kx_nopid=$((_kx_nopid + 1))
+		[ "$_kx_nopid" -ge 5 ]
+		return
+	fi
+	kill -0 "$_kx_owner" 2>/dev/null || return 0
+	[ -n "$_kx_start" ] && [ "$(proc_start "$_kx_owner")" != "$_kx_start" ]
 }
 
 unlock() { rm -rf "$LOCKDIR"; }

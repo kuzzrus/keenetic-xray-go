@@ -82,33 +82,37 @@ func FlushConntrack(ctx context.Context) error {
 const maxTargetedFlush = 400
 
 // FlushConntrackForGroups re-routes open connections after a routes
-// change. It reads the resolved IPs currently in the given `object-group
-// fqdn` names and deletes just those conntrack entries (`conntrack -D -d
-// <ip>`), so unrelated flows keep their NAT state. If it can't enumerate
-// a useful set -- nothing resolved yet, CIDR-only lists, too many IPs --
-// it falls back to flushing the whole table. Returns which path it took
-// ("точечно (N IP)" / "весь conntrack" / "" when conntrack isn't
-// installed). Best-effort: individual -D failures are ignored.
+// change. It reads the addresses currently resolved in the given
+// `object-group fqdn` names and deletes just those conntrack entries
+// (`conntrack -D -d <ip>`, IPv6 with `-f ipv6`), so unrelated flows keep
+// their NAT state. If it can't enumerate a useful set -- the read
+// failed, nothing resolved yet, a subnet among the entries, too many
+// addresses -- it falls back to flushing the whole table. Returns which
+// path it took ("точечно (N IP)" / "весь conntrack" / "" when conntrack
+// isn't installed). Best-effort: individual -D failures are ignored.
 func FlushConntrackForGroups(ctx context.Context, groups []string) (string, error) {
 	if !conntrackPresent() {
 		return "", nil
 	}
-	seen := map[string]struct{}{}
+	want := make(map[string]bool, len(groups))
 	for _, g := range groups {
-		for _, ip := range objectGroupIPs(ctx, g) {
-			seen[ip] = struct{}{}
-		}
+		want[g] = true
 	}
-	if len(seen) == 0 || len(seen) > maxTargetedFlush {
+	addrs, subnet, err := objectGroupAddrs(ctx, want)
+	if err != nil || subnet || len(addrs) == 0 || len(addrs) > maxTargetedFlush {
 		if err := conntrackRun(ctx, "-F"); err != nil {
 			return "", err
 		}
 		return "весь conntrack", nil
 	}
-	for ip := range seen {
-		_ = conntrackRun(ctx, "-D", "-d", ip) // exit 1 = no such entry, fine
+	for _, ip := range addrs {
+		if strings.Contains(ip, ":") {
+			_ = conntrackRun(ctx, "-D", "-f", "ipv6", "-d", ip)
+		} else {
+			_ = conntrackRun(ctx, "-D", "-d", ip) // exit 1 = no such entry, fine
+		}
 	}
-	return "точечно (" + strconv.Itoa(len(seen)) + " IP)", nil
+	return "точечно (" + strconv.Itoa(len(addrs)) + " IP)", nil
 }
 
 // DeleteConntrackFlow deletes one specific conntrack entry by its
@@ -129,27 +133,74 @@ func DeleteConntrackFlow(ctx context.Context, proto, src, dst string, sport, dpo
 		"--sport", strconv.FormatUint(uint64(sport), 10), "--dport", strconv.FormatUint(uint64(dport), 10))
 }
 
-// objectGroupIPs parses `show object-group fqdn <name>` for the IPv4
-// addresses Keenetic currently has resolved for that group. Format-
-// tolerant: any bare dotted-quad on a line that isn't an `excluded-*` or
-// a `*-count` field. Empty on any error.
-func objectGroupIPs(ctx context.Context, group string) []string {
-	out, err := ndmcRun(ctx, "show object-group fqdn "+group)
+// objectGroupAddrs reads the addresses Keenetic currently has resolved
+// for the `object-group fqdn` groups in want, deduplicated. subnet
+// reports a network among them (a CIDR entry): conntrack -D can't target
+// one, so the caller has to flush everything.
+//
+// It reads every group at once: `show object-group fqdn <name>` does not
+// exist -- "Command::Base error[7405600]: no such command: <name>" on a
+// real router (2026-09-28). The per-group form this used to call was
+// written against a guessed format and never worked, so every routes
+// change fell back to a full flush.
+func objectGroupAddrs(ctx context.Context, want map[string]bool) (addrs []string, subnet bool, err error) {
+	out, err := ndmcRun(ctx, "show object-group fqdn")
 	if err != nil {
-		return nil
+		return nil, false, err
 	}
-	var ips []string
+	addrs, subnet = parseObjectGroupAddrs(out, want)
+	return addrs, subnet, nil
+}
+
+// parseObjectGroupAddrs picks the wanted groups' addresses out of `show
+// object-group fqdn`. Real output (KeeneticOS 5.x, trimmed):
+//
+//	group:
+//	   group-name: akamai
+//	      enabled: yes
+//	   ipv4-addresses-count: 340
+//	entry:
+//	         fqdn: a132.dscb.akamai.net
+//	         type: runtime
+//	       parent: akamai.net
+//	         ipv4:
+//	      address: 23.73.4.217
+//	          ttl: 20
+//
+// Each group opens with `group-name:`; its resolved addresses are the
+// `address:` fields. Any value in a wanted group that parses as a
+// network (not a single host) counts as a subnet entry, whichever field
+// the firmware prints it in.
+func parseObjectGroupAddrs(out string, want map[string]bool) (addrs []string, subnet bool) {
+	seen := map[string]bool{}
+	in := false
 	for _, line := range strings.Split(out, "\n") {
-		l := strings.TrimSpace(line)
-		if l == "" || strings.HasPrefix(l, "excluded-") || strings.Contains(l, "-count") {
+		key, val, ok := strings.Cut(strings.TrimSpace(line), ":")
+		if !ok {
 			continue
 		}
-		for _, f := range strings.FieldsFunc(l, func(r rune) bool { return r == ' ' || r == ':' || r == ',' }) {
-			f = strings.TrimSuffix(f, "/32")
-			if ip := net.ParseIP(f); ip != nil && ip.To4() != nil {
-				ips = append(ips, f)
+		key, val = strings.TrimSpace(key), strings.TrimSpace(val)
+		if key == "group-name" {
+			in = want[val]
+			continue
+		}
+		if !in || val == "" {
+			continue
+		}
+		if _, n, err := net.ParseCIDR(val); err == nil {
+			if ones, bits := n.Mask.Size(); ones < bits {
+				subnet = true
+				continue
 			}
+			val = n.IP.String()
+		}
+		if key != "address" {
+			continue
+		}
+		if ip := net.ParseIP(val); ip != nil && !seen[ip.String()] {
+			seen[ip.String()] = true
+			addrs = append(addrs, ip.String())
 		}
 	}
-	return ips
+	return addrs, subnet
 }

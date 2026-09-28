@@ -137,7 +137,7 @@ commands:
                                                   xhttp mode override; forwarded-TCP MSS clamp on the Proxy0 path (PMTU fix); or an in-router WireGuard hop into xray
   addon {list|show <id>|status <id>|install <id>|remove <id>|configure <id> <k=v>…}
                                                   optional router-side components: unbound (local DNS), nfqws2 (DPI bypass), conntrack, cron
-  rci {show|probe [url]|enable [url]|disable}     read the router config over the local RCI JSON API instead of ndmc (hedge for ndmc-sandboxed firmware)
+  rci {show|probe [url]|enable [url]|disable|token [<t>|clear]}  read the router config over the local RCI JSON API instead of ndmc (hedge for ndmc-sandboxed firmware); KeeneticOS 5.2+ needs an access token
   georanges {show|refresh}                        Russian IPv4 list behind adaptive routing's exclusion: cache vs built-in copy; fetch the latest now
   diag                                            one-shot diagnostic bundle to stdout (config with secrets redacted + resolver/addon/rci/keenetic state + log tail)`)
 }
@@ -231,7 +231,7 @@ func cmdDaemon(args []string) (err error) {
 	}
 	presets.SetOverlay(presetsOverlayDir())
 	if cfg.RCI.Enabled {
-		if url, err := keenetic.UseRCI(cfg.RCI.BaseURL()); err != nil {
+		if url, err := keenetic.UseRCI(cfg.RCI.BaseURL(), cfg.RCI.Token); err != nil {
 			logf("rci: %v — читаю конфиг через ndmc", err)
 		} else {
 			logf("rci: конфиг роутера читаю через %s (записи — ndmc)", url)
@@ -327,11 +327,11 @@ func cmdDaemon(args []string) (err error) {
 			}
 			// Pick up an rci enable/disable done via the CLI without a restart.
 			if fresh.RCI.Enabled {
-				if _, e := keenetic.UseRCI(fresh.RCI.BaseURL()); e != nil {
+				if _, e := keenetic.UseRCI(fresh.RCI.BaseURL(), fresh.RCI.Token); e != nil {
 					fmt.Fprintln(os.Stderr, "reload: rci:", e)
 				}
 			} else {
-				_, _ = keenetic.UseRCI("")
+				_, _ = keenetic.UseRCI("", "")
 			}
 			if d.ReloadConfig(ctx, fresh) {
 				fmt.Println("reload: applied")

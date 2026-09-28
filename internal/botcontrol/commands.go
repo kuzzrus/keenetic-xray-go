@@ -208,6 +208,10 @@ func (h *RouterHandler) scrubSecrets(s string) string {
 			s = strings.ReplaceAll(s, k, "<wg-ключ>")
 		}
 	}
+	// The RCI token carries administrator rights on the router.
+	if t := h.Config.RCI.Token; t != "" {
+		s = strings.ReplaceAll(s, t, "<rci-токен>")
+	}
 	return s
 }
 
@@ -269,6 +273,14 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 		return h.l7sniOn(ctx)
 	case ActionL7SNIOff:
 		return h.l7sniOff(ctx)
+	case ActionRCIShow:
+		return h.rciShow(ctx), nil
+	case ActionRCIOn:
+		return h.rciOn(ctx)
+	case ActionRCIOff:
+		return h.rciOff()
+	case ActionRCIToken:
+		return h.rciToken(ctx, cmd.Args)
 	case ActionDaemonRestart:
 		return h.daemonRestart()
 	case ActionEnsureCore:

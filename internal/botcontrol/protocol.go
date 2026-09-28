@@ -132,6 +132,14 @@ const (
 	// diag`): config with secrets redacted + resolver/addon/rci/keenetic
 	// state + daemon-log tail. No args.
 	ActionDiag = "diag"
+
+	// RCI -- reading the router config over Keenetic's local JSON API
+	// instead of ndmc (`keenetic-xray rci`). All apply live: the agent
+	// runs inside the daemon, which owns the RCI client.
+	ActionRCIShow  = "rci_show"  // no args -> mode, token set or not, live probe
+	ActionRCIOn    = "rci_on"    // no args -> probe, then enable
+	ActionRCIOff   = "rci_off"   // no args
+	ActionRCIToken = "rci_token" // args[0]=token (KeeneticOS 5.2+), "" clears it; never echoed back
 )
 
 // Command is a single unit of work queued for a router by the control

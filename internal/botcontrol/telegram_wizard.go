@@ -20,6 +20,9 @@ type wizState struct {
 	listName string // wizRoute*: the target route list
 	del      bool   // wizRouteEntries: remove rather than add
 	addonID  string // wizAddonConfig: the component being configured
+	// secretDeleted is whether the message holding a secret (wizRCIToken)
+	// was deleted from the chat -- see handleMessage.
+	secretDeleted bool
 }
 
 type wizStep int
@@ -36,7 +39,26 @@ const (
 	wizRouteIface   // an interface name for an already-chosen list
 	wizDNSCustom    // custom DoT/DoH upstream lines for 🧭 DNS
 	wizAddonConfig  // key=value tweaks for a 🧩 Дополнения component
+	wizRCIToken     // the RCI access token for 🔌 RCI -- a secret, deleted from the chat on receipt
 )
+
+// wizardStepIs reports whether chatID's active dialog is at step.
+func (b *TelegramBot) wizardStepIs(chatID int64, step wizStep) bool {
+	b.wizardMu.Lock()
+	defer b.wizardMu.Unlock()
+	st, ok := b.wizards[chatID]
+	return ok && st.step == step
+}
+
+// markSecretDeleted records on chatID's dialog whether the message that
+// carried its secret was deleted.
+func (b *TelegramBot) markSecretDeleted(chatID int64, deleted bool) {
+	b.wizardMu.Lock()
+	defer b.wizardMu.Unlock()
+	if st, ok := b.wizards[chatID]; ok {
+		st.secretDeleted = deleted
+	}
+}
 
 func (b *TelegramBot) startAddRouterWizard(ctx context.Context, chatID int64) {
 	b.wizardMu.Lock()
@@ -115,6 +137,37 @@ func (b *TelegramBot) startProxyIfaceWizard(ctx context.Context, chatID int64, r
 	b.sendMessage(ctx, chatID,
 		"Интерфейс Keenetic для ("+routerID+").\nПришли имя: Proxy0, Proxy1, Proxy2 …\n"+
 			"Proxy0 — по умолчанию. Отмена: /cancel")
+}
+
+// startRCITokenWizard prompts for the RCI access token KeeneticOS 5.2+
+// requires. The reply is a secret: handleMessage deletes it from the chat
+// before this dialog even reads it.
+func (b *TelegramBot) startRCITokenWizard(ctx context.Context, chatID int64, routerID string) {
+	if !b.Store.HasRouter(routerID) {
+		b.sendMessage(ctx, chatID, fmt.Sprintf("нет такого роутера %q. Список: /routers", routerID))
+		return
+	}
+	b.wizardMu.Lock()
+	b.wizards[chatID] = &wizState{step: wizRCIToken, routerID: routerID}
+	b.wizardMu.Unlock()
+	b.sendMessage(ctx, chatID,
+		"Токен RCI для "+routerID+".\nСоздай его: "+rciTokenHowTo+", скопируй и пришли сюда одним сообщением.\n"+
+			"Сообщение с токеном я сразу удалю из чата.\nОтмена: /cancel")
+}
+
+func (b *TelegramBot) wizardRCIToken(ctx context.Context, chatID int64, st *wizState, line string) {
+	token := strings.TrimSpace(line)
+	if !config.ValidRCIToken(token) {
+		b.sendMessage(ctx, chatID, "это не похоже на токен: одна строка из латиницы, цифр и +/=_.- от 16 символов. Ещё раз или /cancel") // stays armed
+		return
+	}
+	b.wizardClear(chatID)
+	out, answered, errText := b.enqueueAndWait(ctx, st.routerID, ActionRCIToken, []string{token})
+	reply := b.stepResult(st.routerID, answered, errText, strings.TrimSpace(out))
+	if !st.secretDeleted {
+		reply += "\n\n⚠️ Удалить сообщение с токеном не получилось — удали его сам: токен даёт права администратора на роутере."
+	}
+	b.sendMessage(ctx, chatID, reply)
 }
 
 func (b *TelegramBot) wizardClear(chatID int64) {
@@ -197,6 +250,10 @@ func (b *TelegramBot) handleWizardText(ctx context.Context, chatID int64, text s
 
 	case wizProxyIface:
 		b.wizardSetProxyIface(ctx, chatID, st, strings.TrimSpace(text))
+		return true
+
+	case wizRCIToken:
+		b.wizardRCIToken(ctx, chatID, st, text)
 		return true
 
 	case wizRouteName:

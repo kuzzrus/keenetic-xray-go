@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -128,8 +129,12 @@ func cmdDoctor(args []string) error {
 	checkProxy0Health(cfg, check) // enabled or not -- see proxy0InUse
 
 	if cfg.RCI.Enabled {
-		if _, _, err := rciProbe(cfg.RCI.BaseURL()); err != nil {
-			check(false, fmt.Sprintf("RCI reachable at %s (%v) -- run: keenetic-xray rci probe", cfg.RCI.BaseURL(), err))
+		if _, _, err := rciProbe(cfg.RCI.BaseURL(), cfg.RCI.Token); err != nil {
+			next := "keenetic-xray rci probe"
+			if errors.Is(err, keenetic.ErrRCIAuth) {
+				next = "keenetic-xray rci token <токен>"
+			}
+			check(false, fmt.Sprintf("RCI reachable at %s (%v) -- run: %s", cfg.RCI.BaseURL(), err, next))
 		} else {
 			check(true, "RCI reachable at "+cfg.RCI.BaseURL())
 		}

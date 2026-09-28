@@ -29,6 +29,11 @@ type fakeTelegram struct {
 	nextMsg  int
 	updateID int64
 	files    map[string][]byte // file_id -> content, for getFile + download
+	// deleted is every message_id the bot asked to delete; deleteFails
+	// makes deleteMessage fail the way it does in a group where the bot
+	// has no admin right.
+	deleted     []int
+	deleteFails bool
 }
 
 // sentDocument is one sendDocument upload.
@@ -151,6 +156,21 @@ func newFakeTelegram(t *testing.T) (*httptest.Server, *fakeTelegram) {
 			f.edits = append(f.edits, sentMessage{ChatID: body.ChatID, MessageID: body.MessageID, Text: body.Text, Buttons: flattenKB(body.ReplyMarkup)})
 			f.mu.Unlock()
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{"message_id": body.MessageID}})
+		case strings.HasSuffix(r.URL.Path, "/deleteMessage"):
+			var body struct {
+				MessageID int `json:"message_id"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			f.mu.Lock()
+			f.deleted = append(f.deleted, body.MessageID)
+			fails := f.deleteFails
+			f.mu.Unlock()
+			if fails {
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "description": "Bad Request: message can't be deleted"})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": true})
 		default: // answerCallbackQuery, setMyCommands, ...
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 		}
@@ -165,6 +185,21 @@ func (f *fakeTelegram) push(chatID int64, text string) {
 	defer f.mu.Unlock()
 	f.updateID++
 	f.updates = append(f.updates, tgUpdate{UpdateID: f.updateID, Message: &tgMessage{Chat: tgChat{ID: chatID}, Text: text}})
+}
+
+// pushMessage is push with an explicit message_id, for a test that needs
+// to see which message the bot acted on.
+func (f *fakeTelegram) pushMessage(chatID int64, messageID int, text string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.updateID++
+	f.updates = append(f.updates, tgUpdate{UpdateID: f.updateID, Message: &tgMessage{MessageID: messageID, Chat: tgChat{ID: chatID}, Text: text}})
+}
+
+func (f *fakeTelegram) deletedIDs() []int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]int(nil), f.deleted...)
 }
 
 // setFile registers content Telegram should serve for fileID via

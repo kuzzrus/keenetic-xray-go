@@ -13,7 +13,10 @@ package keenetic
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
+	"net"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -52,6 +55,42 @@ var lookNdmc = func() error {
 // PATH, or an active RCI connection. Callers should treat a false result
 // as "skip, not an error".
 func Available() bool { return lookNdmc() == nil || RCIActive() }
+
+// ErrNotSaved marks a failed `system configuration save`: the change
+// before it is live, but won't survive a reboot until a save succeeds.
+var ErrNotSaved = errors.New("configuration not saved")
+
+// SaveConfig persists the running configuration to flash. A failure
+// wraps ErrNotSaved.
+func SaveConfig(ctx context.Context) error {
+	if _, err := ndmcRun(ctx, "system configuration save"); err != nil {
+		return fmt.Errorf("%w: ndmc \"system configuration save\": %w", ErrNotSaved, err)
+	}
+	return nil
+}
+
+// Transient reports whether err is one the router may well get over by
+// itself within seconds, so the same operation is worth repeating soon:
+// the context ran out, ndmc could not be started (fork/exec) or was
+// killed (a context deadline kills it), RCI did not answer, or only the
+// final save failed -- at boot several steps save at once. A command the
+// router answered with an error status, a result that read back wrong,
+// or no ndmc at all would fail the same way again.
+func Transient(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrNotSaved) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return !exitErr.Exited() // killed by a signal, not the router's own error status
+	}
+	var pathErr *fs.PathError
+	var netErr net.Error
+	return errors.As(err, &pathErr) || errors.As(err, &netErr)
+}
 
 // OSVersion parses `show version` and returns the KeeneticOS
 // major/minor/patch from its "title:" field (e.g. "5.1.3"). Used to gate

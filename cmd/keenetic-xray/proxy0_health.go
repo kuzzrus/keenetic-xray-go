@@ -11,22 +11,43 @@ import (
 )
 
 // proxy0HealthRetryAfter is how long reconcile leaves the health check
-// alone after an attempt to install it failed. An attempt that gets past
+// alone after the router refused part of it. An attempt that gets past
 // the initial reads writes several ndmc commands and a `system
-// configuration save` -- a flash write -- so a failure that persists (a
-// firmware whose `show ping-check` the parser misreads, say) must not
-// repeat on every reconcileInterval tick. Daemon startup and the CLI
-// always try regardless.
+// configuration save` -- a flash write -- so a failure that will only
+// repeat (a firmware whose `show ping-check` the parser misreads, say)
+// must not run on every reconcileInterval tick. Daemon startup and the
+// CLI always try regardless.
 const proxy0HealthRetryAfter = time.Hour
 
-// proxy0HealthState is what the daemon remembers between reconcile ticks
-// about installing the check. Shared by the startup path and the
-// reconcile goroutine, hence the mutex.
+// proxy0HealthRetryMin and proxy0HealthRetryMax pace the retries after a
+// failure the router may get over by itself (keenetic.Transient): 5s,
+// 10s, 20s, 40s, then once a minute until it takes. Every failure used to
+// wait the full hour (2026-09-27 external review, BOOT-05) -- and the
+// likeliest time for a transient one is boot, with ndm busy and several
+// startup steps saving at once, when Proxy0 needs its ISP fallback most.
+// Vars so tests can shrink them.
+var (
+	proxy0HealthRetryMin = 5 * time.Second
+	proxy0HealthRetryMax = time.Minute
+)
+
+// proxy0HealthAttemptTimeout bounds one attempt: a few reads, a few
+// writes and a save, each normally well under a second. Every attempt
+// gets its own -- it used to share one with the Proxy0 configuration
+// before it, and a slow configuration left it nothing.
+const proxy0HealthAttemptTimeout = 30 * time.Second
+
+// proxy0HealthState is what the daemon remembers between attempts at
+// installing the check. Shared by the startup path, the reconcile
+// goroutine and the retrier, hence the mutex.
 type proxy0HealthState struct {
 	mu          sync.Mutex
 	osOK        bool      // firmware already confirmed new enough, skip `show version`
 	unsupported bool      // KeeneticOS < 4.0: no `mode tls`, never try again this run
-	failedAt    time.Time // last failed attempt, for proxy0HealthRetryAfter
+	failedAt    time.Time // last attempt the router refused, for proxy0HealthRetryAfter
+	retrying    bool      // retryProxy0HealthCheck is running; reconcile keeps out of its way
+	unsaved     bool      // an attempt changed the check and may not have saved it
+	lastErr     string    // last failure logged: a retry failing the same way stays quiet
 }
 
 var proxy0Health proxy0HealthState
@@ -35,16 +56,112 @@ var proxy0Health proxy0HealthState
 func (s *proxy0HealthState) due(now time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.unsupported {
+	if s.unsupported || s.retrying {
 		return false
 	}
 	return s.failedAt.IsZero() || now.Sub(s.failedAt) >= proxy0HealthRetryAfter
 }
 
-func (s *proxy0HealthState) setFailed(at time.Time) {
+// failed records a failed attempt and logs it, unless the last one
+// failed the same way. changed is EnsureProxy0HealthCheck's: the router
+// may be left with the check in place but unsaved, and the next attempt
+// then finds nothing to change -- so it has to save regardless. Reports
+// whether to retry soon; otherwise reconcile waits proxy0HealthRetryAfter.
+func (s *proxy0HealthState) failed(now time.Time, err error, changed bool, logf func(string, ...any)) (retrySoon bool) {
+	retrySoon = keenetic.Transient(err)
+	s.mu.Lock()
+	if changed {
+		s.unsaved = true
+	}
+	s.failedAt = now
+	if retrySoon {
+		s.failedAt = time.Time{}
+	}
+	repeat := s.lastErr == err.Error()
+	s.lastErr = err.Error()
+	s.mu.Unlock()
+	switch {
+	case repeat:
+	case retrySoon:
+		logf("proxy0: health check not installed yet: %v (retrying shortly)", err)
+	default:
+		logf("proxy0: health check not installed: %v (next try in %s, or on restart)", err, proxy0HealthRetryAfter)
+	}
+	return retrySoon
+}
+
+// succeeded clears what failed recorded, reporting whether the last
+// attempt had failed.
+func (s *proxy0HealthState) succeeded() (recovered bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.failedAt = at
+	recovered = s.lastErr != ""
+	s.failedAt, s.unsaved, s.lastErr = time.Time{}, false, ""
+	return recovered
+}
+
+func (s *proxy0HealthState) needsSave() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.unsaved
+}
+
+// startRetry runs retry in the background unless a retrier already
+// runs; due keeps reconcile out of its way meanwhile.
+func (s *proxy0HealthState) startRetry(retry func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.retrying {
+		return
+	}
+	s.retrying = true
+	go func() {
+		defer func() {
+			s.mu.Lock()
+			s.retrying = false
+			s.mu.Unlock()
+		}()
+		retry()
+	}()
+}
+
+// retryProxy0HealthCheck repeats attempt -- after proxy0HealthRetryMin,
+// doubling up to proxy0HealthRetryMax, then at that pace -- for as long
+// as it asks to be retried soon and ctx lives. An attempt that succeeds,
+// or fails in a way that won't go away by itself, ends it; reconcile
+// takes over from there.
+func retryProxy0HealthCheck(ctx context.Context, attempt func(context.Context) (retrySoon bool)) {
+	for wait := proxy0HealthRetryMin; ; wait = min(wait*2, proxy0HealthRetryMax) {
+		t := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return
+		case <-t.C:
+		}
+		if !attempt(ctx) {
+			return
+		}
+	}
+}
+
+// ensureProxy0HealthCheck is one daemon attempt, followed by quick
+// retries in the background if it failed in a way the router may get
+// over by itself. Each retry reloads the config, so a change made in the
+// meantime -- `proxy0 set --health-check=off`, say -- is respected.
+func ensureProxy0HealthCheck(ctx context.Context, cfg *config.Config, logf func(string, ...any), fromReconcile bool) {
+	if !applyProxy0HealthCheck(ctx, cfg, logf, fromReconcile) {
+		return
+	}
+	proxy0Health.startRetry(func() {
+		retryProxy0HealthCheck(ctx, func(ctx context.Context) bool {
+			fresh, err := config.Load(configPath())
+			if err != nil {
+				return true
+			}
+			return applyProxy0HealthCheck(ctx, fresh, logf, false)
+		})
+	})
 }
 
 // firmwareOK reports whether this firmware can run the TLS check,
@@ -111,11 +228,15 @@ func proxy0PointsHere(ctx context.Context, cfg *config.Config) (bool, error) {
 // Proxy interface in line with cfg: installed and bound whenever the
 // interface is in use (proxy0InUse), removed when
 // proxy0.disable_health_check is set. Quiet whenever nothing changes,
-// since reconcile calls it every tick. fromReconcile honours
-// proxy0HealthRetryAfter after a failure; startup and the CLI always try.
-// See keenetic.HealthCheckProfile for what the check does and why.
-func applyProxy0HealthCheck(ctx context.Context, cfg *config.Config, logf func(string, ...any), fromReconcile bool) {
+// since reconcile calls it every tick. fromReconcile honours the backoff
+// after a failure; startup and the CLI always try. One attempt, under
+// its own proxy0HealthAttemptTimeout; reports whether it failed in a way
+// worth retrying soon (see ensureProxy0HealthCheck, which does). See
+// keenetic.HealthCheckProfile for what the check does and why.
+func applyProxy0HealthCheck(ctx context.Context, cfg *config.Config, logf func(string, ...any), fromReconcile bool) (retrySoon bool) {
 	iface := cfg.Proxy0.IfaceName()
+	ctx, cancel := context.WithTimeout(ctx, proxy0HealthAttemptTimeout)
+	defer cancel()
 
 	if cfg.Proxy0.DisableHealthCheck {
 		removed, err := keenetic.RemoveHealthCheck(ctx)
@@ -125,33 +246,45 @@ func applyProxy0HealthCheck(ctx context.Context, cfg *config.Config, logf func(s
 		case removed:
 			logf("proxy0: health check removed (disabled in config) -- listed traffic through %s has no ISP fallback while xray is down", iface)
 		}
-		return
+		return false
 	}
 
 	now := time.Now()
 	if fromReconcile && !proxy0Health.due(now) {
-		return
+		return false
 	}
-	if inUse, err := proxy0InUse(ctx, cfg); err != nil || !inUse {
-		return
+	inUse, err := proxy0InUse(ctx, cfg)
+	if err != nil {
+		return proxy0Health.failed(now, fmt.Errorf("reading %s: %w", iface, err), false, logf)
+	}
+	if !inUse {
+		return false
 	}
 	if ok, first := proxy0Health.firmwareOK(ctx); !ok {
 		if first {
 			logf("proxy0: KeeneticOS older than 4.0 has no TLS ping-check -- listed traffic through %s can't fall back to the ISP while xray is down", iface)
 		}
-		return
+		return false
 	}
 	changed, err := keenetic.EnsureProxy0HealthCheck(ctx, iface)
-	if err != nil {
-		proxy0Health.setFailed(now)
-		logf("proxy0: health check not installed: %v (next try in %s, or on restart)", err, proxy0HealthRetryAfter)
-		return
+	saved := false
+	if err == nil && !changed && proxy0Health.needsSave() {
+		err, saved = keenetic.SaveConfig(ctx), true
 	}
-	proxy0Health.setFailed(time.Time{})
-	if changed {
+	if err != nil {
+		return proxy0Health.failed(now, err, changed, logf)
+	}
+	recovered := proxy0Health.succeeded()
+	switch {
+	case changed:
 		logf("proxy0: health check %q (%s) bound to %s -- listed traffic falls back to the ISP while xray is down",
 			keenetic.HealthCheckProfile, keenetic.HealthCheckSummary(), iface)
+	case saved:
+		logf("proxy0: health check %q on %s saved -- it survives a reboot now", keenetic.HealthCheckProfile, iface)
+	case recovered:
+		logf("proxy0: health check %q on %s is in place", keenetic.HealthCheckProfile, iface)
 	}
+	return false
 }
 
 // purgeProxy0 is prerm --purge's share of the Proxy interface. Nothing

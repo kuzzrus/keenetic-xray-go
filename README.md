@@ -207,6 +207,7 @@ keenetic-xray doctor    # проверки: есть профили, конфи�
                         # xray слушает порты, upstream Proxy0 совпадает, свободное место,
                         # MSS-правило на месте, WG-интерфейс поднят, история health-check
 keenetic-xray logs [N]  # последние N строк лога демона (по умолч. 200)
+keenetic-xray logs access on|off  # журнал соединений xray в том же логе (по умолч. выключен)
 ```
 
 В боте те же `/status <роутер>` и `/doctor <роутер>` (без аргумента —
@@ -216,11 +217,17 @@ keenetic-xray logs [N]  # последние N строк лога демона 
 DNS / HTTP 5xx) и задержку — видно, *почему* флапает. `/status` —
 счётчик переключений за час.
 
-Демон пишет свой лог (свои строки + stderr xray-core) в
+Демон пишет свой лог (свои строки + вывод xray-core) в
 `/opt/var/log/keenetic-xray/daemon.log` — самоусекается по размеру,
 читается через `keenetic-xray logs` и `/logs`. Если xray падает в
 краш-луп при живом демоне (5 падений за 5 минут), бот присылает
 уведомление со ссылкой на `/logs`.
+
+Журнал соединений xray (строка на каждое соединение) по умолчанию
+выключен: он быстро вытесняет из лога всё остальное и лишний раз пишет
+на флешку. Для отладки маршрутизации — `keenetic-xray logs access on`,
+потом `keenetic-xray logs access off`. Применяется на лету: демон
+перезапускает только xray-core, соединения прерываются на секунду.
 
 ---
 
@@ -235,10 +242,10 @@ keenetic-xray profile {add <vless-uri>|list|remove <index>}
 keenetic-xray subscription {set-url <url>|refresh|list|set-primary <i>|set-backup <i>}
 keenetic-xray status
 keenetic-xray doctor
-keenetic-xray logs [N]
+keenetic-xray logs [N] | logs access {on|off}
 keenetic-xray variant {show|set mini|set full}
 keenetic-xray agent {configure <url> <router-id> <fingerprint> <token>|enable|disable|status}
-keenetic-xray proxy0 {show|set [--lan-ip=192.168.x.1] [--protocol=socks5|http] [--interface=Proxy0]|off}
+keenetic-xray proxy0 {show|set [--lan-ip=192.168.x.1] [--protocol=socks5|http] [--interface=Proxy0] [--health-check=on|off]|off}
 keenetic-xray failover {show|set <key> <value>}
 keenetic-xray routes {list|show [name]|new <name> [entries…]|add <name> <entries…>|del <name> <entries…>|rm <name>|enable <name>|disable <name>|set <name> [--iface=Proxy0|Wireguard4] [--exclusive]|apply}
 keenetic-xray routes preset {list|show <name>|add <name> [--ip] [--iface=…] [--exclusive]|sync [<name>|--all]|update}

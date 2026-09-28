@@ -609,3 +609,37 @@ func TestGenerateXrayConfig_AmneziaWGDualStackAddress(t *testing.T) {
 		t.Errorf("address = %#v, want [10.8.1.2/32 fd00::2/128] as two separate entries", settings["address"])
 	}
 }
+
+// TestGenerateXrayConfig_AccessLogOffByDefault: xray logs every
+// connection unless told otherwise, and on a router that is a flash
+// write per connection -- plus Proxy0's health check every 5s -- in a
+// 256 KB daemon.log that then loses the daemon's own messages within
+// minutes (2026-09-27).
+func TestGenerateXrayConfig_AccessLogOffByDefault(t *testing.T) {
+	base := XrayConfigOptions{
+		SOCKSPort: 10808,
+		Outbound:  Profile{UUID: "u", Address: "example.com", Port: 443, Network: "tcp", Security: "none", Encryption: "none"},
+	}
+	logOf := func(o XrayConfigOptions) map[string]any {
+		t.Helper()
+		data, err := GenerateXrayConfig(o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc struct {
+			Log map[string]any `json:"log"`
+		}
+		if err := json.Unmarshal(data, &doc); err != nil {
+			t.Fatal(err)
+		}
+		return doc.Log
+	}
+
+	if got := logOf(base); got["access"] != "none" || got["loglevel"] != "warning" {
+		t.Errorf("default log = %v, want access none and loglevel warning", got)
+	}
+	base.AccessLog = true
+	if got := logOf(base); got["access"] != nil {
+		t.Errorf("with AccessLog: log = %v, want no access key (xray's default, stdout)", got)
+	}
+}

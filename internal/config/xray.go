@@ -19,6 +19,18 @@ type XrayConfigOptions struct {
 	Outbound   Profile // the profile to route all traffic through
 	XHTTPMode  string  // "" -> keep the profile's own mode; otherwise force this xhttp mode (Config.XHTTPMode)
 
+	// AccessLog keeps xray's access log -- one line per connection -- on.
+	// Off (the zero value) writes `"access": "none"`. xray logs every
+	// connection by default, and the supervisor sends that into
+	// daemon.log on the router's flash: one write per connection, plus
+	// Proxy0's own health check every 5 seconds since 2026-09-27. In a
+	// 256 KB log that pushed the daemon's own messages -- startup, errors
+	// -- out within minutes, and kept the file being rewritten by the
+	// trim. Warnings and errors from xray itself still reach daemon.log
+	// either way (loglevel warning). Config.XrayAccessLog turns it back
+	// on for debugging.
+	AccessLog bool
+
 	// SidecarSOCKS is the local port a `naive` sidecar process is
 	// listening on (internal/failover starts and owns that process; this
 	// package never launches anything). Required when Outbound.Protocol
@@ -137,8 +149,12 @@ func GenerateXrayConfig(opts XrayConfigOptions) ([]byte, error) {
 		return nil, err
 	}
 
+	access := "none"
+	if opts.AccessLog {
+		access = "" // omitted: xray's default, stdout -- which the supervisor sends to daemon.log
+	}
 	cfg := xrayConfig{
-		Log:      xrayLog{LogLevel: "warning"},
+		Log:      xrayLog{LogLevel: "warning", Access: access},
 		Inbounds: inbounds,
 		Outbounds: []xrayOutbound{
 			outbound,
@@ -461,6 +477,7 @@ type xrayConfig struct {
 
 type xrayLog struct {
 	LogLevel string `json:"loglevel"`
+	Access   string `json:"access,omitempty"` // "none" disables the access log; omitted -> stdout
 }
 
 type xrayInbound struct {

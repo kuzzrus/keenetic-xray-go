@@ -1224,11 +1224,14 @@ func (h *RouterHandler) selfUpdate() (string, error) {
 	}
 
 	rollbackNote := ""
+	wroteMarker := false
 	if h.SelfUpdateMarker != "" {
 		if m, err := selfupdate.NewMarker(version.Version, nil); err != nil {
 			rollbackNote = " (без точки отката: " + err.Error() + ")"
 		} else if err := selfupdate.WriteMarker(h.SelfUpdateMarker, m); err != nil {
 			rollbackNote = " (маркер отката не записан: " + err.Error() + ")"
+		} else {
+			wroteMarker = true
 		}
 	}
 
@@ -1301,6 +1304,18 @@ func (h *RouterHandler) selfUpdate() (string, error) {
 	}
 	if err := c.Start(); err != nil {
 		cancel()
+		// Nothing started, so nothing will ever clear these (2026-09-27
+		// external review, R-3): the lock turned every retry away for
+		// selfUpdateOverallTimeout, and the marker had the next daemon
+		// start announce a reinstall that never happened. Only a marker
+		// this call wrote: one kept from an earlier update that didn't
+		// come up is the operator's rollback point.
+		if h.SelfUpdateLock != "" {
+			_ = os.Remove(h.SelfUpdateLock)
+		}
+		if wroteMarker {
+			_ = selfupdate.ClearMarker(h.SelfUpdateMarker)
+		}
 		return "", fmt.Errorf("запуск обновления: %w", err)
 	}
 	go h.logSelfUpdateOutcome(c, cancel)

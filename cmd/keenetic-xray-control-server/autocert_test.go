@@ -1,9 +1,13 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
+	"net"
+	"net/http"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/botcontrol"
 )
@@ -68,5 +72,61 @@ func TestDualCertGetter_NonMatchingSNIFallsBackToSelfSigned(t *testing.T) {
 				t.Error("expected the self-signed certificate back")
 			}
 		})
+	}
+}
+
+// TestDualCertGetter_SNIIgnoresCaseAndTrailingDot is R-2: DNS names are
+// case-insensitive and may carry the root's trailing dot. Either used to
+// get the self-signed certificate, which a CA-trusting agent rejects.
+func TestDualCertGetter_SNIIgnoresCaseAndTrailingDot(t *testing.T) {
+	selfSigned, err := botcontrol.GenerateSelfSignedCert("self-signed")
+	if err != nil {
+		t.Fatalf("GenerateSelfSignedCert: %v", err)
+	}
+	acmeCert := &tls.Certificate{Certificate: [][]byte{[]byte("acme-marker")}}
+	for _, configured := range []string{"vps.example.com", "VPS.Example.com."} {
+		getter := dualCertGetter(selfSigned, configured, &fakeCertProvider{cert: acmeCert})
+		for _, sni := range []string{"vps.example.com", "VPS.EXAMPLE.COM", "vps.example.com."} {
+			got, err := getter(&tls.ClientHelloInfo{ServerName: sni})
+			if err != nil {
+				t.Fatalf("getter(%q): %v", sni, err)
+			}
+			if got != acmeCert {
+				t.Errorf("domain %q, SNI %q: got the self-signed certificate, want the ACME one", configured, sni)
+			}
+		}
+	}
+}
+
+// TestACMEChallengeServer_BoundedAndStopsWithCtx is R-1: the internet-
+// facing :80 listener has timeouts, and ctx shuts it down.
+func TestACMEChallengeServer_BoundedAndStopsWithCtx(t *testing.T) {
+	srv := acmeChallengeServer("127.0.0.1:0", http.NotFoundHandler())
+	if srv.ReadHeaderTimeout <= 0 || srv.ReadTimeout <= 0 || srv.WriteTimeout <= 0 || srv.IdleTimeout <= 0 {
+		t.Errorf("timeouts header=%v read=%v write=%v idle=%v, want all set", srv.ReadHeaderTimeout, srv.ReadTimeout, srv.WriteTimeout, srv.IdleTimeout)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- serveUntil(ctx, srv) }()
+	time.Sleep(50 * time.Millisecond) // let it start listening
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("serveUntil after cancel = %v, want nil", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("serveUntil did not return after ctx was cancelled")
+	}
+}
+
+func TestServeUntil_ReportsAListenFailure(t *testing.T) {
+	busy, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer busy.Close()
+	if err := serveUntil(context.Background(), acmeChallengeServer(busy.Addr().String(), http.NotFoundHandler())); err == nil {
+		t.Error("serveUntil on a port already in use returned nil, want the listen error")
 	}
 }

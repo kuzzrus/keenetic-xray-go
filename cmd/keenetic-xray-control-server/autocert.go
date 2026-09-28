@@ -15,7 +15,11 @@ package main
 // particular way.
 
 import (
+	"context"
 	"crypto/tls"
+	"net/http"
+	"strings"
+	"time"
 
 	"golang.org/x/crypto/acme/autocert"
 )
@@ -50,11 +54,58 @@ type acmeCertProvider interface {
 // exact certificate every already-pinned agent (configured before the
 // domain existed) already trusts by fingerprint. This is what lets
 // adding a domain never require reconfiguring existing routers.
+//
+// The match ignores case and a trailing dot (2026-09-27 external review,
+// R-2): DNS names are case-insensitive, and "VPS.example.com" or
+// "vps.example.com." used to get the self-signed certificate -- which a
+// CA-trusting agent rejects. autocert normalizes the name the same way
+// on its side.
 func dualCertGetter(selfSigned tls.Certificate, domain string, mgr acmeCertProvider) func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	domain = normalizeDomain(domain)
 	return func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-		if hello.ServerName == domain {
+		if domain != "" && strings.EqualFold(strings.TrimSuffix(hello.ServerName, "."), domain) {
 			return mgr.GetCertificate(hello)
 		}
 		return &selfSigned, nil
+	}
+}
+
+// normalizeDomain is how the configured domain is stored and compared:
+// lower case, no surrounding space, no trailing dot.
+func normalizeDomain(d string) string {
+	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(d), "."))
+}
+
+// acmeChallengeServer is the plain-HTTP :80 listener Let's Encrypt's
+// HTTP-01 challenge dials. It faces the internet just like the TLS
+// listener, so it gets the same bounded timeouts
+// (botcontrol.ListenAndServeTLSDynamic). The bare http.ListenAndServe it
+// replaces had none, so any client could hold a connection open for as
+// long as it liked (2026-09-27 external review, R-1).
+func acmeChallengeServer(addr string, h http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           h,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+}
+
+// serveUntil runs srv until ctx ends, then shuts it down gracefully.
+// Returns srv's own error only if it stopped by itself (a port it can't
+// bind, most likely).
+func serveUntil(ctx context.Context, srv *http.Server) error {
+	errCh := make(chan error, 1) // buffered: the goroutine must never block on a send nobody reads
+	go func() { errCh <- srv.ListenAndServe() }()
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
+		return nil
 	}
 }

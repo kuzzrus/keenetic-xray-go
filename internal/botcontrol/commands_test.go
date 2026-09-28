@@ -1713,6 +1713,40 @@ func TestRouterHandler_SelfUpdate_LockClearedOnCompletion(t *testing.T) {
 	}
 }
 
+// TestRouterHandler_SelfUpdate_FailedStartLeavesNoLock is R-3: when the
+// update chain can't even be started (here: no sh on PATH), the lock
+// must not stay behind -- it used to turn every retry away for
+// selfUpdateOverallTimeout. A rollback marker this run didn't write (no
+// opkg here to detect the arch, so it can't) is an earlier update's
+// rollback point and stays.
+func TestRouterHandler_SelfUpdate_FailedStartLeavesNoLock(t *testing.T) {
+	dir := t.TempDir()
+	lock := filepath.Join(dir, "self-update.lock")
+	marker := filepath.Join(dir, "self-update.json")
+	if err := os.WriteFile(marker, []byte(`{"prev_version":"0.32.0","ipk_url":"https://example.invalid/old.ipk"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h := &RouterHandler{
+		Config:           config.Default(),
+		InstallURL:       "http://127.0.0.1:1/definitely-not-listening",
+		SelfUpdateLock:   lock,
+		SelfUpdateMarker: marker,
+	}
+	t.Setenv("PATH", t.TempDir()) // no sh to start, no opkg either
+	if _, err := h.Handle(context.Background(), Command{Action: ActionSelfUpdate}); err == nil {
+		t.Fatal("self_update without sh succeeded, want a start error")
+	}
+	if _, err := os.Stat(lock); !os.IsNotExist(err) {
+		t.Errorf("lock left behind after a failed start (stat err = %v)", err)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Errorf("an earlier update's rollback marker was removed: %v", err)
+	}
+	if _, err := h.Handle(context.Background(), Command{Action: ActionSelfUpdate}); err != nil && strings.Contains(err.Error(), "уже выполняется") {
+		t.Error("a retry right after a failed start was turned away as already running")
+	}
+}
+
 func TestRouterHandler_SelfUpdate_FailureAlsoPushesEvent(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("no sh on PATH to exercise the update spawn")

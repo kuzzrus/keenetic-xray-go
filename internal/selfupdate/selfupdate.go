@@ -9,10 +9,14 @@ package selfupdate
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -170,6 +174,9 @@ func Rollback(ctx context.Context, markerPath string, o RollbackOptions) error {
 	if err := fetch(ctx, m.IPKURL, dest); err != nil {
 		return fmt.Errorf("скачивание %s: %w", m.IPKURL, err)
 	}
+	if err := verifyIPK(ctx, fetch, m, dest, logf); err != nil {
+		return err
+	}
 
 	logf("откат: opkg install %s (форс-даунгрейд до %s)", filepath.Base(dest), m.PrevVersion)
 	if err := install(ctx, dest); err != nil {
@@ -178,6 +185,74 @@ func Rollback(ctx context.Context, markerPath string, o RollbackOptions) error {
 	_ = ClearMarker(markerPath)
 	logf("откат до %s выполнен — демон перезапустит postinst пакета", m.PrevVersion)
 	return nil
+}
+
+// ChecksumsURL is the release's checksums.txt, which release.yml extends
+// with every .ipk's sha256 (REL-01).
+func ChecksumsURL(version string) string {
+	v := strings.TrimPrefix(version, "v")
+	return fmt.Sprintf("https://github.com/%s/releases/download/v%s/checksums.txt", Repo, v)
+}
+
+// verifyIPK checks the downloaded .ipk against the checksums.txt of the
+// release it came from, as install.sh does for an install (2026-09-27
+// external review, R-4). A mismatch refuses the rollback. A checksums.txt
+// that can't be fetched, or that has no line for this .ipk (releases
+// older than REL-01), is only logged: a rollback is the way back from a
+// broken update and must not need more than the .ipk itself.
+func verifyIPK(ctx context.Context, fetch func(context.Context, string, string) error, m Marker, ipk string, logf func(string, ...any)) error {
+	sumsPath := ipk + ".checksums"
+	defer os.Remove(sumsPath)
+	url := ChecksumsURL(m.PrevVersion)
+	if err := fetch(ctx, url, sumsPath); err != nil {
+		logf("откат: %s недоступен (%v) — ставлю без проверки sha256", url, err)
+		return nil
+	}
+	sums, err := os.ReadFile(sumsPath)
+	if err != nil {
+		logf("откат: не читается %s (%v) — ставлю без проверки sha256", sumsPath, err)
+		return nil
+	}
+	name := path.Base(m.IPKURL)
+	want := checksumFor(string(sums), name)
+	if want == "" {
+		logf("откат: в checksums.txt релиза v%s нет %s — ставлю без проверки sha256", m.PrevVersion, name)
+		return nil
+	}
+	got, err := fileSHA256(ipk)
+	if err != nil {
+		return fmt.Errorf("sha256 %s: %w", ipk, err)
+	}
+	if got != want {
+		return fmt.Errorf("sha256 скачанного %s не совпадает с checksums.txt релиза v%s (%s, ожидался %s) — откат отменён", name, m.PrevVersion, got, want)
+	}
+	logf("откат: sha256 %s совпадает с checksums.txt", name)
+	return nil
+}
+
+// checksumFor finds name's hash in `sha256sum` output ("<hex>  <name>",
+// or "<hex> *<name>" in binary mode); "" when it isn't there.
+func checksumFor(sums, name string) string {
+	for _, line := range strings.Split(sums, "\n") {
+		f := strings.Fields(line)
+		if len(f) == 2 && strings.TrimPrefix(f[1], "*") == name {
+			return strings.ToLower(f[0])
+		}
+	}
+	return ""
+}
+
+func fileSHA256(p string) (string, error) {
+	f, err := os.Open(p)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // opkgInstallToFile runs the forced reinstall with opkg's output going to

@@ -176,6 +176,7 @@ func promptPublicAddress(in *bufio.Reader, out io.Writer, s *settings) error {
 	if err != nil {
 		return err
 	}
+	domain = normalizeDomain(domain)
 	if domain == "" {
 		domain = s.Domain
 	}

@@ -2,9 +2,13 @@ package selfupdate
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"os"
+	"path"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -116,6 +120,9 @@ func TestRollback(t *testing.T) {
 	opts := RollbackOptions{
 		DownloadPath: filepath.Join(t.TempDir(), "rb.ipk"),
 		Fetch: func(_ context.Context, url, dest string) error {
+			if url == ChecksumsURL(m.PrevVersion) {
+				return errors.New("404") // a release older than REL-01: installs unverified
+			}
 			fetchedURL, fetchedDest = url, dest
 			return writeRaw(dest, "ipk-bytes")
 		},
@@ -170,4 +177,65 @@ func writeMarkerT(t *testing.T, path string, m Marker) {
 
 func writeRaw(path, body string) error {
 	return os.WriteFile(path, []byte(body), 0o644)
+}
+
+// TestRollback_ChecksumVerified is R-4: the rollback .ipk is checked
+// against checksums.txt of the release it came from. A mismatch stops
+// the rollback before opkg ever sees the file, keeping the marker for a
+// retry; a matching sum, or a release with no line for it, goes ahead.
+func TestRollback_ChecksumVerified(t *testing.T) {
+	const ipkBody = "ipk-bytes"
+	goodSum := fmt.Sprintf("%x", sha256.Sum256([]byte(ipkBody)))
+	m := Marker{PrevVersion: "0.32.84", IPKURL: IPKURL("0.32.84", "aarch64-3.10"), Arch: "aarch64-3.10", StartedAt: time.Now()}
+	name := path.Base(m.IPKURL)
+
+	cases := []struct {
+		name      string
+		sums      string
+		wantErr   bool
+		installed bool
+	}{
+		{"match", goodSum + "  " + name + "\n", false, true},
+		{"match, binary-mode line among others", "abc  keenetic-xray_0.32.84_linux_arm64.tar.gz\n" + goodSum + " *" + name + "\n", false, true},
+		{"mismatch", strings.Repeat("0", 64) + "  " + name + "\n", true, false},
+		{"no line for it", "abc  something-else.ipk\n", false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			marker := filepath.Join(t.TempDir(), "self-update.json")
+			writeMarkerT(t, marker, m)
+			installed := false
+			err := Rollback(context.Background(), marker, RollbackOptions{
+				DownloadPath: filepath.Join(t.TempDir(), "rb.ipk"),
+				Fetch: func(_ context.Context, url, dest string) error {
+					switch url {
+					case m.IPKURL:
+						return writeRaw(dest, ipkBody)
+					case ChecksumsURL(m.PrevVersion):
+						return writeRaw(dest, tc.sums)
+					}
+					return fmt.Errorf("unexpected fetch of %s", url)
+				},
+				OpkgInstall: func(context.Context, string) error { installed = true; return nil },
+			})
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("Rollback err = %v, want error %v", err, tc.wantErr)
+			}
+			if installed != tc.installed {
+				t.Errorf("opkg install ran = %v, want %v", installed, tc.installed)
+			}
+			if _, ok := ReadMarker(marker); ok != tc.wantErr {
+				t.Errorf("marker kept = %v, want %v (kept only when the rollback didn't happen)", ok, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestChecksumsURL(t *testing.T) {
+	want := "https://github.com/kuzzrus/keenetic-xray-go/releases/download/v0.32.84/checksums.txt"
+	for _, v := range []string{"0.32.84", "v0.32.84"} {
+		if got := ChecksumsURL(v); got != want {
+			t.Errorf("ChecksumsURL(%q) = %q, want %q", v, got, want)
+		}
+	}
 }

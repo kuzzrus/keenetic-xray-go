@@ -36,14 +36,20 @@ command -v useradd >/dev/null 2>&1 || die "useradd not found; create the '${SVC_
 
 # fetch <url> [outfile] -- prints to stdout when no outfile is given.
 # Prefers curl; falls back to wget. Mirrors install.sh: some minimal
-# wget builds can't do HTTPS, and vice versa on other boxes.
+# wget builds can't do HTTPS, and vice versa on other boxes. Bounded, so
+# a stalled connection fails instead of hanging the install -- or the
+# self-update oneshot that re-runs this script.
 fetch() {
     _url="$1"
     _out="${2:-}"
     if command -v curl >/dev/null 2>&1; then
-        if [ -n "$_out" ]; then curl -fsSL "$_url" -o "$_out"; else curl -fsSL "$_url"; fi
+        if [ -n "$_out" ]; then
+            curl -fsSL --connect-timeout 15 --max-time 180 "$_url" -o "$_out"
+        else
+            curl -fsSL --connect-timeout 15 --max-time 180 "$_url"
+        fi
     else
-        if [ -n "$_out" ]; then wget -qO "$_out" "$_url"; else wget -qO- "$_url"; fi
+        if [ -n "$_out" ]; then wget -q -T 180 -O "$_out" "$_url"; else wget -q -T 180 -O- "$_url"; fi
     fi
 }
 
@@ -71,7 +77,14 @@ CHECKSUMS_URL="$(printf '%s\n' "$RELEASE_JSON" \
 [ -n "$CHECKSUMS_URL" ] || die "no checksums.txt asset in the latest release (${API_URL})"
 
 echo "server-install: downloading ${ASSET_URL}"
-TMP_BIN="$(mktemp)"
+# Next to $BIN_PATH, not in /tmp: the `mv` onto it below has to be a
+# rename within one filesystem, which is atomic. From /tmp -- often a
+# tmpfs -- mv falls back to copying onto the live path, and an
+# interrupted copy, or a service start in the middle of one, leaves or
+# runs a partial binary (2026-09-27 external review, R-7). Same for the
+# backup the rollback moves back.
+install -d -m 0755 "$(dirname "$BIN_PATH")"
+TMP_BIN="$(mktemp "${BIN_PATH}.new.XXXXXX")"
 PREV_BIN=""
 # A no-op once mv below succeeds (nothing left at $TMP_BIN to remove);
 # guards the case where fetch/checksum/smoke fails first and set -e exits
@@ -102,7 +115,7 @@ chmod 0755 "$TMP_BIN"
 # instead of leaving the server on a broken binary with no way back short
 # of a manual reinstall.
 if [ -e "$BIN_PATH" ]; then
-    PREV_BIN="$(mktemp)"
+    PREV_BIN="$(mktemp "${BIN_PATH}.prev.XXXXXX")"
     cp -p "$BIN_PATH" "$PREV_BIN"
 fi
 mv "$TMP_BIN" "$BIN_PATH"

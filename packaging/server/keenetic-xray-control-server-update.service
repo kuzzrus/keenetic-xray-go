@@ -10,3 +10,7 @@ Type=oneshot
 # control-server service -- neither of which the hardened, unprivileged
 # control-server unit can do to itself.
 ExecStart=/usr/local/lib/keenetic-xray/control-server-self-update.sh
+# A oneshot has no start timeout by default (infinity): a hung download
+# or installer would block every later "Обновить сервер" press for good.
+# Well above the scripts' own curl/wget bounds.
+TimeoutStartSec=15min

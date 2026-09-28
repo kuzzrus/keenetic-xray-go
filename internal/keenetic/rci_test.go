@@ -3,6 +3,7 @@ package keenetic
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -49,12 +50,12 @@ func rciJSONRoute(path, body string) func(*http.ServeMux) {
 // withRCIOff restores RCI state after a test that calls UseRCI.
 func withRCIOff(t *testing.T) {
 	t.Helper()
-	t.Cleanup(func() { _, _ = UseRCI("") })
+	t.Cleanup(func() { _, _ = UseRCI("", "") })
 }
 
 func TestUseRCI_BadURLLeavesModeOff(t *testing.T) {
 	withRCIOff(t)
-	if _, err := UseRCI("http://127.0.0.1:1"); err == nil {
+	if _, err := UseRCI("http://127.0.0.1:1", ""); err == nil {
 		t.Fatal("expected an error for an unreachable RCI base")
 	}
 	if RCIActive() {
@@ -65,17 +66,17 @@ func TestUseRCI_BadURLLeavesModeOff(t *testing.T) {
 func TestUseRCI_EmptyClears(t *testing.T) {
 	srv := rciTestServer(t, "system\n", `{"release":"5.1.3"}`)
 	withRCIOff(t)
-	if _, err := UseRCI(srv.URL); err != nil {
+	if _, err := UseRCI(srv.URL, ""); err != nil {
 		t.Fatalf("UseRCI: %v", err)
 	}
 	if !RCIActive() {
 		t.Fatal("RCI should be active")
 	}
-	if _, err := UseRCI(""); err != nil {
-		t.Fatalf("UseRCI(\"\"): %v", err)
+	if _, err := UseRCI("", ""); err != nil {
+		t.Fatalf("UseRCI(\"\", \"\"): %v", err)
 	}
 	if RCIActive() {
-		t.Error("RCI should be off after UseRCI(\"\")")
+		t.Error("RCI should be off after UseRCI(\"\", \"\")")
 	}
 }
 
@@ -93,7 +94,7 @@ func TestNdmcRun_RCIServesRunningConfigAndVersion(t *testing.T) {
 	}
 	t.Cleanup(func() { ndmcExec = origExec })
 
-	if _, err := UseRCI(srv.URL); err != nil {
+	if _, err := UseRCI(srv.URL, ""); err != nil {
 		t.Fatalf("UseRCI: %v", err)
 	}
 	ctx := context.Background()
@@ -127,7 +128,7 @@ func TestNdmcRun_RCIFallsThroughForOtherCommands(t *testing.T) {
 	}
 	t.Cleanup(func() { ndmcExec = origExec })
 
-	if _, err := UseRCI(srv.URL); err != nil {
+	if _, err := UseRCI(srv.URL, ""); err != nil {
 		t.Fatalf("UseRCI: %v", err)
 	}
 	ctx := context.Background()
@@ -197,7 +198,7 @@ func TestNdmcRun_RCIServesInterface(t *testing.T) {
 		return "", nil
 	}
 	t.Cleanup(func() { ndmcExec = origExec })
-	if _, err := UseRCI(srv.URL); err != nil {
+	if _, err := UseRCI(srv.URL, ""); err != nil {
 		t.Fatalf("UseRCI: %v", err)
 	}
 	ctx := context.Background()
@@ -234,7 +235,7 @@ func TestNdmcRun_RCIInterfaceFetchErrorFallsThrough(t *testing.T) {
 		return "exec-answer", nil
 	}
 	t.Cleanup(func() { ndmcExec = origExec })
-	if _, err := UseRCI(srv.URL); err != nil {
+	if _, err := UseRCI(srv.URL, ""); err != nil {
 		t.Fatalf("UseRCI: %v", err)
 	}
 	out, err := ndmcRun(context.Background(), "show interface Bridge0")
@@ -335,7 +336,7 @@ func TestAvailable_TrueWithRCIEvenWithoutNdmc(t *testing.T) {
 	if Available() {
 		t.Fatal("Available() should be false with no ndmc and no RCI")
 	}
-	if _, err := UseRCI(srv.URL); err != nil {
+	if _, err := UseRCI(srv.URL, ""); err != nil {
 		t.Fatalf("UseRCI: %v", err)
 	}
 	if !Available() {
@@ -362,5 +363,66 @@ func TestRunningConfigFromRCI(t *testing.T) {
 	}
 	if _, err := runningConfigFromRCI([]byte(`{"message":123}`)); err == nil {
 		t.Error("expected an error for an unexpected message shape")
+	}
+}
+
+// rciTokenServer is rciTestServer behind a token check, the way
+// KeeneticOS 5.2 answers: 401 without the right X-Ndma-Tkn.
+func rciTokenServer(t *testing.T, runningCfg, versionJSON, want string) *httptest.Server {
+	t.Helper()
+	inner := rciTestServer(t, runningCfg, versionJSON)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(RCITokenHeader) != want {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		inner.Config.Handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestRCI_Token: KeeneticOS 5.2 wants X-Ndma-Tkn even on loopback. No
+// token (or a wrong one) is ErrRCIAuth and leaves RCI mode off; the
+// right one turns it on and rides along on every read after.
+func TestRCI_Token(t *testing.T) {
+	withRCIOff(t)
+	srv := rciTokenServer(t, "interface Proxy0\n", `{"title":"5.2.1"}`, "good-token-1234567890")
+
+	for _, tok := range []string{"", "wrong-token-1234567890"} {
+		if _, err := UseRCI(srv.URL, tok); !errors.Is(err, ErrRCIAuth) {
+			t.Errorf("UseRCI with token %q: err = %v, want ErrRCIAuth", tok, err)
+		}
+		if RCIActive() {
+			t.Errorf("RCI active after a refused token %q", tok)
+		}
+	}
+
+	if _, err := UseRCI(srv.URL, "good-token-1234567890"); err != nil {
+		t.Fatalf("UseRCI with the right token: %v", err)
+	}
+	out, err := ndmcRun(context.Background(), "show running-config")
+	if err != nil || !strings.Contains(out, "interface Proxy0") {
+		t.Errorf("read over RCI with the token: %q, %v", out, err)
+	}
+	ver, err := ProbeRCI(context.Background(), srv.URL, "good-token-1234567890")
+	if err != nil || ver != "5.2.1" {
+		t.Errorf("ProbeRCI = %q, %v; want 5.2.1", ver, err)
+	}
+}
+
+// TestUseRCI_FailedChangeTurnsModeOff: a change that doesn't work -- a
+// revoked or mistyped token -- must not leave the old client in use.
+func TestUseRCI_FailedChangeTurnsModeOff(t *testing.T) {
+	withRCIOff(t)
+	srv := rciTokenServer(t, "", `{"title":"5.2.1"}`, "good-token-1234567890")
+	if _, err := UseRCI(srv.URL, "good-token-1234567890"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UseRCI(srv.URL, "revoked-token-12345678"); err == nil {
+		t.Fatal("UseRCI with a refused token succeeded")
+	}
+	if RCIActive() {
+		t.Error("the old client stayed active after a failed change")
 	}
 }

@@ -503,6 +503,20 @@ func (b *TelegramBot) apiPost(ctx context.Context, method string, payload any) (
 	return data, nil
 }
 
+// deleteMessage removes one message, best-effort, and reports whether it
+// did. In a private chat a bot may delete the user's own messages; in a
+// group it needs the admin right to.
+func (b *TelegramBot) deleteMessage(ctx context.Context, chatID int64, messageID int) bool {
+	if messageID == 0 {
+		return false
+	}
+	if _, err := b.apiPost(ctx, "deleteMessage", map[string]any{"chat_id": chatID, "message_id": messageID}); err != nil {
+		b.logger().Printf("telegram: deleteMessage: %s", b.scrubToken(err))
+		return false
+	}
+	return true
+}
+
 // downloadFile fetches one Telegram-hosted file's bytes given its
 // file_id. Bot API quirk: getFile only resolves file_id -> file_path;
 // the actual bytes live under a *different* base path than every other
@@ -681,6 +695,11 @@ func (b *TelegramBot) handleMessage(ctx context.Context, msg tgMessage) {
 		return
 	}
 	text := strings.TrimSpace(msg.Text)
+	if !strings.HasPrefix(text, "/") && b.wizardStepIs(msg.Chat.ID, wizRCIToken) {
+		// A router admin token: out of the chat history before anything
+		// else happens to it.
+		b.markSecretDeleted(msg.Chat.ID, b.deleteMessage(ctx, msg.Chat.ID, msg.MessageID))
+	}
 	if b.handleWizardText(ctx, msg.Chat.ID, text) {
 		return
 	}

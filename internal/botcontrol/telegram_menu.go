@@ -51,7 +51,7 @@ func routerCardKB(id string) inlineKeyboard {
 	return inlineKeyboard{InlineKeyboard: [][]inlineButton{
 		{{Text: "📊 Статус", CallbackData: "act:status:" + id}, {Text: "🩺 Doctor", CallbackData: "act:doctor:" + id}, {Text: "📜 Логи", CallbackData: "act:logs:" + id}},
 		{{Text: "⬆️ primary", CallbackData: "act:sw_pri:" + id}, {Text: "⬇️ backup", CallbackData: "act:sw_bak:" + id}},
-		{{Text: "🔗 Источники", CallbackData: "srcm:" + id}, {Text: "🐕 Вотчдог", CallbackData: "wdm:" + id}},
+		{{Text: "🔗 Источники", CallbackData: "srcm:" + id}, {Text: "🐕 Вотчдог", CallbackData: "wdm:" + id}, {Text: "🔌 RCI", CallbackData: "rcim:" + id}},
 		{{Text: "⚙️ Порты и транспорт", CallbackData: "ptm:" + id}, {Text: "🧩 Ядро xray", CallbackData: "corem:" + id}},
 		{{Text: "📍 Маршруты", CallbackData: "rtm:" + id}, {Text: "🧩 Дополнения", CallbackData: "adnm:" + id}},
 		{{Text: "🔄 Обновить подписку", CallbackData: "act:sub_refresh:" + id}, {Text: "♻️ Рестарт демона", CallbackData: "act:restart:" + id}},
@@ -98,6 +98,27 @@ func sourcesScreenText(id string) string {
 func sourcesScreenKB(id string) inlineKeyboard {
 	return inlineKeyboard{InlineKeyboard: [][]inlineButton{
 		{{Text: "⬆️ Основная", CallbackData: "srcp:" + id}, {Text: "⬇️ Резервная", CallbackData: "srcb:" + id}},
+		{{Text: "⬅️ Назад", CallbackData: "router:" + id}},
+	}}
+}
+
+func rciScreenText(id string) string {
+	return "🔌 RCI " + id + "\n\n" +
+		"RCI — локальный JSON-API Keenetic. Включённый, он даёт агенту читать конфиг роутера через API, " +
+		"а не через ndmc: страховка для прошивок, где Entware отрезан от ndmc. Записи всё равно идут через ndmc. " +
+		"По умолчанию выключен, и без нужды включать его незачем.\n\n" +
+		"KeeneticOS 5.2 пускает в RCI только с токеном доступа: " + rciTokenHowTo + ". " +
+		"Токен показывается один раз — скопируй его и пришли через 🔑 Ввести токен. " +
+		"Он даёт права администратора, поэтому сообщение с ним бот сразу удалит из чата; " +
+		"на роутере токен лежит в config.json (права 0600) и ни в одном ответе не показывается.\n\n" +
+		"Состояние — 📊 Статус."
+}
+
+func rciScreenKB(id string) inlineKeyboard {
+	return inlineKeyboard{InlineKeyboard: [][]inlineButton{
+		{{Text: "📊 Статус", CallbackData: "act:rci_show:" + id}},
+		{{Text: "✅ Включить", CallbackData: "act:rci_on:" + id}, {Text: "⛔ Выключить", CallbackData: "act:rci_off:" + id}},
+		{{Text: "🔑 Ввести токен", CallbackData: "rcitok:" + id}, {Text: "🧹 Удалить токен", CallbackData: "rcitokdel:" + id}},
 		{{Text: "⬅️ Назад", CallbackData: "router:" + id}},
 	}}
 }
@@ -321,6 +342,12 @@ func callbackAction(name string) string {
 		return ActionWatchdogDisable
 	case "wd_log":
 		return ActionWatchdogLog
+	case "rci_show":
+		return ActionRCIShow
+	case "rci_on":
+		return ActionRCIOn
+	case "rci_off":
+		return ActionRCIOff
 	case "logs":
 		return ActionDaemonLog
 	}
@@ -414,6 +441,17 @@ func (b *TelegramBot) handleCallback(ctx context.Context, cb tgCallbackQuery) {
 			return
 		}
 		b.editCB(ctx, cb, watchdogScreenText(id), watchdogScreenKB(id))
+	case strings.HasPrefix(data, "rcim:"):
+		id := strings.TrimPrefix(data, "rcim:")
+		if !b.Store.HasRouter(id) {
+			b.editCB(ctx, cb, "нет такого роутера: "+id, b.routersListKB())
+			return
+		}
+		b.editCB(ctx, cb, rciScreenText(id), rciScreenKB(id))
+	case strings.HasPrefix(data, "rcitok:"):
+		b.startRCITokenWizard(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "rcitok:"))
+	case strings.HasPrefix(data, "rcitokdel:"):
+		b.enqueueCardArgs(ctx, cb, strings.TrimPrefix(data, "rcitokdel:"), ActionRCIToken, []string{""})
 	case strings.HasPrefix(data, "ptm:"):
 		id := strings.TrimPrefix(data, "ptm:")
 		if !b.Store.HasRouter(id) {

@@ -587,11 +587,17 @@ type WGTransportConfig struct {
 
 // RCIConfig toggles reading the running config over the local RCI JSON
 // API. URL is the router-local base (scheme + host + port), default
-// DefaultRCIURL; no credentials -- KeeneticOS serves RCI without auth to
-// 127.0.0.1.
+// DefaultRCIURL. Up to KeeneticOS 5.1 RCI needs no credentials on
+// 127.0.0.1; 5.2 wants an access token even there.
 type RCIConfig struct {
 	Enabled bool   `json:"enabled"`
 	URL     string `json:"url,omitempty"` // "" -> DefaultRCIURL
+	// Token is the RCI access token KeeneticOS 5.2+ requires, created in
+	// the web UI (Пользователи и доступ → Токены доступа) and sent as the
+	// X-Ndma-Tkn header. It carries administrator rights on the router:
+	// config.json is 0600, Redacted masks it, and the bot scrubs it from
+	// anything it sends back.
+	Token string `json:"token,omitempty"`
 }
 
 // DefaultRCIURL is where KeeneticOS's ndhttpd answers RCI on the router
@@ -604,6 +610,25 @@ func (r RCIConfig) BaseURL() string {
 		return DefaultRCIURL
 	}
 	return r.URL
+}
+
+// ValidRCIToken is a sanity check on a pasted RCI token: one word of
+// base64/URL-safe characters, 16 to 512 long. It catches a pasted
+// sentence or a copy cut short; whether the router accepts the token
+// only a probe can tell.
+func ValidRCIToken(s string) bool {
+	if len(s) < 16 || len(s) > 512 {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case strings.ContainsRune("+/=_.-", r):
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // AdaptiveRouteConfig is Susanin Phase 2: native per-IP adaptive routing
@@ -1640,6 +1665,7 @@ func (c *Config) Redacted() *Config {
 	d.WGTransport.XrayPublicKey = mask(d.WGTransport.XrayPublicKey)
 	d.WGTransport.KeeneticPublicKey = mask(d.WGTransport.KeeneticPublicKey)
 	d.WGTransport.PSK = mask(d.WGTransport.PSK)
+	d.RCI.Token = mask(d.RCI.Token)
 	for i := range d.DNS.DoH {
 		d.DNS.DoH[i].URL = redactURLPath(d.DNS.DoH[i].URL)
 	}

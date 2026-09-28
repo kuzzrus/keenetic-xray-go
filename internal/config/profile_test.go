@@ -1102,3 +1102,36 @@ func TestProfileValidate_AmneziaWGJunk(t *testing.T) {
 		})
 	}
 }
+
+// TestRedacted_RCIToken: the RCI token carries administrator rights on
+// the router; diag's redacted config must not show it.
+func TestRedacted_RCIToken(t *testing.T) {
+	c := Default()
+	c.RCI = RCIConfig{Enabled: true, Token: "4RZVZobf1GUbarwNL0irYboZut05Aqpby8y"}
+	r := c.Redacted()
+	if r.RCI.Token != "<redacted>" {
+		t.Errorf("redacted RCI token = %q", r.RCI.Token)
+	}
+	if c.RCI.Token != "4RZVZobf1GUbarwNL0irYboZut05Aqpby8y" {
+		t.Error("Redacted changed the original config")
+	}
+}
+
+func TestValidRCIToken(t *testing.T) {
+	for _, tc := range []struct {
+		in string
+		ok bool
+	}{
+		{"4RZVZobf1GUbarwNL0irYboZut05Aqpby8yCNQ9qUz0dCo6xo", true}, // shape of a real KeeneticOS 5.2 token
+		{"abc+/=_.-DEF0123456789", true},
+		{"", false},
+		{"short-token", false},
+		{"two words token here 123", false},
+		{"токен-на-кириллице-длинный", false},
+		{strings.Repeat("a", 513), false},
+	} {
+		if got := ValidRCIToken(tc.in); got != tc.ok {
+			t.Errorf("ValidRCIToken(%q) = %v, want %v", tc.in, got, tc.ok)
+		}
+	}
+}

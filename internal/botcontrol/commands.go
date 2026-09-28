@@ -1280,8 +1280,8 @@ func (h *RouterHandler) selfUpdate() (string, error) {
 		// backslash-heavy t.TempDir() paths in tests to work at all.
 		rmLock = "; rm -f '" + h.SelfUpdateLock + "'"
 	}
-	cmd := "sleep 2; curl -fsSL --connect-timeout 10 --max-time 60 " + url + " -o " + tmpScript +
-		" && sh " + tmpScript + "; rc=$?; rm -f " + tmpScript + rmLock + "; exit $rc"
+	fetch, fetchEnv := selfUpdateFetch(url, tmpScript, h.Config.Failover.SOCKSPort)
+	cmd := "sleep 2; " + fetch + " && " + fetchEnv + "sh " + tmpScript + "; rc=$?; rm -f " + tmpScript + rmLock + "; exit $rc"
 	// See selfUpdateOverallTimeout's own doc comment for why this needs
 	// its own fresh, independent deadline rather than reusing whatever
 	// ctx Handle was called with (this detached child is meant to
@@ -1343,6 +1343,25 @@ func (h *RouterHandler) selfUpdate() (string, error) {
 	// window (still unexplained) makes either a short or a long number
 	// equally likely to read as wrong.
 	return "обновление агента запущено — результат появится в этом же сообщении" + rollbackNote, nil
+}
+
+// selfUpdateFetch is the self-update chain's download of install.sh, as
+// a shell list: as is, then IPv4 with a small TLS ClientHello, then --
+// when the production xray's SOCKS port is known -- through the router's
+// own tunnel. The same ladder as install.sh's own fetch() and
+// internal/netfetch. env hands install.sh that tunnel for its own
+// downloads (KEENETIC_XRAY_FETCH_PROXY), prefixed to its `sh`.
+func selfUpdateFetch(url, dest string, socksPort int) (fetch, env string) {
+	try := func(extra string) string {
+		return "curl -fsSL --connect-timeout 10 --max-time 60 " + extra + url + " -o " + dest
+	}
+	steps := []string{try(""), try("-4 --curves X25519 ")}
+	if socksPort > 0 {
+		proxy := fmt.Sprintf("socks5h://127.0.0.1:%d", socksPort)
+		steps = append(steps, try("--proxy "+proxy+" "))
+		env = "KEENETIC_XRAY_FETCH_PROXY=" + proxy + " "
+	}
+	return "{ " + strings.Join(steps, " || ") + "; }", env
 }
 
 // logSelfUpdateOutcome waits for the detached install.sh run and logs

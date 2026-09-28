@@ -28,6 +28,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/kuzzrus/keenetic-xray-go/internal/netfetch"
 )
 
 // PinnedVersion is the klzgrad/naiveproxy release this project has
@@ -109,7 +111,7 @@ func installVendored(ctx context.Context, opts Options, dest string, smoke func(
 	}
 	hc := opts.HTTP
 	if hc == nil {
-		hc = &http.Client{Timeout: 4 * time.Minute}
+		hc = netfetch.Client(4 * time.Minute)
 	}
 
 	name := fmt.Sprintf("naive-%s-linux-%s", version, runtime.GOARCH)

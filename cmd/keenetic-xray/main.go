@@ -18,6 +18,7 @@ import (
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 	"github.com/kuzzrus/keenetic-xray-go/internal/failover"
 	"github.com/kuzzrus/keenetic-xray-go/internal/keenetic"
+	"github.com/kuzzrus/keenetic-xray-go/internal/netfetch"
 	"github.com/kuzzrus/keenetic-xray-go/internal/presets"
 	"github.com/kuzzrus/keenetic-xray-go/internal/version"
 )
@@ -230,6 +231,7 @@ func cmdDaemon(args []string) (err error) {
 		fmt.Fprintf(logw, time.Now().Format("15:04:05")+" "+format+"\n", a...)
 	}
 	presets.SetOverlay(presetsOverlayDir())
+	netfetch.Logf = logf // which way a download got through, in daemon.log with the rest
 	if cfg.RCI.Enabled {
 		if url, err := keenetic.UseRCI(cfg.RCI.BaseURL(), cfg.RCI.Token); err != nil {
 			logf("rci: %v — читаю конфиг через ndmc", err)

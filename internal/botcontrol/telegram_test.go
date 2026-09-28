@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -17,13 +19,24 @@ import (
 // pushes more); sendMessage / editMessageText record what the bot did so
 // tests can assert on replies and in-place menu edits.
 type fakeTelegram struct {
-	mu       sync.Mutex
+	mu sync.Mutex
+	// documents is every sendDocument upload.
+	documents []sentDocument
+
 	updates  []tgUpdate
 	sent     []sentMessage
 	edits    []sentMessage
 	nextMsg  int
 	updateID int64
 	files    map[string][]byte // file_id -> content, for getFile + download
+}
+
+// sentDocument is one sendDocument upload.
+type sentDocument struct {
+	ChatID  int64
+	Name    string
+	Caption string
+	Content string
 }
 
 type sentMessage struct {
@@ -96,6 +109,22 @@ func newFakeTelegram(t *testing.T) (*httptest.Server, *fakeTelegram) {
 			// file_path == file_id keeps this fake simple; the download
 			// branch above just looks it back up in f.files.
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{"file_id": body.FileID, "file_path": body.FileID}})
+		case strings.HasSuffix(r.URL.Path, "/sendDocument"):
+			if err := r.ParseMultipartForm(1 << 20); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			file, hdr, err := r.FormFile("document")
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			content, _ := io.ReadAll(file)
+			chatID, _ := strconv.ParseInt(r.FormValue("chat_id"), 10, 64)
+			f.mu.Lock()
+			f.documents = append(f.documents, sentDocument{ChatID: chatID, Name: hdr.Filename, Caption: r.FormValue("caption"), Content: string(content)})
+			f.mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{"message_id": 1}})
 		case strings.HasSuffix(r.URL.Path, "/sendMessage"):
 			var body struct {
 				ChatID      int64           `json:"chat_id"`

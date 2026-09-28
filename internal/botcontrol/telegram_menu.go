@@ -49,7 +49,8 @@ func (b *TelegramBot) routersListKB() inlineKeyboard {
 
 func routerCardKB(id string) inlineKeyboard {
 	return inlineKeyboard{InlineKeyboard: [][]inlineButton{
-		{{Text: "📊 Статус", CallbackData: "act:status:" + id}, {Text: "🩺 Doctor", CallbackData: "act:doctor:" + id}, {Text: "📜 Логи", CallbackData: "act:logs:" + id}},
+		{{Text: "📊 Статус", CallbackData: "act:status:" + id}, {Text: "🩺 Doctor", CallbackData: "act:doctor:" + id}},
+		{{Text: "📜 Логи", CallbackData: "act:logs:" + id}, {Text: "🧾 Диагностика", CallbackData: "diagf:" + id}},
 		{{Text: "⬆️ primary", CallbackData: "act:sw_pri:" + id}, {Text: "⬇️ backup", CallbackData: "act:sw_bak:" + id}},
 		{{Text: "🔗 Источники", CallbackData: "srcm:" + id}, {Text: "🐕 Вотчдог", CallbackData: "wdm:" + id}},
 		{{Text: "⚙️ Порты и транспорт", CallbackData: "ptm:" + id}, {Text: "🧩 Ядро xray", CallbackData: "corem:" + id}},
@@ -435,6 +436,8 @@ func (b *TelegramBot) handleCallback(ctx context.Context, cb tgCallbackQuery) {
 			return
 		}
 		b.editCB(ctx, cb, adaptiveRouteScreenText(id), adaptiveRouteScreenKB(id))
+	case strings.HasPrefix(data, "diagf:"):
+		go b.sendDiagFile(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "diagf:"))
 	case strings.HasPrefix(data, "ptwiz:"):
 		b.startPortsWizard(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "ptwiz:"))
 	case strings.HasPrefix(data, "ptif:"):

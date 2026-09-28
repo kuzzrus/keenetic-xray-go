@@ -136,12 +136,12 @@ func reconcileSusanin(ctx context.Context, logf func(string, ...any)) {
 // is down (applyProxy0HealthCheck -- whenever the interface is in use,
 // enabled or not; see proxy0InUse). Reads only, on the healthy path.
 func reconcileProxy0(ctx context.Context, cfg *config.Config, logf func(string, ...any)) {
-	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
 	if cfg.Proxy0.Enabled {
+		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		reconcileProxy0Upstream(cctx, cfg, logf)
+		cancel()
 	}
-	applyProxy0HealthCheck(cctx, cfg, logf, true)
+	ensureProxy0HealthCheck(ctx, cfg, logf, true)
 }
 
 // reconcileProxy0Upstream re-points the Proxy interface at the local

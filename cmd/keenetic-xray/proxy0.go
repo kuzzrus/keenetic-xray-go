@@ -148,7 +148,9 @@ func proxy0Set(cfg *config.Config, args []string) error {
 	}
 	fmt.Printf("%s (%s) -> %s:%d\n", cfg.Proxy0.IfaceName(), cfg.Proxy0.ProtoName(), ip, port)
 	printf := func(f string, a ...any) { fmt.Printf(f+"\n", a...) }
-	applyProxy0HealthCheck(ctx, cfg, printf, false)
+	// A fresh budget, not what ConfigureProxy0 left of ctx. No retries
+	// from a one-shot CLI: the daemon's reconcile picks up a failure.
+	applyProxy0HealthCheck(context.Background(), cfg, printf, false)
 	applyMSSClamp(cfg, printf)
 	applyDaemonChange(bufio.NewReader(os.Stdin), true)
 	return nil
@@ -206,17 +208,19 @@ func proxy0Off(cfg *config.Config) error {
 // applyProxy0AtStartup is called by the daemon: if Proxy0 is enabled,
 // (re)assert the upstream so a firmware event that dropped it self-heals;
 // then bring the health check in line, regardless of Enabled -- see
-// proxy0InUse for why. Best-effort -- failures are logged, not fatal.
-func applyProxy0AtStartup(cfg *config.Config, logf func(string, ...any)) {
+// proxy0InUse for why -- under its own timeout, and retried in the
+// background for as long as ctx lives if the router wasn't ready.
+// Best-effort -- failures are logged, not fatal.
+func applyProxy0AtStartup(ctx context.Context, cfg *config.Config, logf func(string, ...any)) {
 	if !keenetic.Available() {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 	if cfg.Proxy0.Enabled {
-		configureProxy0AtStartup(ctx, cfg, logf)
+		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		configureProxy0AtStartup(cctx, cfg, logf)
+		cancel()
 	}
-	applyProxy0HealthCheck(ctx, cfg, logf, false)
+	ensureProxy0HealthCheck(ctx, cfg, logf, false)
 }
 
 func configureProxy0AtStartup(ctx context.Context, cfg *config.Config, logf func(string, ...any)) {

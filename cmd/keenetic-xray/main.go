@@ -268,7 +268,7 @@ func cmdDaemon(args []string) (err error) {
 	go func() { runErr <- d.Run(ctx) }()
 	var startupWG sync.WaitGroup
 	for _, fn := range []func(){
-		func() { applyProxy0AtStartup(cfg, logf) },
+		func() { applyProxy0AtStartup(ctx, cfg, logf) },
 		func() { applyRoutesAtStartup(cfg, logf) },
 		func() { applyMSSClamp(cfg, logf) },
 		func() { applyDNSAtStartup(cfg, logf) },

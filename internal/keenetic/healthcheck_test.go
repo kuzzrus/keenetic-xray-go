@@ -314,3 +314,41 @@ func TestEnsureHealthCheck_BadReadBackRemovesIt(t *testing.T) {
 		t.Errorf("profile not removed after a failed read-back:\n%s", strings.Join(f.sent, "\n"))
 	}
 }
+
+// TestEnsureHealthCheck_SavesOnlyAVerifiedCheck: the save comes after
+// the read-back, and a failed save is ErrNotSaved -- transient, with the
+// verified check left bound rather than torn down.
+func TestEnsureHealthCheck_SavesOnlyAVerifiedCheck(t *testing.T) {
+	f := &fakeRouter{fail: map[string]error{"system configuration save": errors.New("exit status 1")}}
+	f.install(t)
+	origRun := ndmcRun
+	reads := 0
+	ndmcRun = func(ctx context.Context, cmd string) (string, error) {
+		if cmd == "show ping-check" {
+			if reads++; reads > 1 {
+				f.sent = append(f.sent, cmd)
+				return tlsProfileOutput("pass", 0), nil
+			}
+		}
+		return origRun(ctx, cmd)
+	}
+	changed, err := EnsureProxy0HealthCheck(context.Background(), "Proxy0")
+	if !changed || !errors.Is(err, ErrNotSaved) {
+		t.Fatalf("changed=%v err=%v, want changed with an ErrNotSaved error", changed, err)
+	}
+	if !Transient(err) {
+		t.Error("a failed save must count as transient")
+	}
+	lastRead := -1
+	for i, c := range f.sent {
+		if c == "show ping-check" {
+			lastRead = i
+		}
+	}
+	if save := indexOf(f.sent, "system configuration save"); save < lastRead {
+		t.Errorf("saved before the read-back verified the check:\n%s", strings.Join(f.sent, "\n"))
+	}
+	if strings.Contains(strings.Join(f.sent, "\n"), "no ping-check profile kxray") {
+		t.Errorf("a verified check was removed over a failed save:\n%s", strings.Join(f.sent, "\n"))
+	}
+}

@@ -161,7 +161,8 @@ func unbindCmd(iface string) string { return "interface " + iface + " no ping-ch
 // that rejects tls (KeeneticOS before 4.0) must never end up with the
 // profile bound in its default mode, so any failure before tls is
 // confirmed deletes the half-built profile, and a read-back that does
-// not show the wanted settings undoes the whole thing.
+// not show the wanted settings undoes the whole thing. Only a verified
+// check gets saved.
 func EnsureProxy0HealthCheck(ctx context.Context, iface string) (changed bool, err error) {
 	if iface == "" {
 		iface = "Proxy0"
@@ -203,10 +204,9 @@ func EnsureProxy0HealthCheck(ctx context.Context, iface string) (changed bool, e
 			_, _ = ndmcRun(ctx, unbindCmd(b.Interface))
 		}
 	}
-	for _, c := range []string{"interface " + iface + " ping-check profile " + HealthCheckProfile, "system configuration save"} {
-		if _, err := ndmcRun(ctx, c); err != nil {
-			return true, fmt.Errorf("ndmc %q: %w", c, err)
-		}
+	bind := "interface " + iface + " ping-check profile " + HealthCheckProfile
+	if _, err := ndmcRun(ctx, bind); err != nil {
+		return true, fmt.Errorf("ndmc %q: %w", bind, err)
 	}
 
 	got, ok, err := Proxy0HealthCheck(ctx)
@@ -218,7 +218,11 @@ func EnsureProxy0HealthCheck(ctx context.Context, iface string) (changed bool, e
 		return true, fmt.Errorf("%s reads back as mode=%q host=%q port=%d on %v -- removed it rather than leave a wrong check bound",
 			HealthCheckProfile, got.Mode, got.Host, got.Port, got.Bindings)
 	}
-	return true, nil
+	// Saved last, once verified: an error wrapping ErrNotSaved means the
+	// check is bound and right, only not yet persisted -- and the next
+	// call sees it in place and returns a no-op, so the caller has to
+	// remember to save (see cmd/keenetic-xray's proxy0HealthState).
+	return true, SaveConfig(ctx)
 }
 
 // RemoveHealthCheck unbinds HealthCheckProfile from every interface it is

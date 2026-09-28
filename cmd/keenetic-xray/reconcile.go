@@ -52,6 +52,11 @@ func routerReconcileLoop(ctx context.Context, d *failover.Daemon, logf func(stri
 // (WG-01) so a re-key it finds can reach the running xray-core, not just
 // config.json; nil is fine (some callers -- tests, mainly -- have no
 // daemon to push into), it just means that specific push is skipped.
+//
+// The iptables rules go first. The netfilter.d hook's SIGUSR1 means ndm
+// has just rebuilt a table and dropped them, and until they're back the
+// traffic they steer goes around the tunnel -- they used to wait behind
+// the ndmc steps, several `show running-config` reads' worth of time.
 func reconcileOnce(ctx context.Context, d *failover.Daemon, logf func(string, ...any)) {
 	if !keenetic.Available() {
 		return
@@ -60,15 +65,15 @@ func reconcileOnce(ctx context.Context, d *failover.Daemon, logf func(string, ..
 	if err != nil {
 		return
 	}
+	reconcileAdaptiveRoute(ctx, cfg, logf)
+	reconcileMSSClamp(ctx, cfg, logf)
+	reconcileL7SNI(ctx, cfg, logf)
 	reconcileProxy0(ctx, cfg, logf)
 	reconcileInboundBind(ctx, d, cfg, logf)
 	applyRoutesAtStartup(cfg, logf) // already drift-based and quiet-when-clean
 	reconcileWGTransport(ctx, d, cfg, logf)
-	reconcileMSSClamp(ctx, cfg, logf)
 	reconcileDNS(ctx, cfg, logf)
 	reconcileSusanin(ctx, logf)
-	reconcileAdaptiveRoute(ctx, cfg, logf)
-	reconcileL7SNI(ctx, cfg, logf)
 	reconcileWatchdog(logf)
 }
 

@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/kuzzrus/keenetic-xray-go/internal/netfetch"
 )
 
 // SourceURL is the one combined, already-deduplicated file covering
@@ -36,7 +38,7 @@ func FetchRaw(ctx context.Context, sourceURL string) (string, error) {
 		return "", err
 	}
 	req.Header.Set("User-Agent", "keenetic-xray knownranges")
-	hc := &http.Client{Timeout: 30 * time.Second}
+	hc := netfetch.Client(time.Minute) // room for netfetch's fallbacks after a blocked direct attempt
 	resp, err := hc.Do(req)
 	if err != nil {
 		return "", err

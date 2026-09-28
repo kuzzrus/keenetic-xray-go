@@ -20,6 +20,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/kuzzrus/keenetic-xray-go/internal/netfetch"
 )
 
 // DefaultTag is the pinned XTLS/Xray-core release the vendored builds
@@ -214,7 +216,7 @@ func installVendored(ctx context.Context, opts Options, dest string, smoke func(
 	}
 	hc := opts.HTTP
 	if hc == nil {
-		hc = &http.Client{Timeout: 4 * time.Minute}
+		hc = netfetch.Client(4 * time.Minute)
 	}
 
 	name := fmt.Sprintf("xray-%s-linux-%s", tag, runtime.GOARCH)

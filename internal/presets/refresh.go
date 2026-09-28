@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
+	"github.com/kuzzrus/keenetic-xray-go/internal/netfetch"
 )
 
 // DefaultSourceURL is where Refresh pulls the daily-updated lists from:
@@ -69,7 +70,7 @@ func Refresh(ctx context.Context, baseURL string) (Result, error) {
 	}
 	baseURL = strings.TrimRight(baseURL, "/")
 
-	hc := &http.Client{Timeout: 30 * time.Second}
+	hc := netfetch.Client(time.Minute) // room for netfetch's fallbacks after a blocked direct attempt
 
 	raw, err := httpGet(ctx, hc, baseURL+"/manifest.json", maxManifestBytes)
 	if err != nil {

@@ -84,22 +84,68 @@ done
 # there never is one. 15s to open the connection, 180s total is generous
 # for the .ipk (a few MB) even on a slow mobile uplink, and turns a
 # permanent hang into a bounded, reported failure.
+#
+# A curl that fails gets two more tries (the same ladder as the Go side,
+# internal/netfetch): IPv4 with a small TLS ClientHello (`-4 --curves
+# X25519` -- today's post-quantum key share makes the ClientHello big
+# enough for some DPI boxes and old TLS stacks to choke on), then, when
+# keenetic-xray already runs (an update, a reinstall), through its own
+# tunnel. Each try's stdout output is buffered (curl_once), so one that
+# dies half-way can't leave its partial output in front of the next's.
 fetch() {
     url="$1"
     out="${2:-}"
-    if command -v curl >/dev/null 2>&1; then
-        if [ -n "$out" ]; then
-            curl -fsSL --connect-timeout 15 --max-time 180 "$url" -o "$out"
-        else
-            curl -fsSL --connect-timeout 15 --max-time 180 "$url"
-        fi
-    else
+    if ! command -v curl >/dev/null 2>&1; then
         if [ -n "$out" ]; then
             wget -q -T 180 "$url" -O "$out"
         else
             wget -qO- -T 180 "$url"
         fi
+        return
     fi
+    fetch_curl "$url" "$out"
+}
+
+fetch_curl() {
+    fc_url="$1"
+    fc_out="$2"
+    curl_once "$fc_url" "$fc_out" && return 0
+    curl_once "$fc_url" "$fc_out" -4 --curves X25519 && return 0
+    fc_proxy="$(tunnel_proxy)"
+    [ -n "$fc_proxy" ] || return 1
+    echo "keenetic-xray: $fc_url напрямую не скачивается — пробую через туннель keenetic-xray" >&2
+    curl_once "$fc_url" "$fc_out" --proxy "$fc_proxy"
+}
+
+# curl_once <url> <out|""> [extra curl args...] -- to stdout only once the
+# whole body is in: text only (the release JSON, checksums.txt).
+curl_once() {
+    co_url="$1"
+    co_out="$2"
+    shift 2
+    if [ -n "$co_out" ]; then
+        curl -fsSL --connect-timeout 15 --max-time 180 "$@" "$co_url" -o "$co_out"
+        return
+    fi
+    co_body="$(curl -fsSL --connect-timeout 15 --max-time 180 "$@" "$co_url")" || return 1
+    printf '%s\n' "$co_body"
+}
+
+# tunnel_proxy prints the SOCKS URL of a running keenetic-xray's tunnel:
+# $KEENETIC_XRAY_FETCH_PROXY (the bot's self-update sets it), else the
+# SOCKS port of an existing config. Nothing on a first install.
+tunnel_proxy() {
+    if [ -n "${KEENETIC_XRAY_FETCH_PROXY:-}" ]; then
+        echo "$KEENETIC_XRAY_FETCH_PROXY"
+        return 0
+    fi
+    tp_cfg="/opt/etc/keenetic-xray/config.json"
+    [ -r "$tp_cfg" ] || return 0
+    tp_port="$(sed -n 's/.*"socks_port": *\([0-9][0-9]*\).*/\1/p' "$tp_cfg" | head -n 1)"
+    if [ -n "$tp_port" ]; then
+        echo "socks5h://127.0.0.1:$tp_port"
+    fi
+    return 0
 }
 
 # Ask opkg itself which architecture tags it accepts, rather than

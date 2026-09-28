@@ -9,11 +9,17 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/kuzzrus/keenetic-xray-go/internal/netfetch"
 )
 
 const (
-	// FetchTimeout bounds how long a subscription fetch may take.
-	FetchTimeout = 15 * time.Second
+	// FetchTimeout bounds how long a subscription fetch may take, every
+	// netfetch fallback included: a provider's host blocked on the direct
+	// path eats its per-attempt bound before the IPv4/small-ClientHello
+	// and tunnel attempts get their turn. A reachable host answers in
+	// the usual second or two either way.
+	FetchTimeout = 40 * time.Second
 	// MaxBodyBytes bounds how large a subscription response may be --
 	// subscriptions are normally a few KB; this just caps the worst case
 	// against a broken or adversarial endpoint.
@@ -44,6 +50,7 @@ func fetch(ctx context.Context, url string, timeout time.Duration, maxBytes int6
 	req.Header.Set("User-Agent", userAgent)
 
 	client := &http.Client{
+		Transport: netfetch.Transport(),
 		CheckRedirect: func(_ *http.Request, via []*http.Request) error {
 			if len(via) >= maxRedirects {
 				return fmt.Errorf("stopped after %d redirects", maxRedirects)

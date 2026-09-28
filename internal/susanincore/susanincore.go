@@ -32,6 +32,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/kuzzrus/keenetic-xray-go/internal/netfetch"
 )
 
 // PinnedVersion is the R17a/Susanin.Keenetic release this project has
@@ -79,7 +81,7 @@ func Ensure(ctx context.Context, opts Options) (dir string, err error) {
 	}
 	hc := opts.HTTP
 	if hc == nil {
-		hc = &http.Client{Timeout: 2 * time.Minute}
+		hc = netfetch.Client(2 * time.Minute)
 	}
 	smoke := opts.smoke
 	if smoke == nil {

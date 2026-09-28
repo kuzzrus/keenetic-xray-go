@@ -26,7 +26,12 @@ rm -f "$REQ"
 # Bounded: a stalled connection must not hold this oneshot (and with it
 # the .path trigger) forever. The unit's TimeoutStartSec is the backstop.
 if command -v curl >/dev/null 2>&1; then
-    fetch() { curl -fsSL --connect-timeout 15 --max-time 180 "$1" -o "$2"; }
+    # A failed try gets one more over IPv4 with a small TLS ClientHello,
+    # as in install.sh.
+    fetch() {
+        curl -fsSL --connect-timeout 15 --max-time 180 "$1" -o "$2" ||
+            curl -fsSL --connect-timeout 15 --max-time 180 -4 --curves X25519 "$1" -o "$2"
+    }
 else
     fetch() { wget -q -T 180 -O "$2" "$1"; }
 fi

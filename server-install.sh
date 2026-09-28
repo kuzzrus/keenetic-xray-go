@@ -38,15 +38,21 @@ command -v useradd >/dev/null 2>&1 || die "useradd not found; create the '${SVC_
 # Prefers curl; falls back to wget. Mirrors install.sh: some minimal
 # wget builds can't do HTTPS, and vice versa on other boxes. Bounded, so
 # a stalled connection fails instead of hanging the install -- or the
-# self-update oneshot that re-runs this script.
+# self-update oneshot that re-runs this script. A curl that fails gets
+# one more try over IPv4 with a small TLS ClientHello (`-4 --curves
+# X25519`), as in install.sh; stdout output is buffered per try.
 fetch() {
     _url="$1"
     _out="${2:-}"
     if command -v curl >/dev/null 2>&1; then
         if [ -n "$_out" ]; then
-            curl -fsSL --connect-timeout 15 --max-time 180 "$_url" -o "$_out"
+            curl -fsSL --connect-timeout 15 --max-time 180 "$_url" -o "$_out" ||
+                curl -fsSL --connect-timeout 15 --max-time 180 -4 --curves X25519 "$_url" -o "$_out"
         else
-            curl -fsSL --connect-timeout 15 --max-time 180 "$_url"
+            _body="$(curl -fsSL --connect-timeout 15 --max-time 180 "$_url")" ||
+                _body="$(curl -fsSL --connect-timeout 15 --max-time 180 -4 --curves X25519 "$_url")" ||
+                return 1
+            printf '%s\n' "$_body"
         fi
     else
         if [ -n "$_out" ]; then wget -q -T 180 -O "$_out" "$_url"; else wget -q -T 180 -O- "$_url"; fi

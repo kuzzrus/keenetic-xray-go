@@ -20,6 +20,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/kuzzrus/keenetic-xray-go/internal/netfetch"
 )
 
 // Repo is the GitHub owner/repo the release .ipk assets live under.
@@ -300,10 +302,26 @@ func tailLines(path string, n int) string {
 // curlOrWget mirrors install.sh's fetch(): curl first (some routers'
 // busybox wget can't do HTTPS), wget as the fallback. Bounded either way
 // -- a stalled download must not hold a rollback, and the router
-// waiting on it, open-ended.
+// waiting on it, open-ended. A curl that fails gets install.sh's two
+// more tries: IPv4 with a small TLS ClientHello, then the router's own
+// tunnel when one is up (see internal/netfetch).
 func curlOrWget(ctx context.Context, url, dest string) error {
-	if _, err := exec.LookPath("curl"); err == nil {
-		return exec.CommandContext(ctx, "curl", "-fsSL", "--connect-timeout", "15", "--max-time", "180", url, "-o", dest).Run()
+	if _, err := exec.LookPath("curl"); err != nil {
+		return exec.CommandContext(ctx, "wget", "-q", "-T", "180", url, "-O", dest).Run()
 	}
-	return exec.CommandContext(ctx, "wget", "-q", "-T", "180", url, "-O", dest).Run()
+	tries := [][]string{nil, {"-4", "--curves", "X25519"}}
+	if netfetch.TunnelSOCKS != nil {
+		if addr := netfetch.TunnelSOCKS(); addr != "" {
+			tries = append(tries, []string{"--proxy", "socks5h://" + addr})
+		}
+	}
+	var err error
+	for _, extra := range tries {
+		args := append([]string{"-fsSL", "--connect-timeout", "15", "--max-time", "180"}, extra...)
+		args = append(args, url, "-o", dest)
+		if err = exec.CommandContext(ctx, "curl", args...).Run(); err == nil || ctx.Err() != nil {
+			return err
+		}
+	}
+	return err
 }

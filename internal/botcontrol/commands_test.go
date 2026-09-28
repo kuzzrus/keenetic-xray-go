@@ -1572,7 +1572,7 @@ func TestRouterHandler_SelfUpdate_LogsFailure(t *testing.T) {
 		if !strings.Contains(line, "failed") {
 			t.Errorf("logged line = %q, want it to report the failure", line)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(20 * time.Second): // every step of selfUpdateFetch's ladder fails first
 		t.Fatal("Logf was never called for a failed run -- the exact silent-failure bug this fix addresses")
 	}
 }
@@ -1776,7 +1776,7 @@ func TestRouterHandler_SelfUpdate_FailureAlsoPushesEvent(t *testing.T) {
 		if !strings.Contains(ev.Text, "не удалось") {
 			t.Errorf("event Text = %q, want it to say the update failed", ev.Text)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(20 * time.Second): // every step of selfUpdateFetch's ladder fails first
 		t.Fatal("SelfUpdateEvents never received an event for a failed run")
 	}
 }
@@ -1817,5 +1817,38 @@ func TestRouterHandler_Diag(t *testing.T) {
 	}
 	if !strings.Contains(out, "keenetic-xray diag") || !strings.Contains(out, "end") {
 		t.Errorf("diag passthrough = %q", out)
+	}
+}
+
+// TestSelfUpdateFetch_Ladder: the chain downloads install.sh as is, then
+// over IPv4 with a small TLS ClientHello, then through the router's own
+// tunnel -- and hands install.sh that tunnel for its own fetches. With no
+// SOCKS port, the tunnel step and the env are left out.
+func TestSelfUpdateFetch_Ladder(t *testing.T) {
+	fetch, env := selfUpdateFetch("https://example.invalid/install.sh", "/tmp/x.sh", 1080)
+	for _, want := range []string{
+		"curl -fsSL --connect-timeout 10 --max-time 60 https://example.invalid/install.sh -o /tmp/x.sh",
+		"-4 --curves X25519 https://example.invalid/install.sh",
+		"--proxy socks5h://127.0.0.1:1080 https://example.invalid/install.sh",
+	} {
+		if !strings.Contains(fetch, want) {
+			t.Errorf("fetch missing %q:\n%s", want, fetch)
+		}
+	}
+	if strings.Count(fetch, " || ") != 2 || !strings.HasPrefix(fetch, "{ ") || !strings.HasSuffix(fetch, "; }") {
+		t.Errorf("fetch is not a braced three-step || list:\n%s", fetch)
+	}
+	if env != "KEENETIC_XRAY_FETCH_PROXY=socks5h://127.0.0.1:1080 " {
+		t.Errorf("env = %q", env)
+	}
+	if sh, err := exec.LookPath("sh"); err == nil {
+		if out, err := exec.Command(sh, "-n", "-c", fetch+" && "+env+"sh /tmp/x.sh").CombinedOutput(); err != nil {
+			t.Errorf("not valid sh: %v\n%s", err, out)
+		}
+	}
+
+	fetch, env = selfUpdateFetch("https://example.invalid/install.sh", "/tmp/x.sh", 0)
+	if strings.Contains(fetch, "--proxy") || env != "" || strings.Count(fetch, " || ") != 1 {
+		t.Errorf("without a SOCKS port: fetch %q, env %q", fetch, env)
 	}
 }

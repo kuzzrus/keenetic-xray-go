@@ -109,3 +109,16 @@ func TestLoadSettings_DomainRejectsURLShape(t *testing.T) {
 		}
 	}
 }
+
+// TestLoadSettings_DomainNormalized is R-2's config half: the domain is
+// stored the way it's compared -- lower case, no trailing dot.
+func TestLoadSettings_DomainNormalized(t *testing.T) {
+	path := writeConfig(t, `{"telegram_token":"x","allowed_chat_ids":[1],"domain":" VPS.Example.com. "}`)
+	s, err := loadSettings(path)
+	if err != nil {
+		t.Fatalf("loadSettings: %v", err)
+	}
+	if s.Domain != "vps.example.com" {
+		t.Errorf("Domain = %q, want vps.example.com", s.Domain)
+	}
+}

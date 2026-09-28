@@ -74,6 +74,7 @@ func loadSettings(path string) (settings, error) {
 	if err := json.Unmarshal(data, &s); err != nil {
 		return settings{}, fmt.Errorf("parsing %s: %w", path, err)
 	}
+	s.Domain = normalizeDomain(s.Domain)
 	if err := s.validate(); err != nil {
 		return settings{}, fmt.Errorf("%s: %w", path, err)
 	}

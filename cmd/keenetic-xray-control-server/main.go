@@ -10,7 +10,6 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -144,12 +143,11 @@ func run(args []string) error {
 	if acmeMgr != nil {
 		// Let's Encrypt's HTTP-01 challenge always dials :80, regardless
 		// of cfg.ListenAddr -- a second, plain-HTTP listener just for
-		// that. Fire-and-forget like OfflineWatcher above: nothing here
-		// holds state worth a graceful drain, so an ungraceful stop on
-		// process exit is fine; only log if it fails outright (most
-		// likely cause: nothing granted CAP_NET_BIND_SERVICE for :80).
+		// that, with timeouts and shut down with ctx (acmeChallengeServer).
+		// Only logged if it fails outright (most likely cause: nothing
+		// granted CAP_NET_BIND_SERVICE for :80).
 		go func() {
-			if err := http.ListenAndServe(":80", acmeMgr.HTTPHandler(nil)); err != nil && ctx.Err() == nil {
+			if err := serveUntil(ctx, acmeChallengeServer(":80", acmeMgr.HTTPHandler(nil))); err != nil && ctx.Err() == nil {
 				logger.Printf("acme: :80 challenge listener failed (Let's Encrypt can't reach it to issue/renew for %s): %v", cfg.Domain, err)
 			}
 		}()

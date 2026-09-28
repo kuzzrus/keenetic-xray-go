@@ -23,10 +23,12 @@ TMP=/tmp/keenetic-xray-server-install.$$.sh
 # press fires again.
 rm -f "$REQ"
 
+# Bounded: a stalled connection must not hold this oneshot (and with it
+# the .path trigger) forever. The unit's TimeoutStartSec is the backstop.
 if command -v curl >/dev/null 2>&1; then
-    fetch() { curl -fsSL "$1" -o "$2"; }
+    fetch() { curl -fsSL --connect-timeout 15 --max-time 180 "$1" -o "$2"; }
 else
-    fetch() { wget -qO "$2" "$1"; }
+    fetch() { wget -q -T 180 -O "$2" "$1"; }
 fi
 
 # Download-then-run, not `fetch ... | sh`: a pipeline's exit status is the
@@ -47,10 +49,15 @@ if [ "$rc" -ne 0 ] && command -v curl >/dev/null 2>&1; then
     chats=$(sed -n '/"allowed_chat_ids"/,/]/p' "$CONFIG" 2>/dev/null | grep -o -- '-\{0,1\}[0-9]\{1,\}')
     if [ -n "$token" ]; then
         for chat in $chats; do
-            curl -s -X POST "https://api.telegram.org/bot${token}/sendMessage" \
-                -d "chat_id=${chat}" \
-                --data-urlencode "text=⚠️ Самообновление control-server не удалось (код $rc). Подробности: journalctl -u keenetic-xray-control-server-update.service" \
-                >/dev/null 2>&1
+            # The URL carries the bot token, so it goes to curl as a config
+            # file on stdin (-K -), never on the command line, where any
+            # local user could read it from ps or /proc (printf is a shell
+            # builtin, so it never gets an argv of its own).
+            printf 'url = "https://api.telegram.org/bot%s/sendMessage"\n' "$token" \
+                | curl -s --connect-timeout 15 --max-time 30 -K - -X POST \
+                    -d "chat_id=${chat}" \
+                    --data-urlencode "text=⚠️ Самообновление control-server не удалось (код $rc). Подробности: journalctl -u keenetic-xray-control-server-update.service" \
+                    >/dev/null 2>&1
         done
     fi
 fi

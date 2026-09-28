@@ -53,7 +53,7 @@ type RouteReport struct {
 	EntriesRemoved int
 	RoutesSet      []string // group names whose route line was (re)written
 	RoutesCleared  []string
-	Saved          bool
+	Saved          bool // changes were made and `system configuration save` went through
 }
 
 type parsedRoute struct {
@@ -151,9 +151,10 @@ func ApplyRoutes(ctx context.Context, want []DesiredRoute) (RouteReport, error) 
 	for _, c := range cmds {
 		if _, err := ndmcRun(ctx, c); err != nil {
 			failed = append(failed, fmt.Sprintf("%q: %v", c, err))
+		} else if c == "system configuration save" {
+			rep.Saved = true // only once the save itself went through (R-8)
 		}
 	}
-	rep.Saved = true
 	if len(failed) > 0 {
 		return rep, fmt.Errorf("часть команд не выполнилась:\n%s", strings.Join(failed, "\n"))
 	}

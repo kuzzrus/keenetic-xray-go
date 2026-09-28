@@ -2,6 +2,7 @@ package keenetic
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -227,6 +228,38 @@ func notSent(t *testing.T, sent []string, unwantedPrefix string) {
 	for _, c := range sent {
 		if strings.HasPrefix(c, unwantedPrefix) {
 			t.Errorf("unexpected command issued: %q (prefix %q)", c, unwantedPrefix)
+		}
+	}
+}
+
+// failSave makes `system configuration save` fail on top of whatever
+// fake is installed; the fake's own cleanup restores the real ndmcRun.
+func failSave(t *testing.T) {
+	t.Helper()
+	inner := ndmcRun
+	ndmcRun = func(ctx context.Context, cmd string) (string, error) {
+		if cmd == "system configuration save" {
+			return "", errors.New("exit status 1")
+		}
+		return inner(ctx, cmd)
+	}
+}
+
+// TestApplyRoutes_SavedOnlyWhenTheSaveWorked is R-8: Saved used to be
+// set whether or not `system configuration save` went through.
+func TestApplyRoutes_SavedOnlyWhenTheSaveWorked(t *testing.T) {
+	want := []DesiredRoute{{Group: "keenetic-xray-work", Iface: "Proxy1", Entries: []string{"corp.example"}}}
+	for _, saveFails := range []bool{false, true} {
+		fakeNdmc(t, map[string]string{"show version": ver51, "show running-config": rcFixture})
+		if saveFails {
+			failSave(t)
+		}
+		rep, err := ApplyRoutes(context.Background(), want)
+		if (err != nil) != saveFails {
+			t.Errorf("save fails=%v: err = %v", saveFails, err)
+		}
+		if rep.Saved == saveFails {
+			t.Errorf("save fails=%v: Saved = %v", saveFails, rep.Saved)
 		}
 	}
 }

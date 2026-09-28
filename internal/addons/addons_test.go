@@ -20,6 +20,7 @@ type fakeSys struct {
 	procMatch map[string]bool   // substring -> present
 	ports     map[int]bool      // port -> listening
 	files     map[string][]byte // path -> content
+	dirs      []string          // recorded mkdirAll paths -- never created for real (N3)
 	opkgCalls []string          // recorded "install nfqws2-keenetic", "remove …", "update"
 	initCalls []string          // recorded "S51nfqws2 start"
 }
@@ -44,10 +45,11 @@ func withFakeSys(t *testing.T, f *fakeSys) {
 		readFile       func(string) ([]byte, error)
 		writeFile      func(string, []byte, os.FileMode) error
 		removeFile     func(string) error
-	}{opkgRun, initdRun, processMatches, portListening, readFile, writeFile, removeFile}
+		mkdirAll       func(string) error
+	}{opkgRun, initdRun, processMatches, portListening, readFile, writeFile, removeFile, mkdirAll}
 	t.Cleanup(func() {
 		opkgRun, initdRun, processMatches, portListening = save.opkgRun, save.initdRun, save.processMatches, save.portListening
-		readFile, writeFile, removeFile = save.readFile, save.writeFile, save.removeFile
+		readFile, writeFile, removeFile, mkdirAll = save.readFile, save.writeFile, save.removeFile, save.mkdirAll
 	})
 
 	opkgRun = func(_ context.Context, args ...string) (string, error) {
@@ -93,6 +95,10 @@ func withFakeSys(t *testing.T, f *fakeSys) {
 		return nil
 	}
 	removeFile = func(path string) error { delete(f.files, path); return nil }
+	// Tests used to create /opt/var/lib/dnscrypt-proxy for real -- as root
+	// on a dev box, a stray system directory (2026-09-27 external review,
+	// N3).
+	mkdirAll = func(path string) error { f.dirs = append(f.dirs, path); return nil }
 }
 
 func TestAll_OrderAndFind(t *testing.T) {

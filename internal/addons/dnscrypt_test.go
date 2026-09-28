@@ -19,6 +19,9 @@ func TestDnscrypt_InstallWritesTomlAndStarts(t *testing.T) {
 	if !contains(f.opkgCalls, "install dnscrypt-proxy2 ca-certificates") {
 		t.Errorf("opkg install line: %v", f.opkgCalls)
 	}
+	if !contains(f.dirs, dnscryptCacheDir) {
+		t.Errorf("cache dir not created through the mkdirAll seam: %v", f.dirs)
+	}
 	toml := string(f.files[dnscryptConf])
 	for _, want := range []string{
 		"listen_addresses = ['127.0.0.1:65053']",

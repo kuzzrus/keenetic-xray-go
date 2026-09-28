@@ -53,7 +53,7 @@ type DNSReport struct {
 	TLSRemoved   []string
 	HTTPSAdded   []string
 	HTTPSRemoved []string
-	Saved        bool
+	Saved        bool // changes were made and `system configuration save` went through
 }
 
 // Changed reports whether ApplyDNS issued any add/remove.
@@ -162,9 +162,10 @@ func ApplyDNS(ctx context.Context, want DNSDesired) (DNSReport, error) {
 	for _, c := range cmds {
 		if _, err := ndmcRun(ctx, c); err != nil {
 			failed = append(failed, fmt.Sprintf("%q: %v", c, err))
+		} else if c == "system configuration save" {
+			rep.Saved = true // only once the save itself went through (R-8)
 		}
 	}
-	rep.Saved = true
 	if len(failed) > 0 {
 		return rep, fmt.Errorf("часть команд не выполнилась:\n%s", strings.Join(failed, "\n"))
 	}

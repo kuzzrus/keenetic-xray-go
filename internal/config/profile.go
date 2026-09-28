@@ -963,6 +963,14 @@ type Config struct {
 	// auto|packet-up|stream-up|stream-one.
 	XHTTPMode string `json:"xhttp_mode,omitempty"`
 
+	// XrayAccessLog turns xray's per-connection access log back on for
+	// the production instance -- off by default since 2026-09-27, see
+	// XrayConfigOptions.AccessLog for why. For debugging a routing
+	// question ("does this connection go through xray at all?"), not for
+	// everyday use: every connection becomes a write to daemon.log.
+	// `keenetic-xray logs access on|off`.
+	XrayAccessLog bool `json:"xray_access_log,omitempty"`
+
 	// PresetsNoAutoUpdate turns off the daily pull of the built-in
 	// routing-list presets from the repo (internal/presets.Refresh). The
 	// embedded copy is then the only source until the agent is updated.

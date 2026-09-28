@@ -361,6 +361,7 @@ func (a *realActions) SwitchLiveTo(ctx context.Context, role Role) error {
 		WG:           wgInboundOpts(a.cfg),
 		Transparent:  transparentInboundOpts(a.cfg),
 		SidecarSOCKS: sidecarPort,
+		AccessLog:    a.cfg.XrayAccessLog, // pretest and the quality sweep never log connections
 	})
 	if err != nil {
 		return fmt.Errorf("generating production config: %w", err)

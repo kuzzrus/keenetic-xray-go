@@ -130,7 +130,7 @@ commands:
                                                   point Keenetic's Proxy0 at the local inbound; the health check lets its routes fall back to the ISP while xray is down
   failover {show|set <key> <value>}              tune health-check thresholds (applies live)
   watchdog {show|enable|disable|log}              cron entry that restarts the daemon if it's not running
-  logs [N]                                        last N lines of the daemon's rolling log (default 200)
+  logs [N] | logs access {on|off}                 last N lines of the daemon's rolling log (default 200); xray's per-connection log (off by default)
   routes {list|show [name]|new <name> [entries…]|add <name> <entries…>|del <name> <entries…>|rm <name>|enable|disable <name>|set <name> [--iface=] [--exclusive]|apply}
                                                   KeeneticOS 5.0+ DNS-based routing: send named lists of domains/subnets through Proxy0
   transport {show|mode auto|packet-up|stream-up|stream-one|mode-clear|mss <1200..1452|auto|off>|wg {show|on|off}}

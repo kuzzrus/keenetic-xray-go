@@ -36,6 +36,12 @@ func TestReconcileSteps_NoRouterIsNoop(t *testing.T) {
 	logf := func(string, ...any) {}
 	ctx := context.Background()
 	reconcileProxy0(ctx, cfg, logf)
+	reconcileInboundBind(ctx, nil, cfg, logf)
+	off := *cfg
+	off.Proxy0.Enabled, off.WGTransport.Enabled = false, false
+	reconcileInboundBind(ctx, failover.NewDaemon(failover.Paths{}, &off), &off, func(string, ...any) {
+		t.Error("reconcileInboundBind logged without a router to ask")
+	})
 	reconcileWGTransport(ctx, nil, cfg, logf)
 	reconcileMSSClamp(ctx, cfg, logf)
 	reconcileSusanin(ctx, logf)

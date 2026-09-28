@@ -61,6 +61,7 @@ func reconcileOnce(ctx context.Context, d *failover.Daemon, logf func(string, ..
 		return
 	}
 	reconcileProxy0(ctx, cfg, logf)
+	reconcileInboundBind(ctx, d, cfg, logf)
 	applyRoutesAtStartup(cfg, logf) // already drift-based and quiet-when-clean
 	reconcileWGTransport(ctx, d, cfg, logf)
 	reconcileMSSClamp(ctx, cfg, logf)
@@ -168,6 +169,29 @@ func reconcileProxy0Upstream(ctx context.Context, cfg *config.Config, logf func(
 		return
 	}
 	logf("proxy0: re-asserted %s -> %s:%d (firmware had dropped it)", cfg.Proxy0.IfaceName(), ip, cfg.Proxy0Port())
+}
+
+// reconcileInboundBind moves xray's inbound off loopback once Proxy0
+// points at it while neither proxy0.enabled nor the WG transport is on --
+// a Proxy interface set up by hand in the web UI, say. The daemon asks
+// the router about that whenever it regenerates xray's config (see
+// failover's lanInbound), but a change on the router side alone
+// regenerates nothing, and a Proxy interface aimed at a loopback-only
+// inbound gets "connection refused": whatever is routed through it falls
+// back to the ISP at best (the health check) or goes nowhere. One
+// `show running-config` per tick, and only in that configuration.
+func reconcileInboundBind(ctx context.Context, d *failover.Daemon, cfg *config.Config, logf func(string, ...any)) {
+	if d == nil || cfg.Proxy0.Enabled || cfg.WGTransport.Enabled || d.InboundOnLAN() {
+		return
+	}
+	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	if inUse, err := proxy0InUse(cctx, cfg); err != nil || !inUse {
+		return
+	}
+	if d.RebindInbound(ctx) {
+		logf("proxy0: %s points at xray with proxy0.enabled off -- inbound moved from loopback to all interfaces", cfg.Proxy0.IfaceName())
+	}
 }
 
 // reconcileWGTransport rebuilds the WG-transport interface only when it's

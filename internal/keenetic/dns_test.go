@@ -174,3 +174,24 @@ func TestLocalNameServerActive(t *testing.T) {
 		t.Errorf("expected inactive, got %v %v", on, err)
 	}
 }
+
+// TestApplyDNS_SavedOnlyWhenTheSaveWorked: same R-8 bug as ApplyRoutes.
+func TestApplyDNS_SavedOnlyWhenTheSaveWorked(t *testing.T) {
+	want := DNSDesired{
+		TLS:           []DNSUpstreamTLS{{IP: "1.1.1.1", SNI: "one.one.one.one"}},
+		ManagedTLSIPs: []string{"1.1.1.1"},
+	}
+	for _, saveFails := range []bool{false, true} {
+		dnsFake(t)
+		if saveFails {
+			failSave(t)
+		}
+		rep, err := ApplyDNS(context.Background(), want)
+		if (err != nil) != saveFails {
+			t.Errorf("save fails=%v: err = %v", saveFails, err)
+		}
+		if rep.Saved == saveFails {
+			t.Errorf("save fails=%v: Saved = %v", saveFails, rep.Saved)
+		}
+	}
+}

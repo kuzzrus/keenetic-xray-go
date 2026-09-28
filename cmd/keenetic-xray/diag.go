@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
@@ -115,6 +116,22 @@ func writeDiag(w io.Writer) {
 		fmt.Fprintf(w, "show version: %v\n", err)
 	}
 
+	fmt.Fprintln(w, "\n---- memory ----")
+	writeDiagMemory(w)
+
+	if cfgErr == nil {
+		fmt.Fprintln(w, "\n---- proxy0 / xray inbounds ----")
+		writeDiagProxy0(ctx, w, cfg)
+	}
+
+	if keenetic.Available() {
+		fmt.Fprintln(w, "\n---- dns-proxy routes (all lists, with what they resolve to now) ----")
+		writeDiagRoutes(ctx, w)
+	}
+
+	fmt.Fprintln(w, "\n---- iptables: this project's rules ----")
+	writeDiagIptables(ctx, w)
+
 	fmt.Fprintln(w, "\n---- listening ports ----")
 	if cfgErr != nil {
 		fmt.Fprintf(w, "config not loaded: %v\n", cfgErr)
@@ -192,4 +209,110 @@ func diagPortListening(port int) bool {
 	}
 	_ = c.Close()
 	return true
+}
+
+// writeDiagProxy0 is where client traffic meets xray: the Proxy
+// interface's upstream and health check, and what the production xray
+// actually listens on -- loopback while Proxy0 points at the LAN IP is
+// the "connection refused" #277 fixed.
+func writeDiagProxy0(ctx context.Context, w io.Writer, cfg *config.Config) {
+	iface := cfg.Proxy0.IfaceName()
+	fmt.Fprintf(w, "proxy0.enabled: %v, interface %s, inbound port %d\n", cfg.Proxy0.Enabled, iface, cfg.Proxy0Port())
+	if keenetic.Available() {
+		host, port, ok, err := keenetic.Proxy0Upstream(ctx, cfg.Proxy0.Interface)
+		switch {
+		case err != nil:
+			fmt.Fprintf(w, "%s upstream: %v\n", iface, err)
+		case !ok:
+			fmt.Fprintf(w, "%s upstream: не задан\n", iface)
+		case port != cfg.Proxy0Port():
+			fmt.Fprintf(w, "%s upstream: %s:%d — не наш вход\n", iface, host, port)
+		default:
+			fmt.Fprintf(w, "%s upstream: %s:%d (наш вход)\n", iface, host, port)
+			_, msg := proxy0HealthLine(ctx, cfg)
+			fmt.Fprintln(w, msg)
+		}
+	}
+	b, err := os.ReadFile(productionConfigPath())
+	if err != nil {
+		fmt.Fprintf(w, "xray inbounds: %v\n", err)
+		return
+	}
+	var xc struct {
+		Inbounds []struct {
+			Tag      string `json:"tag"`
+			Listen   string `json:"listen"`
+			Port     int    `json:"port"`
+			Protocol string `json:"protocol"`
+		} `json:"inbounds"`
+	}
+	if err := json.Unmarshal(b, &xc); err != nil {
+		fmt.Fprintf(w, "xray inbounds: %s: %v\n", productionConfigPath(), err)
+		return
+	}
+	for _, in := range xc.Inbounds {
+		fmt.Fprintf(w, "xray inbound %-16s %s:%d (%s)\n", in.Tag, in.Listen, in.Port, in.Protocol)
+	}
+}
+
+// writeDiagRoutes lists every dns-proxy route list, the operator's own
+// included, with how many addresses and names each one holds right now
+// -- KeeneticOS adds CNAME targets under a listed zone, so a list's own
+// entries undersell what it sends into the tunnel.
+func writeDiagRoutes(ctx context.Context, w io.Writer) {
+	routes, err := keenetic.AllRoutes(ctx)
+	if err != nil {
+		fmt.Fprintln(w, err)
+		return
+	}
+	if len(routes) == 0 {
+		fmt.Fprintln(w, "(списков нет)")
+		return
+	}
+	counts, cerr := keenetic.ObjectGroupCounts(ctx)
+	for _, r := range routes {
+		to := r.Iface
+		if to == "" {
+			to = "(без маршрута)"
+		}
+		if r.Reject {
+			to += " reject"
+		}
+		now := ""
+		if c, ok := counts[r.Group]; ok {
+			now = fmt.Sprintf("  сейчас: %d IPv4, %d IPv6, %d имён", c.IPv4, c.IPv6, c.FQDN)
+		}
+		fmt.Fprintf(w, "%-28s -> %-16s записей %-4d%s\n", r.Group, to, len(r.Entries), now)
+	}
+	if cerr != nil {
+		fmt.Fprintf(w, "счётчики: %v\n", cerr)
+	}
+}
+
+// writeDiagIptables prints this project's own iptables rules -- the ones
+// tagged keenetic-xray-*: adaptive routing's REDIRECT (nat), the MSS
+// clamp (mangle), l7sni's NFLOG (filter). A rule missing here that the
+// config wants is ndm having dropped it (see the netfilter.d hook).
+func writeDiagIptables(ctx context.Context, w io.Writer) {
+	if _, err := exec.LookPath("iptables-save"); err != nil {
+		fmt.Fprintln(w, "iptables-save не найден")
+		return
+	}
+	found := false
+	for _, table := range []string{"nat", "mangle", "filter"} {
+		out, err := exec.CommandContext(ctx, "iptables-save", "-t", table).Output()
+		if err != nil {
+			fmt.Fprintf(w, "%s: %v\n", table, err)
+			continue
+		}
+		for _, line := range strings.Split(string(out), "\n") {
+			if strings.Contains(line, "keenetic-xray-") {
+				fmt.Fprintf(w, "%-7s %s\n", table+":", line)
+				found = true
+			}
+		}
+	}
+	if !found {
+		fmt.Fprintln(w, "(наших правил нет)")
+	}
 }

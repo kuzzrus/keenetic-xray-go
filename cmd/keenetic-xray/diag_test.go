@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -37,6 +39,9 @@ func TestWriteDiag_SectionsAndRedaction(t *testing.T) {
 		"---- addons ----",
 		"---- rci ----",
 		"---- keenetic ----",
+		"---- memory ----",
+		"---- proxy0 / xray inbounds ----",
+		"---- iptables: this project's rules ----",
 		"---- listening ports ----",
 		"---- watchdog ----",
 		"---- daemon log",
@@ -63,5 +68,25 @@ func TestWriteDiag_SectionsAndRedaction(t *testing.T) {
 	}
 	if strings.Contains(out, "adaptive-route dataplane") {
 		t.Error("diag should skip the adaptive-route section when the feature is disabled")
+	}
+}
+
+// TestWriteDiagProxy0_ShowsWhatXrayListensOn: the inbound bind address
+// comes from the production config xray actually runs, not from the
+// config flags that used to decide it (#277).
+func TestWriteDiagProxy0_ShowsWhatXrayListensOn(t *testing.T) {
+	prod := filepath.Join(t.TempDir(), "xray-production.json")
+	t.Setenv("KEENETIC_XRAY_PRODUCTION_CONFIG", prod)
+	body := `{"inbounds":[{"tag":"socks-in","listen":"0.0.0.0","port":10081,"protocol":"socks"},{"tag":"http-in","listen":"0.0.0.0","port":10082,"protocol":"http"}]}`
+	if err := os.WriteFile(prod, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var b bytes.Buffer
+	writeDiagProxy0(context.Background(), &b, config.Default())
+	out := b.String()
+	for _, want := range []string{"socks-in", "0.0.0.0:10081 (socks)", "http-in", "0.0.0.0:10082 (http)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
 	}
 }

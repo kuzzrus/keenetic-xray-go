@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"strconv"
@@ -43,6 +45,7 @@ type TelegramBot struct {
 	ListenAddr    string        // the server's own listen address, used to derive a URL when ServerURL is unset
 	APIBase       string        // "" -> telegramAPIBase
 	ResultTimeout time.Duration // 0 -> DefaultResultTimeout
+	DiagTimeout   time.Duration // 0 -> DefaultDiagTimeout
 	Logger        *log.Logger   // nil -> log.Default()
 
 	// SelfUpdatePath, if set, is the trigger file the "Обновить сервер"
@@ -503,6 +506,47 @@ func (b *TelegramBot) apiPost(ctx context.Context, method string, payload any) (
 	return data, nil
 }
 
+// sendDocument uploads body as a file called name, with an optional
+// caption -- for output too long for a message, which send would cut
+// at telegramTextLimit.
+func (b *TelegramBot) sendDocument(ctx context.Context, chatID int64, name string, body []byte, caption string) error {
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("chat_id", strconv.FormatInt(chatID, 10))
+	if caption != "" {
+		if r := []rune(caption); len(r) > 1000 { // Telegram's caption limit is 1024
+			caption = string(r[:1000]) + "…"
+		}
+		_ = mw.WriteField("caption", caption)
+	}
+	fw, err := mw.CreateFormFile("document", name)
+	if err != nil {
+		return err
+	}
+	if _, err := fw.Write(body); err != nil {
+		return err
+	}
+	if err := mw.Close(); err != nil {
+		return err
+	}
+	url := fmt.Sprintf("%s/bot%s/sendDocument", b.apiBase(), b.Token)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &buf)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return errors.New(b.scrubToken(err))
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		return fmt.Errorf("sendDocument: %s: %s", resp.Status, bytes.TrimSpace(data))
+	}
+	return nil
+}
+
 // deleteMessage removes one message, best-effort, and reports whether it
 // did. In a private chat a bot may delete the user's own messages; in a
 // group it needs the admin right to.
@@ -711,6 +755,14 @@ func (b *TelegramBot) handleMessage(ctx context.Context, msg tgMessage) {
 		case "/add_router":
 			b.cmdAddRouter(ctx, msg.Chat.ID, fields[1:])
 			return
+		case "/diag":
+			// A file, not a reply: see sendDiagFile.
+			if len(fields) < 2 {
+				b.sendMessage(ctx, msg.Chat.ID, "формат: /diag <роутер>")
+				return
+			}
+			go b.sendDiagFile(ctx, msg.Chat.ID, fields[1])
+			return
 		}
 	}
 	if reply := b.dispatch(ctx, text); reply != "" {
@@ -728,7 +780,7 @@ const helpText = `/menu — меню с кнопками (проще всего)
 Дальше первым аргументом идёт id роутера:
 /status <router>
 /doctor <router>
-/diag <router> — диаг-бандл (конфиг без секретов + состояние + хвост лога)
+/diag <router> — диагностика файлом: конфиг без секретов, память, Proxy0, DNS-маршруты, наши правила iptables, хвост лога
 /switch <router> primary|backup
 /profile_list <router>
 /sub_seturl <router> <url>
@@ -779,8 +831,6 @@ func (b *TelegramBot) dispatch(ctx context.Context, text string) string {
 		return b.runRouterCommand(ctx, args, ActionStatus, nil)
 	case "/doctor":
 		return b.runRouterCommand(ctx, args, ActionDoctor, nil)
-	case "/diag":
-		return b.runRouterCommand(ctx, args, ActionDiag, nil)
 	case "/switch":
 		return b.dispatchSwitch(ctx, args)
 	case "/profile_list":

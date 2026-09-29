@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
@@ -44,7 +45,7 @@ func cmdDNS(args []string) error {
 
 func dnsUsage() error {
 	return fmt.Errorf("usage: keenetic-xray dns {show | test | list | " +
-		"preset <id> [--dot|--doh|--both] | set dot <ip> <sni> [<ip> <sni> …] | set doh <url> [<url> …] | off}")
+		"preset <id>[,<id>…] [--dot|--doh|--both] | set dot <ip> <sni> [<ip> <sni> …] | set doh <url> [<url> …] | off}")
 }
 
 func dnsList() error {
@@ -125,13 +126,16 @@ func dnsTest(all bool) error {
 		}
 		fmt.Printf("%-24s %-16s %-16s %s\n", r.Provider.ID, r.DoT.String(), r.DoH.String(), flag)
 	}
-	fmt.Println("\nвыбрать:  keenetic-xray dns preset <id>   (кандидаты — только в --all)")
+	fmt.Println("\nвыбрать:  keenetic-xray dns preset <id>[,<id>…]   (кандидаты — только в --all)")
 	return nil
 }
 
 func dnsPreset(cfg *config.Config, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: keenetic-xray dns preset <id> [--dot|--doh|--both]")
+		return fmt.Errorf("usage: keenetic-xray dns preset <id>[,<id>…] [--dot|--doh|--both]")
+	}
+	if strings.Contains(args[0], ",") {
+		return dnsPresetMany(cfg, args)
 	}
 	p, ok := dnsupstream.Find(args[0])
 	if !ok {
@@ -171,6 +175,44 @@ func dnsPreset(cfg *config.Config, args []string) error {
 		return fmt.Errorf("у провайдера %q нет эндпоинтов для режима %s", p.ID, mode)
 	}
 	return dnsApply(cfg, prev, fmt.Sprintf("DNS: %s (%s)", p.Name, mode))
+}
+
+// dnsPresetMany is `dns preset a,b,c [--dot|--doh|--both]`: several
+// catalogue providers at once, the same mode for each -- the CLI side of
+// the bot's "✅ Применить весь топ". Endpoints shared between providers go
+// in once.
+func dnsPresetMany(cfg *config.Config, args []string) error {
+	mode := "both"
+	for _, a := range args[1:] {
+		switch a {
+		case "--dot", "--doh", "--both":
+			mode = strings.TrimPrefix(a, "--")
+		default:
+			return fmt.Errorf("неизвестный флаг %q", a)
+		}
+	}
+	var picks []dnsupstream.Pick
+	var ids []string
+	for _, id := range strings.Split(args[0], ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			picks = append(picks, dnsupstream.Pick{ID: id, Mode: mode})
+			ids = append(ids, id)
+		}
+	}
+	dot, doh, names, err := dnsupstream.Resolve(picks)
+	if err != nil {
+		return fmt.Errorf("%w (см. keenetic-xray dns list)", err)
+	}
+	// DNS-01: capture what's currently owned before the reset below.
+	prev := managedSet(cfg)
+	cfg.DNS = config.DNSConfig{Provider: strings.Join(ids, "+")}
+	for _, t := range dot {
+		cfg.DNS.DoT = append(cfg.DNS.DoT, config.DNSHostTLS{IP: t.IP, SNI: t.SNI})
+	}
+	for _, h := range doh {
+		cfg.DNS.DoH = append(cfg.DNS.DoH, config.DNSHostHTTPS{URL: h.URL})
+	}
+	return dnsApply(cfg, prev, fmt.Sprintf("DNS: %s (%s)", strings.Join(names, ", "), mode))
 }
 
 func dnsSet(cfg *config.Config, args []string) error {

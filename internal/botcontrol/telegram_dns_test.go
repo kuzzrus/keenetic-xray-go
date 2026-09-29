@@ -2,6 +2,7 @@ package botcontrol
 
 import (
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -64,24 +65,32 @@ func TestMsLabel(t *testing.T) {
 	}
 }
 
-func TestDNSTestTopKB_OneApplyButtonPerRowPlusBack(t *testing.T) {
+// TestDNSTestTopKB: "apply the whole top" first, then one button per
+// provider that answered -- each applying only the protocols that did --
+// then back. A provider nothing of which answered gets no button.
+func TestDNSTestTopKB(t *testing.T) {
 	rows := []dnsTestTopRow{
 		{ID: "cloudflare", Name: "Cloudflare", DoTMs: "45", DoHMs: "52"},
 		{ID: "quad9", Name: "Quad9", DoTMs: "", DoHMs: "80"},
+		{ID: "google", Name: "Google"}, // nothing answered
 	}
 	kb := dnsTestTopKB("r1", rows)
-	if len(kb.InlineKeyboard) != len(rows)+1 {
-		t.Fatalf("len(rows) = %d, want %d (one per result + back)", len(kb.InlineKeyboard), len(rows)+1)
+	var got []string
+	for _, row := range kb.InlineKeyboard {
+		got = append(got, row[0].CallbackData)
 	}
-	if cb := kb.InlineKeyboard[0][0].CallbackData; cb != "dna:r1:cloudflare:both" {
-		t.Errorf("first apply button callback = %q, want dna:r1:cloudflare:both", cb)
+	want := []string{"dnall:r1", "dna:r1:cloudflare:both", "dna:r1:quad9:doh", "dnsm:r1"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("buttons = %v, want %v", got, want)
 	}
-	if cb := kb.InlineKeyboard[1][0].CallbackData; cb != "dna:r1:quad9:both" {
-		t.Errorf("second apply button callback = %q, want dna:r1:quad9:both", cb)
+	if !strings.Contains(kb.InlineKeyboard[0][0].Text, "(2)") {
+		t.Errorf("apply-all button = %q, want the count of providers it applies", kb.InlineKeyboard[0][0].Text)
 	}
-	last := kb.InlineKeyboard[len(kb.InlineKeyboard)-1][0]
-	if last.CallbackData != "dnsm:r1" {
-		t.Errorf("last row = %+v, want the dnsm: back button", last)
+
+	// One answering provider: nothing to "apply all" of.
+	kb = dnsTestTopKB("r1", rows[1:])
+	if kb.InlineKeyboard[0][0].CallbackData != "dna:r1:quad9:doh" {
+		t.Errorf("single answering provider: first button %q, want its own apply", kb.InlineKeyboard[0][0].CallbackData)
 	}
 }
 
@@ -95,5 +104,80 @@ func TestDNSTestTopText_MentionsEveryProviderAndLatency(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Errorf("dnsTestTopText output missing %q:\n%s", want, text)
 		}
+	}
+}
+
+// TestTelegramBot_DNSApplyWholeTop: test, then "✅ Применить весь топ" --
+// the router gets every provider that answered, each with only the
+// protocols that answered, in one dns_preset_multi.
+func TestTelegramBot_DNSApplyWholeTop(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	mustRegister(t, store, "r1")
+	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL, ResultTimeout: 2 * time.Second}
+	runBotInBackground(t, bot)
+
+	var mu sync.Mutex
+	var multiArgs []string
+	stop := make(chan struct{})
+	t.Cleanup(func() { close(stop) })
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			cmd, _ := store.Dequeue("r1")
+			if cmd == nil {
+				time.Sleep(10 * time.Millisecond)
+				continue
+			}
+			out := "ok"
+			switch cmd.Action {
+			case ActionDNSTestTop:
+				out = "controld-p1\tControlD Malware\t-\t20\ndns4eu\tDNS4EU\t35\t40\ncloudflare\tCloudflare\t-\t-\n"
+			case ActionDNSPresetMulti:
+				mu.Lock()
+				multiArgs = cmd.Args
+				mu.Unlock()
+				out = "DNS → ControlD Malware, DNS4EU"
+			}
+			_ = store.RecordResult("r1", Result{CommandID: cmd.ID, Output: out})
+		}
+	}()
+
+	fake.push(1, "/menu")
+	fake.waitForReply(t, 3*time.Second)
+	msgID := fake.lastSent(t).MessageID
+	fake.pushCallback(1, msgID, "dntest:r1")
+	fake.waitForEditContaining(t, 3*time.Second, "топ по задержке")
+	if edit := fake.lastEdit(t); !edit.hasButton("dnall:r1") {
+		t.Fatalf("no apply-all button on the ranking: %v", edit.Buttons)
+	}
+	fake.pushCallback(1, msgID, "dnall:r1")
+	fake.waitForEditContaining(t, 3*time.Second, "DNS → ControlD Malware, DNS4EU")
+	mu.Lock()
+	defer mu.Unlock()
+	if strings.Join(multiArgs, " ") != "controld-p1:doh dns4eu:both" {
+		t.Errorf("dns_preset_multi args = %v, want the two that answered, each with its own protocols", multiArgs)
+	}
+}
+
+// TestTelegramBot_DNSApplyWholeTop_NeedsAFreshTest: after a control-server
+// restart the ranking is gone; the button asks for a new test instead
+// of applying nothing.
+func TestTelegramBot_DNSApplyWholeTop_NeedsAFreshTest(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	mustRegister(t, store, "r1")
+	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL, ResultTimeout: 2 * time.Second}
+	runBotInBackground(t, bot)
+	fake.push(1, "/menu")
+	fake.waitForReply(t, 3*time.Second)
+	fake.pushCallback(1, fake.lastSent(t).MessageID, "dnall:r1")
+	fake.waitForEditContaining(t, 3*time.Second, "Результатов теста уже нет")
+	if cmd, _ := store.Dequeue("r1"); cmd != nil {
+		t.Errorf("queued %q with no ranking to apply", cmd.Action)
 	}
 }

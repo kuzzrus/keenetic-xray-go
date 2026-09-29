@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
@@ -83,5 +84,35 @@ func TestRouterHandler_DNSOff_NoRouterSavesEmptyConfig(t *testing.T) {
 	}
 	if reloaded.DNS.Configured() {
 		t.Error("saved config should have DNS cleared too")
+	}
+}
+
+// TestRouterHandler_DNSPresetMulti: the whole ranking goes in at once,
+// each provider with its own protocols, shared endpoints once.
+func TestRouterHandler_DNSPresetMulti(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	h := &RouterHandler{Config: config.Default(), ConfigPath: path}
+	out, err := h.Handle(context.Background(), Command{Action: ActionDNSPresetMulti, Args: []string{
+		"controld-p1:doh", "dns4eu:both", "controld-p1:doh",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "ControlD Malware, DNS4EU") {
+		t.Errorf("reply = %q", out)
+	}
+	saved, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := saved.DNS
+	if d.Provider != "controld-p1+dns4eu" || len(d.DoT) != 2 || len(d.DoH) != 2 {
+		t.Errorf("saved DNS = %+v, want both providers: 2 DoT (DNS4EU), 2 DoH (one each)", d)
+	}
+
+	for _, bad := range [][]string{nil, {"nope:both"}, {"cloudflare:udp"}} {
+		if _, err := h.Handle(context.Background(), Command{Action: ActionDNSPresetMulti, Args: bad}); err == nil {
+			t.Errorf("args %v accepted", bad)
+		}
 	}
 }

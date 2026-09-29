@@ -279,3 +279,84 @@ func TestProbePlain_AgainstFakeUDPServer(t *testing.T) {
 		t.Error("ProbePlain to a dead port should fail")
 	}
 }
+
+// TestNoYandex: Yandex's resolvers are out of the catalogue and the test
+// pool (2026-09-29) -- a Russian resolver is what a censored network
+// answers through -- but their endpoints stay managed, so an upstream
+// this tool set back then is still removed on the next apply.
+func TestNoYandex(t *testing.T) {
+	retiredIPs := map[string]bool{}
+	for _, p := range retired {
+		for _, d := range p.DoT {
+			retiredIPs[d.IP] = true
+		}
+	}
+	for _, p := range TestPool() {
+		if strings.Contains(strings.ToLower(p.ID+p.Name), "yandex") {
+			t.Errorf("%s is still offered", p.ID)
+		}
+		for _, d := range p.DoT {
+			if retiredIPs[d.IP] || strings.Contains(d.SNI, "yandex") {
+				t.Errorf("%s uses a Yandex endpoint %s", p.ID, d.IP)
+			}
+		}
+	}
+	for _, id := range []string{"yandex", "yandex-safe", "yandex-family"} {
+		if _, ok := Find(id); ok {
+			t.Errorf("Find(%q) still finds it", id)
+		}
+	}
+	managed := map[string]bool{}
+	for _, ip := range AllTLSIPs() {
+		managed[ip] = true
+	}
+	for ip := range retiredIPs {
+		if !managed[ip] {
+			t.Errorf("retired %s dropped out of the managed set -- an old Yandex upstream would stay on the router", ip)
+		}
+	}
+	for _, id := range []string{"dns4eu-unfiltered", "controld-p1", "dnsforfamily"} {
+		if !InCatalogue(id) {
+			t.Errorf("%s, a replacement, is not in the shown catalogue", id)
+		}
+	}
+}
+
+func TestResolve(t *testing.T) {
+	dot, doh, names, err := Resolve([]Pick{
+		{ID: "controld-p1", Mode: "doh"},
+		{ID: "dns4eu", Mode: ""},          // both
+		{ID: "controld-p1", Mode: "both"}, // repeat: nothing new
+		{ID: "cloudflare", Mode: "dot"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(names, ",") != "ControlD Malware,DNS4EU,Cloudflare" {
+		t.Errorf("names = %v", names)
+	}
+	var ips, urls []string
+	for _, d := range dot {
+		ips = append(ips, d.IP)
+	}
+	for _, h := range doh {
+		urls = append(urls, h.URL)
+	}
+	if strings.Join(ips, ",") != "86.54.11.1,86.54.11.201,1.1.1.1,1.0.0.1" {
+		t.Errorf("DoT = %v", ips)
+	}
+	if strings.Join(urls, ",") != "https://freedns.controld.com/p1,https://protective.joindns4.eu/dns-query" {
+		t.Errorf("DoH = %v", urls)
+	}
+
+	for _, bad := range [][]Pick{
+		{{ID: "nope"}},
+		{{ID: "cloudflare", Mode: "udp"}},
+		{{ID: "controld-p1", Mode: "dot"}}, // DoH-only provider, DoT asked for
+		nil,
+	} {
+		if _, _, _, err := Resolve(bad); err == nil {
+			t.Errorf("Resolve(%v) succeeded", bad)
+		}
+	}
+}

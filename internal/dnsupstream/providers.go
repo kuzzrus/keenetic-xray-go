@@ -5,7 +5,10 @@
 // is internal/keenetic.ApplyDNS.
 package dnsupstream
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // TLS is one DNS-over-TLS endpoint: the resolver IP and the TLS SNI /
 // certificate name Keenetic needs (`dns-proxy tls upstream <IP> sni <SNI>`).
@@ -70,12 +73,13 @@ var providers = []Provider{
 		DoH: []HTTPS{{"https://family.adguard-dns.com/dns-query"}},
 	},
 	{
-		ID: "yandex", Name: "Yandex", Note: "RU, DoT",
-		DoT: []TLS{{"77.88.8.8", "common.dot.dns.yandex.net"}, {"77.88.8.1", "common.dot.dns.yandex.net"}},
+		ID: "dns4eu-unfiltered", Name: "DNS4EU Unfiltered", Note: "ЕС, без фильтрации",
+		DoT: []TLS{{"86.54.11.100", "unfiltered.joindns4.eu"}},
+		DoH: []HTTPS{{"https://unfiltered.joindns4.eu/dns-query"}},
 	},
 	{
-		ID: "yandex-safe", Name: "Yandex Safe", Note: "RU, блокирует мошенников (DoT)",
-		DoT: []TLS{{"77.88.8.88", "safe.dot.dns.yandex.net"}, {"77.88.8.2", "safe.dot.dns.yandex.net"}},
+		ID: "controld-p1", Name: "ControlD Malware", Note: "блок малвари (DoH)",
+		DoH: []HTTPS{{"https://freedns.controld.com/p1"}},
 	},
 	{
 		ID: "mullvad", Name: "Mullvad", Note: "без логов, Швеция",
@@ -97,8 +101,8 @@ var providers = []Provider{
 		DoH: []HTTPS{{"https://doh.ffmuc.net/dns-query"}},
 	},
 	{
-		ID: "yandex-family", Name: "Yandex Family", Note: "RU, + взрослый контент (DoT)",
-		DoT: []TLS{{"77.88.8.7", "family.dot.dns.yandex.net"}, {"77.88.8.3", "family.dot.dns.yandex.net"}},
+		ID: "dnsforfamily", Name: "DNS for Family", Note: "Германия, детский фильтр (DoH)",
+		DoH: []HTTPS{{"https://dns-doh.dnsforfamily.com/dns-query"}},
 	},
 	{
 		ID: "dns4eu", Name: "DNS4EU", Note: "официальный резолвер ЕС, блокирует малварь/фишинг",
@@ -149,14 +153,10 @@ var candidates = []Provider{
 	{ID: "quad9-ecs", Name: "Quad9 ECS", Note: "с EDNS Client Subnet (лучше гео CDN)",
 		DoT: []TLS{{"9.9.9.11", "dns11.quad9.net"}, {"149.112.112.11", "dns11.quad9.net"}},
 		DoH: []HTTPS{{"https://dns11.quad9.net/dns-query"}}},
-	{ID: "controld-p1", Name: "ControlD Malware", Note: "блок малвари (DoH)",
-		DoH: []HTTPS{{"https://freedns.controld.com/p1"}}},
 	{ID: "controld-p2", Name: "ControlD Malware+Ads", Note: "малварь + реклама (DoH)",
 		DoH: []HTTPS{{"https://freedns.controld.com/p2"}}},
 	{ID: "dns4eu-noads", Name: "DNS4EU + Ads", Note: "ЕС, малварь + реклама",
 		DoT: []TLS{{"86.54.11.13", "noads.joindns4.eu"}}, DoH: []HTTPS{{"https://noads.joindns4.eu/dns-query"}}},
-	{ID: "dns4eu-unfiltered", Name: "DNS4EU Unfiltered", Note: "ЕС, без фильтрации",
-		DoT: []TLS{{"86.54.11.100", "unfiltered.joindns4.eu"}}, DoH: []HTTPS{{"https://unfiltered.joindns4.eu/dns-query"}}},
 	{ID: "mullvad-adblock", Name: "Mullvad Adblock", Note: "без логов + режет рекламу (DoT)",
 		DoT: []TLS{{"194.242.2.3", "adblock.dns.mullvad.net"}}},
 	{ID: "blahdns-de", Name: "BlahDNS DE", Note: "без логов, режет рекламу, Германия (DoT)",
@@ -206,12 +206,31 @@ var candidates = []Provider{
 		DoH: []HTTPS{{"https://ada.openbld.net/dns-query"}}},
 	{ID: "360", Name: "360", Note: "Qihoo, Китай",
 		DoH: []HTTPS{{"https://doh.360.cn/dns-query"}}},
-	{ID: "dnsforfamily", Name: "DNS for Family", Note: "Германия, детский фильтр",
-		DoH: []HTTPS{{"https://dns-doh.dnsforfamily.com/dns-query"}}},
 	{ID: "applied-privacy", Name: "Applied Privacy", Note: "Австрия, без логов",
 		DoH: []HTTPS{{"https://doh.applied-privacy.net/query"}}},
 	{ID: "rethinkdns", Name: "RethinkDNS", Note: "открытый исходный код",
 		DoH: []HTTPS{{"https://sky.rethinkdns.com/dns-query"}}},
+}
+
+// retired are providers taken out of the catalogue: not shown, not
+// tested, not findable. Their endpoints stay in the managed sets
+// (AllTLSIPs / AllDoHURLs), so an upstream this tool set while one of
+// them was on offer still gets removed on the next apply, instead of
+// being left on the router as if someone had added it by hand.
+//
+// Yandex's three went on 2026-09-29, at the user's request: a Russian
+// resolver is exactly the kind of DNS a censored network answers
+// through. Their catalogue slots went to non-Russian ones that answered
+// from a Russian home network in the same test run (DNS4EU Unfiltered,
+// ControlD Malware, DNS for Family) -- most foreign DoT/DoH resolvers
+// did not.
+var retired = []Provider{
+	{ID: "yandex", Name: "Yandex",
+		DoT: []TLS{{"77.88.8.8", "common.dot.dns.yandex.net"}, {"77.88.8.1", "common.dot.dns.yandex.net"}}},
+	{ID: "yandex-safe", Name: "Yandex Safe",
+		DoT: []TLS{{"77.88.8.88", "safe.dot.dns.yandex.net"}, {"77.88.8.2", "safe.dot.dns.yandex.net"}}},
+	{ID: "yandex-family", Name: "Yandex Family",
+		DoT: []TLS{{"77.88.8.7", "family.dot.dns.yandex.net"}, {"77.88.8.3", "family.dot.dns.yandex.net"}}},
 }
 
 // Providers returns the shown catalogue in display order.
@@ -256,13 +275,13 @@ func Find(id string) (Provider, bool) {
 }
 
 // AllTLSIPs / AllDoHURLs are every endpoint this project knows (shown
-// catalogue + test-pool candidates) -- the "managed" set
+// catalogue + test-pool candidates + retired) -- the "managed" set
 // internal/keenetic uses to decide which upstreams on the router are
 // ours to remove. A hand-added upstream with a different IP/URL is never
 // touched.
 func AllTLSIPs() []string {
 	var out []string
-	for _, p := range TestPool() {
+	for _, p := range append(TestPool(), retired...) {
 		for _, t := range p.DoT {
 			out = append(out, t.IP)
 		}
@@ -272,10 +291,65 @@ func AllTLSIPs() []string {
 
 func AllDoHURLs() []string {
 	var out []string
-	for _, p := range TestPool() {
+	for _, p := range append(TestPool(), retired...) {
 		for _, h := range p.DoH {
 			out = append(out, h.URL)
 		}
 	}
 	return out
+}
+
+// Pick is one provider and which of its protocols to apply: "dot",
+// "doh" or "both" ("" is both).
+type Pick struct {
+	ID   string
+	Mode string
+}
+
+// Resolve expands picks, in order, into their endpoints -- each one
+// once, however many picks share it -- and the names of the providers
+// that contributed any. An unknown provider or mode is an error, and so
+// is a result with no endpoints at all.
+func Resolve(picks []Pick) (dot []TLS, doh []HTTPS, names []string, err error) {
+	seenT, seenH := map[string]bool{}, map[string]bool{}
+	for _, pk := range picks {
+		p, ok := Find(pk.ID)
+		if !ok {
+			return nil, nil, nil, fmt.Errorf("нет провайдера %q", pk.ID)
+		}
+		mode := strings.ToLower(strings.TrimSpace(pk.Mode))
+		switch mode {
+		case "":
+			mode = "both"
+		case "dot", "doh", "both":
+		default:
+			return nil, nil, nil, fmt.Errorf("%s: режим %q — нужен dot, doh или both", p.ID, pk.Mode)
+		}
+		added := false
+		if mode != "doh" {
+			for _, t := range p.DoT {
+				if !seenT[t.IP] {
+					seenT[t.IP] = true
+					dot = append(dot, t)
+					added = true
+				}
+			}
+		}
+		if mode != "dot" {
+			for _, h := range p.DoH {
+				if !seenH[h.URL] {
+					seenH[h.URL] = true
+					doh = append(doh, h)
+					added = true
+				}
+			}
+		}
+		if added {
+			names = append(names, p.Name)
+		}
+	}
+	if len(dot) == 0 && len(doh) == 0 {
+		return nil, nil, nil, fmt.Errorf("у выбранных провайдеров нет эндпоинтов для этих режимов")
+	}
+	return dot, doh, names, nil
 }

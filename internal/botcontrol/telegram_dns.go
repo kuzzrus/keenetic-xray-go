@@ -36,7 +36,7 @@ const dnsScreenBlurb = "🧭 DNS %s\n\n" +
 	"в том числе для маршрутизации по спискам (роутер снупит ответы).\n\n" +
 	"Трогаем только апстримы из этого списка — твои свои (веб-интерфейс/CLI) не задеваются. " +
 	"DoH обычно живучее к DPI, чем DoT.\n\n" +
-	"«📊 Проверить» — замер задержки всех провайдеров прямо с роутера, топ-4 с кнопкой применить под каждым.\n\n%s"
+	"«📊 Проверить» — замер задержки всех провайдеров прямо с роутера: топ-4, применить весь топ сразу или любой один.\n\n%s"
 
 func (b *TelegramBot) openDNSScreen(ctx context.Context, cb tgCallbackQuery, id string) {
 	if !b.Store.HasRouter(id) {
@@ -93,12 +93,55 @@ func (b *TelegramBot) openDNSTestTopScreen(ctx context.Context, cb tgCallbackQue
 			b.editMessageText(ctx, chatID, msgID, "🧭 DNS "+id+"\n\nничего не измерено", dnsScreenKB(id))
 			return
 		}
+		b.rememberDNSTop(id, rows)
 		b.editMessageText(ctx, chatID, msgID, dnsTestTopText(id, rows), dnsTestTopKB(id, rows))
 	}()
 }
 
 type dnsTestTopRow struct {
 	ID, Name, DoTMs, DoHMs string // Ms fields are "" when that protocol didn't answer
+}
+
+// answeredMode is which of a tested provider's protocols to apply: the
+// ones that answered -- a DoT port the network blocks must not end up
+// among the router's upstreams. "" when neither did.
+func (r dnsTestTopRow) answeredMode() string {
+	switch {
+	case r.DoTMs != "" && r.DoHMs != "":
+		return "both"
+	case r.DoTMs != "":
+		return "dot"
+	case r.DoHMs != "":
+		return "doh"
+	}
+	return ""
+}
+
+// rememberDNSTop keeps a router's last test ranking for "✅ Применить
+// весь топ": the whole list doesn't fit in callback_data's 64 bytes.
+func (b *TelegramBot) rememberDNSTop(id string, rows []dnsTestTopRow) {
+	b.dnsTopMu.Lock()
+	defer b.dnsTopMu.Unlock()
+	if b.dnsTop == nil {
+		b.dnsTop = map[string][]dnsTestTopRow{}
+	}
+	b.dnsTop[id] = rows
+}
+
+// dnsTopPicks is the last ranking as dns_preset_multi arguments, each
+// provider with only the protocols that answered; nil when there's no
+// ranking (the control server restarted since the test) or nothing in
+// it answered.
+func (b *TelegramBot) dnsTopPicks(id string) []string {
+	b.dnsTopMu.Lock()
+	defer b.dnsTopMu.Unlock()
+	var picks []string
+	for _, r := range b.dnsTop[id] {
+		if m := r.answeredMode(); m != "" {
+			picks = append(picks, r.ID+":"+m)
+		}
+	}
+	return picks
 }
 
 // parseDNSTestTop reads dnsTestTop's own TSV (id\tname\tdotMs\tdohMs,
@@ -127,7 +170,9 @@ func dnsTestTopText(id string, rows []dnsTestTopRow) string {
 	for i, r := range rows {
 		fmt.Fprintf(&b, "%d. %s — DoT %s, DoH %s\n", i+1, r.Name, msLabel(r.DoTMs), msLabel(r.DoHMs))
 	}
-	b.WriteString("\nПрименить — кнопкой ниже (DoT+DoH сразу, что есть у провайдера). Полный список и раздельный выбор DoT/DoH — «⬅️ Назад».")
+	b.WriteString("\n«✅ Применить весь топ» — все сразу: роутер будет спрашивать их всех. " +
+		"Или один — кнопкой с именем. Берутся только протоколы, что ответили в тесте. " +
+		"Полный список и раздельный выбор DoT/DoH — «⬅️ Назад».")
 	return b.String()
 }
 
@@ -140,10 +185,20 @@ func msLabel(ms string) string {
 
 func dnsTestTopKB(id string, rows []dnsTestTopRow) inlineKeyboard {
 	var kbRows [][]inlineButton
+	answered := 0
 	for _, r := range rows {
+		mode := r.answeredMode()
+		if mode == "" {
+			continue // nothing of it answered: nothing to apply
+		}
+		answered++
 		kbRows = append(kbRows, []inlineButton{
-			{Text: "✅ " + r.Name, CallbackData: fmt.Sprintf("dna:%s:%s:both", id, r.ID)},
+			{Text: "☑️ " + r.Name, CallbackData: fmt.Sprintf("dna:%s:%s:%s", id, r.ID, mode)},
 		})
+	}
+	if answered > 1 {
+		all := []inlineButton{{Text: fmt.Sprintf("✅ Применить весь топ (%d)", answered), CallbackData: "dnall:" + id}}
+		kbRows = append([][]inlineButton{all}, kbRows...)
 	}
 	kbRows = append(kbRows, []inlineButton{{Text: "⬅️ Назад", CallbackData: "dnsm:" + id}})
 	return inlineKeyboard{InlineKeyboard: kbRows}
@@ -295,6 +350,14 @@ func (b *TelegramBot) handleDNSCallback(ctx context.Context, cb tgCallbackQuery,
 		b.enqueueDNSAction(ctx, cb, f[0], ActionDNSPreset, []string{f[1], f[2]})
 	case strings.HasPrefix(data, "dntest:"):
 		b.openDNSTestTopScreen(ctx, cb, strings.TrimPrefix(data, "dntest:"))
+	case strings.HasPrefix(data, "dnall:"):
+		id := strings.TrimPrefix(data, "dnall:")
+		picks := b.dnsTopPicks(id)
+		if len(picks) == 0 {
+			b.editCB(ctx, cb, "🧭 DNS "+id+"\n\nРезультатов теста уже нет (сервер бота перезапускался) — нажми «📊 Проверить» ещё раз.", dnsScreenKB(id))
+			return true
+		}
+		b.enqueueDNSAction(ctx, cb, id, ActionDNSPresetMulti, picks)
 	case strings.HasPrefix(data, "dnoff:"):
 		b.enqueueDNSAction(ctx, cb, strings.TrimPrefix(data, "dnoff:"), ActionDNSOff, nil)
 	case strings.HasPrefix(data, "dncust:"):

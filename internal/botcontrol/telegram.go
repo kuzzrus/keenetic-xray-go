@@ -77,6 +77,9 @@ type TelegramBot struct {
 
 	selfUpdateMu   sync.Mutex
 	selfUpdateMsgs map[string]pendingMsg // per-router: where "self_update" was last shown, so the later confirmation event can edit it in place
+
+	dnsTopMu sync.Mutex
+	dnsTop   map[string][]dnsTestTopRow // per-router: the last 🧭 DNS test ranking, for "✅ Применить весь топ" (too long for callback_data)
 }
 
 // pendingMsg is one chat message a later event should edit in place

@@ -116,8 +116,12 @@ const (
 	ActionDNSTest    = "dns_test"     // no args -> latency table for the whole provider catalogue
 	ActionDNSTestTop = "dns_test_top" // no args -> TSV "id\tname\tdotMs\tdohMs" (dash = unavailable), top 4 by latency, for the bot's own test-then-apply screen
 	ActionDNSPreset  = "dns_preset"   // args[0]=provider id, args[1]="dot"|"doh"|"both"
-	ActionDNSSet     = "dns_set"      // args[0]="dot"|"doh", args[1]=newline/space list ("<ip> <sni>" pairs, or URLs)
-	ActionDNSOff     = "dns_off"      // no args -> remove every managed upstream
+	// ActionDNSPresetMulti applies several providers together -- the bot's
+	// "✅ Применить весь топ" after a test. Each arg is "<id>:<mode>",
+	// mode dot|doh|both; the bot passes only the protocols that answered.
+	ActionDNSPresetMulti = "dns_preset_multi"
+	ActionDNSSet         = "dns_set" // args[0]="dot"|"doh", args[1]=newline/space list ("<ip> <sni>" pairs, or URLs)
+	ActionDNSOff         = "dns_off" // no args -> remove every managed upstream
 
 	// Optional router-side components (internal/addons): unbound, nfqws2,
 	// conntrack, cron. Surfaced on the bot's 🧩 Дополнения screen.

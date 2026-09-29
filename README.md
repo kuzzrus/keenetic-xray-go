@@ -254,7 +254,7 @@ keenetic-xray proxy0 {show|set [--lan-ip=192.168.x.1] [--protocol=socks5|http] [
 keenetic-xray failover {show|set <key> <value>}
 keenetic-xray routes {list|show [name]|new <name> [entries…]|add <name> <entries…>|del <name> <entries…>|rm <name>|enable <name>|disable <name>|set <name> [--iface=Proxy0|Wireguard4] [--exclusive]|apply}
 keenetic-xray routes preset {list|show <name>|add <name> [--ip] [--iface=…] [--exclusive]|sync [<name>|--all]|update}
-keenetic-xray dns {show|test|list|preset <id> [--dot|--doh|--both]|set dot <ip> <sni> …|set doh <url> …|off}
+keenetic-xray dns {show|test|list|preset <id>[,<id>…] [--dot|--doh|--both]|set dot <ip> <sni> …|set doh <url> …|off}
 keenetic-xray transport {show|mode auto|packet-up|stream-up|stream-one|mode-clear|mss <1200..1452|auto|off>|wg {show|on|off}}
 keenetic-xray rci {show|probe [url]|enable [url]|disable|token [<токен>|clear]}
 ```

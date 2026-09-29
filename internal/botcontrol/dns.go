@@ -3,6 +3,7 @@ package botcontrol
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -159,6 +160,43 @@ func (h *RouterHandler) dnsPreset(ctx context.Context, args []string) (string, e
 	prev := dnsManaged(h.Config)
 	h.Config.DNS = next
 	return h.dnsApply(ctx, prev, fmt.Sprintf("DNS → %s (%s)", p.Name, mode))
+}
+
+// dnsPresetMulti applies several catalogue providers at once -- the
+// bot's "✅ Применить весь топ" after a test, so a ranking of resolvers
+// that answer goes in whole instead of one tap per provider, each
+// replacing the last. args are "<id>:<mode>", mode dot|doh|both; the bot
+// sends only the protocols that answered in the test, so a DoT port the
+// network blocks doesn't get applied. Endpoints shared by several picks
+// go in once.
+func (h *RouterHandler) dnsPresetMulti(ctx context.Context, args []string) (string, error) {
+	if len(args) == 0 {
+		return "", fmt.Errorf("usage: dns_preset_multi <id:mode> …")
+	}
+	picks := make([]dnsupstream.Pick, 0, len(args))
+	ids := make([]string, 0, len(args))
+	for _, a := range args {
+		id, mode, _ := strings.Cut(strings.TrimSpace(a), ":")
+		picks = append(picks, dnsupstream.Pick{ID: id, Mode: mode})
+		if !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+	}
+	dot, doh, names, err := dnsupstream.Resolve(picks)
+	if err != nil {
+		return "", err
+	}
+	next := config.DNSConfig{Provider: strings.Join(ids, "+")}
+	for _, t := range dot {
+		next.DoT = append(next.DoT, config.DNSHostTLS{IP: t.IP, SNI: t.SNI})
+	}
+	for _, hh := range doh {
+		next.DoH = append(next.DoH, config.DNSHostHTTPS{URL: hh.URL})
+	}
+	// DNS-01, as in dnsPreset: what's owned now, before it's overwritten.
+	prev := dnsManaged(h.Config)
+	h.Config.DNS = next
+	return h.dnsApply(ctx, prev, fmt.Sprintf("DNS → %s (DoT %d, DoH %d)", strings.Join(names, ", "), len(dot), len(doh)))
 }
 
 func (h *RouterHandler) dnsSet(ctx context.Context, args []string) (string, error) {

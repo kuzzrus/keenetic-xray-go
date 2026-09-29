@@ -28,6 +28,7 @@ keenetic-xray dns test --all               # also probe the wider candidate pool
 keenetic-xray dns list                     # provider ids
 keenetic-xray dns preset cloudflare        # apply (DoT + DoH); --dot / --doh to pick one
 keenetic-xray dns preset quad9 --doh
+keenetic-xray dns preset controld-p1,dns4eu --doh   # several at once, the same mode for each
 keenetic-xray dns set doh https://dns.example/dns-query
 keenetic-xray dns set dot 1.2.3.4 dns.example
 keenetic-xray dns show                     # config + what's live on the router (ours marked)
@@ -35,8 +36,13 @@ keenetic-xray dns off                      # remove every managed upstream
 ```
 
 Bot: `⚙️ Порты и транспорт` → `🧭 DNS` → provider button → `DoT / DoH /
-Оба`; `📊 Проверить` runs the latency table; `✏️ Свои` for custom
-upstreams; `⛔ Убрать наши`. Or `/dns <router> {show|test|preset <id>
+Оба`; `📊 Проверить` runs the latency table and shows the top 4 with
+`✅ Применить весь топ` (every provider that answered, at once) or one
+button per provider — both apply only the protocols that answered in the
+test, so a DoT port the network blocks doesn't become an upstream (the
+ranking lives in the control server's memory: after a server restart the
+button asks for a fresh test); `✏️ Свои` for custom upstreams;
+`⛔ Убрать наши`. Or `/dns <router> {show|test|preset <id>
 [dot|doh|both]|off}`.
 
 ## `dns test`
@@ -51,11 +57,15 @@ on `:853`). DoH over `:443` usually survives where DoT doesn't.
 ## Providers
 
 The shown catalogue (`providers` in `internal/dnsupstream/providers.go`)
-is ~18 resolvers: Cloudflare (+Security), Google, Quad9 (+Unsecured),
-AdGuard (+Family), Yandex (+Safe, DoT), Mullvad (+Adblock), DNS4EU,
-DNS.SB, Comss.one (DoH), OpenDNS, CleanBrowsing, UncensoredDNS, ControlD
-Unfiltered (DoH), LibreDNS (DoH). A wider `candidates` pool (~25 more:
-BlahDNS, DNSforge, Freifunk, SWITCH, HE.net, AliDNS, DNSPod, DNS4EU
+is ~22 resolvers: Cloudflare (+Security), Google, Quad9 (+Unsecured),
+AdGuard (+Family), DNS4EU (+Unfiltered), ControlD (Unfiltered,
+Uncensored, Malware; DoH), Mullvad, Hurricane Electric, Freifunk
+München, DNS for Family (DoH), DNS.SB, Comss.one (DoH), OpenDNS,
+CleanBrowsing, UncensoredDNS, LibreDNS (DoH). Yandex's three were
+dropped (a Russian operator); their endpoints stay in a `retired` list,
+so an upstream an older version set is still recognised as ours and
+removed on the next apply. A wider `candidates` pool (~23 more: BlahDNS,
+DNSforge, SWITCH, AliDNS, DNSPod, NextDNS, more ControlD/DNS4EU
 variants, …) is probed only by `dns test --all` and never shown as a
 button — it's what the shown list is curated from after a run on real
 hardware. A filtering resolver (AdGuard, CleanBrowsing) can return

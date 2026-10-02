@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated": "2026-09-30",
+  "generated": "2026-10-02",
   "categories": [
     "Мессенджеры",
     "Видео",
@@ -44,8 +44,8 @@
       "title": "Anthropic / Claude",
       "category": "Искусственный интеллект",
       "kind": "domains",
-      "count": 8,
-      "rev": "5e0a2bbee5ee",
+      "count": 9,
+      "rev": "a45ce107f53d",
       "sources": [
         "Geo-Aggregator: anthropic"
       ]

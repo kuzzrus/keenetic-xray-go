@@ -549,6 +549,71 @@ log-reading answers as fast or as conclusively, and it would have
 short-circuited two dead-end rounds (#169, CGO) straight to the actual
 bug in this project's *own* 15-line bridge file.
 
+## 2026-10-03 — `v26.9.30`: patch re-derived, loopback-verified, awaiting hardware
+
+Upstream `v26.9.30` (2026-09-30, 36 commits / 263 files after `v26.9.9`) is
+the next candidate. `amneziawg-v26.9.9.patch` does **not** apply to it --
+`git apply --check` fails on go.mod, go.sum, `infra/conf/wireguard.go` and
+`proxy/wireguard/{client,config.pb,netstack,tun_linux}.go` with real
+context drift (a CR-stripped copy fails identically) -- so
+`packaging/xray-core/amneziawg-v26.9.30.patch` was re-derived rather than
+rebased, the same way `v26.3.27`'s was. What moved under the old patch:
+
+- **#6771** dropped `domainStrategy` and the `remoteDNS: "local"` mode from
+  the WireGuard outbound (a reshuffle of the conf struct our AWG block sits
+  after; this project never emitted either key, and `remoteDNS` as an IP
+  list is still valid).
+- **#6852** reordered `Handler.init()`: the bind is now fully built *before*
+  `device.NewDevice`, then `bind.setDownFunc(dev.Down)`. The AWG UAPI block
+  still goes right after `private_key=`, and the AWG-05 `dev.Close()` on
+  `IpcSet`/`Up` failure is **still needed** -- upstream still returns
+  without closing the device there. `bind.go`'s receive-side
+  `len(b.reserved) == 3` guard (the Round-3 root cause above) is untouched
+  upstream and applies as-is.
+- **#6754** moved UDP dialing onto Finalmask (`FinalMask.DialUDP`).
+- **New `proxy/masque`** gets its `tun.Device` from `wireguard.CreateNetTUN`,
+  i.e. the two packages exchange `tun.Device` values. With `proxy/wireguard`
+  on the fork's `tun`, masque's three files (`client.go`, `server.go`,
+  `server_test.go`) must swap to it too, or it is a type mismatch at
+  compile time. The patch is therefore **15 files, not 12**. For any future
+  tag, after applying, `grep -rn 'golang.zx2c4.com/wireguard/\(tun\|device\|conn\)' --include='*.go' .`
+  must come back empty.
+- go.mod/go.sum were regenerated with a real `go mod edit` + `go mod tidy`
+  against the same fork commit as `v26.9.9`'s patch (`9f61425`, the AWG-04
+  fix), not hand-edited.
+
+Verified, all without hardware: (1) the CI recipe on a fresh checkout --
+`git apply`, the workflow's own protoc regeneration with
+`protoc-gen-go@latest`, `gofmt -l` on every touched file, `go build ./...`;
+(2) `linux/arm64` and `linux/mipsle` softfloat builds of `./main` (32.1 /
+36.8 MB unpacked, vs 31.6 / 36.1 for `v26.9.9`); (3) upstream's own scenario
+tests on the patched tree -- `TestWireguard` and `TestMasque*`, the latter
+being what proves the shared-`tun` swap; (4) the loopback harness below.
+(On this Windows dev box clone with `-c core.autocrlf=false` *persisted*
+into the clone -- `git -c ... clone` only applies it to the clone command
+itself, and `git apply` then writes CRLF files that make `gofmt -l` flag
+everything.)
+
+**Loopback AmneziaWG harness** -- `packaging/xray-core/awgloop/main.go`
+(build-ignored; the run recipe is in its header comment). It runs an AWG
+*server* peer in userspace (the fork + gVisor netstack, an HTTP server
+inside the tunnel), points the patched xray at it with a config shaped like
+`buildAmneziaWGOutbound`'s output, and fetches a page through xray's SOCKS
+inbound. Five scenarios: plain WG, AWG classic, AWG 2.0 style (s3/s4, h
+ranges, i1), and two negative controls (server AWG + client plain;
+mismatched h4) that must fail. It has teeth: with the old `bind.go` bug put
+back it goes red with `Received message with unknown type` -- the exact
+Round-2/3 symptom -- so a green run means the receive path and the
+parameter wiring both work. **Run it on every future tag bump before
+dispatching the dev build.** It cannot reproduce a real AWG server's
+quirks, so it does not replace the hardware step.
+
+Not done, same as every tag before it: a live AWG server on a real router.
+Dispatch `xray_version=v26.9.30 awg_dev=true` (publishes
+`xray-core-awg-dev/v26.9.30`, which no release path installs) and test that.
+Do not add the tag to `AWG_CONFIRMED_TAGS` (workflow *and*
+`xraycore.AWGConfirmedTags`) or bump `xraycore.PrereleaseTag` until then.
+
 ## How to resume
 
 Everything the original plan called for is now built (see "What's
@@ -572,7 +637,12 @@ actually built"). What's left is verification and one more tag:
    above). Only once that's confirmed: add `v26.3.27` to
    `AWG_CONFIRMED_TAGS` in the workflow and dispatch again with
    `awg_dev=false` (or just omit it) to promote it for real.
-3. If re-entering Plan Mode for either of these, re-read this document
+3. **`v26.9.30`**: patch re-derived and loopback-verified (see the
+   2026-10-03 section above); what's left is the dev build + the same
+   real-hardware verification, then promotion (workflow
+   `AWG_CONFIRMED_TAGS`, `xraycore.AWGConfirmedTags`, and
+   `xraycore.PrereleaseTag` if it should replace `v26.9.9` as the opt-in).
+4. If re-entering Plan Mode for any of these, re-read this document
    plus the current code first — don't assume an old plan-file survived
    (Plan Mode's plan file gets reused for whatever's being planned at the
    time).

@@ -23,12 +23,17 @@ the new tag.
 
 A **second**, newer tag can be built and offered as an explicit opt-in
 without becoming the default — `xraycore.PrereleaseTag` (currently
-`v26.9.9`, an upstream *pre-release*). A router runs it only if asked:
+`v26.9.30`, an upstream *pre-release*). A router runs it only if asked:
 
-- at install: `curl … | sh -s -- --xray-core-tag=v26.9.9`
-- later, over SSH: `keenetic-xray internal ensure-xray-core --tag=v26.9.9`
+- at install: `curl … | sh -s -- --xray-core-tag=v26.9.30`
+- later, over SSH: `keenetic-xray internal ensure-xray-core --tag=v26.9.30`
 - from the bot: `🧩 Ядро xray` on the router card, or `/update_core
-  <router> v26.9.9`
+  <router> v26.9.30`
+
+Both `v26.9.9` and `v26.9.30` are built with the AmneziaWG patch
+(`xraycore.AWGConfirmedTags`, mirrored by `AWG_CONFIRMED_TAGS` in the
+build workflow; see `docs/HANDOFF-amneziawg.md`); the default
+`v26.3.27` is plain upstream.
 
 The choice is stored in `config.json` as `xray_core_tag`, so a package
 self-update keeps it. `--tag=stable` (or the bot's *Стабильное* button)

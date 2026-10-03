@@ -37,7 +37,7 @@ const DefaultTag = "v26.3.27"
 // router only runs it if someone asked for it, and the choice is
 // persisted in config.XrayCoreTag so a later self-update keeps it.
 // Empty -> no prerelease is currently offered.
-const PrereleaseTag = "v26.9.9"
+const PrereleaseTag = "v26.9.30"
 
 // AWGConfirmedTags lists the exact xray-core release tags whose normally-
 // published vendored build is known to carry the AmneziaWG patch --
@@ -49,7 +49,7 @@ const PrereleaseTag = "v26.9.9"
 // instead -- an explicit opt-in the bot/CLI never install by default.
 // Update this alongside that workflow file whenever a tag is promoted
 // (see docs/HANDOFF-amneziawg.md and the amneziawg-plan memory file).
-var AWGConfirmedTags = []string{"v26.9.9"}
+var AWGConfirmedTags = []string{"v26.9.9", "v26.9.30"}
 
 // SupportsAWG reports whether tag's normally-published vendored build is
 // known to carry the AmneziaWG patch (AWG-01). This is a static claim

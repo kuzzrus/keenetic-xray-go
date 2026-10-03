@@ -38,6 +38,16 @@ real bugs found that way, none of them anticipated by the original plan
 below, most of them relegated to their own long detour before the actual
 (surprisingly simple) fix turned up.
 
+**Update 2026-10-03: `v26.9.30` is promoted alongside `v26.9.9`.** The
+re-derived patch (see the 2026-10-03 section below) was confirmed working
+on real hardware -- an aarch64 router, the arm64 *dev* build, an AWG
+profile -- so the tag is in `AWG_CONFIRMED_TAGS` (workflow and `xraycore`)
+and `xraycore.PrereleaseTag` is `v26.9.30`. The production arm64 build is
+`CGO_ENABLED=0` while the dev one is the CGO diagnostic flavor, so one
+on-router check of the production flavor (`ensure-xray-core --tag=v26.9.30`
+with no base-URL override) gates cutting a keenetic-xray release that
+carries the new `PrereleaseTag`.
+
 ## The task
 
 User's provider tooling (`kuzzrus/3x-ui-awg`, a fork of 3x-ui) issues
@@ -608,11 +618,15 @@ parameter wiring both work. **Run it on every future tag bump before
 dispatching the dev build.** It cannot reproduce a real AWG server's
 quirks, so it does not replace the hardware step.
 
-Not done, same as every tag before it: a live AWG server on a real router.
-Dispatch `xray_version=v26.9.30 awg_dev=true` (publishes
-`xray-core-awg-dev/v26.9.30`, which no release path installs) and test that.
-Do not add the tag to `AWG_CONFIRMED_TAGS` (workflow *and*
-`xraycore.AWGConfirmedTags`) or bump `xraycore.PrereleaseTag` until then.
+Then the usual order: dispatch `xray_version=v26.9.30 awg_dev=true`
+(publishes `xray-core-awg-dev/v26.9.30`, which no release path installs),
+test that on a router, and only then promote. That was done on 2026-10-03:
+the dev build was hardware-confirmed (aarch64 router, AWG profile), so the
+tag went into `AWG_CONFIRMED_TAGS` (workflow *and*
+`xraycore.AWGConfirmedTags`), `xraycore.PrereleaseTag` moved to it, and the
+real `xray-core/v26.9.30` is built by dispatching `xray_version=v26.9.30`
+without `awg_dev` -- `CGO_ENABLED=0` on both arches, unlike the arm64 dev
+build.
 
 ## How to resume
 
@@ -637,11 +651,13 @@ actually built"). What's left is verification and one more tag:
    above). Only once that's confirmed: add `v26.3.27` to
    `AWG_CONFIRMED_TAGS` in the workflow and dispatch again with
    `awg_dev=false` (or just omit it) to promote it for real.
-3. **`v26.9.30`**: patch re-derived and loopback-verified (see the
-   2026-10-03 section above); what's left is the dev build + the same
-   real-hardware verification, then promotion (workflow
-   `AWG_CONFIRMED_TAGS`, `xraycore.AWGConfirmedTags`, and
-   `xraycore.PrereleaseTag` if it should replace `v26.9.9` as the opt-in).
+3. **`v26.9.30`**: promoted (see the 2026-10-03 section above). What's
+   left is one on-router check of the *production* arm64 flavor
+   (`CGO_ENABLED=0`; the dev build that was hardware-tested is the CGO
+   diagnostic one): `keenetic-xray internal ensure-xray-core
+   --tag=v26.9.30` with no base-URL override, restart, confirm an AWG
+   profile still passes traffic -- then cut a keenetic-xray release that
+   carries the new `PrereleaseTag`.
 4. If re-entering Plan Mode for any of these, re-read this document
    plus the current code first — don't assume an old plan-file survived
    (Plan Mode's plan file gets reused for whatever's being planned at the

@@ -138,8 +138,35 @@ func reason(err error) string {
 	if errors.As(err, &ne) && ne.Timeout() {
 		return "таймаут"
 	}
+	if msg := err.Error(); strings.Contains(msg, "socks connect") {
+		return socksReason(msg)
+	}
 	if strings.Contains(err.Error(), "tls:") {
 		return "TLS"
 	}
 	return "ошибка"
+}
+
+// socksReason shortens the tunnel's own refusal. net/http's SOCKS dialer
+// reports the proxy's reply as text -- "socks connect tcp 127.0.0.1:1080->
+// host:443: unknown error host unreachable" -- and there is no exported
+// type to test for, so the reply is matched by its wording. Without this
+// the commonest failure -- a mistyped domain, or a host the tunnel's far
+// end cannot reach -- reads just "ошибка".
+func socksReason(msg string) string {
+	switch {
+	case strings.Contains(msg, "host unreachable"):
+		return "хост недоступен"
+	case strings.Contains(msg, "network unreachable"):
+		return "нет маршрута"
+	case strings.Contains(msg, "connection refused"):
+		return "отказ"
+	case strings.Contains(msg, "TTL expired"):
+		return "таймаут"
+	case strings.Contains(msg, "general SOCKS server failure"):
+		return "не соединился"
+	case strings.Contains(msg, "not allowed by ruleset"):
+		return "запрещено правилами туннеля"
+	}
+	return "ошибка туннеля"
 }

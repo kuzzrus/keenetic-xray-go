@@ -109,6 +109,16 @@ func (r *Result) Text() string {
 			continue
 		}
 		fmt.Fprintf(&b, "\n%s (%d):\n", g.head, len(hs))
+		if g.class == ClassDirect {
+			// Hosts that open directly are only counted off: how each answered
+			// (404, 301, ...) says nothing useful, and a CSP-heavy site has dozens.
+			names := make([]string, len(hs))
+			for i, h := range hs {
+				names[i] = h.Name
+			}
+			b.WriteString(wrapNames(names, "  ", 100))
+			continue
+		}
 		for _, h := range hs {
 			fmt.Fprintf(&b, "  %s — %s\n", h.Name, h.Describe())
 		}
@@ -132,4 +142,29 @@ func (r *Result) NeedNames() []string {
 		}
 	}
 	return out
+}
+
+// wrapNames lays names out comma-separated on lines of at most width
+// columns, each line starting with indent.
+func wrapNames(names []string, indent string, width int) string {
+	var b strings.Builder
+	line := indent
+	for i, n := range names {
+		piece := n
+		if i < len(names)-1 {
+			piece += ","
+		}
+		if len(line) > len(indent) && len([]rune(line))+1+len([]rune(piece)) > width {
+			b.WriteString(line + "\n")
+			line = indent
+		}
+		if len(line) > len(indent) {
+			line += " "
+		}
+		line += piece
+	}
+	if line != indent {
+		b.WriteString(line + "\n")
+	}
+	return b.String()
 }

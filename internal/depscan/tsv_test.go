@@ -163,3 +163,52 @@ func TestReason(t *testing.T) {
 		}
 	}
 }
+
+func TestSocksReason(t *testing.T) {
+	for msg, want := range map[string]string{
+		`Get "https://x.example/": socks connect tcp 127.0.0.1:1080->x.example:443: unknown error host unreachable`:             "хост недоступен",
+		`Get "https://x.example/": socks connect tcp 127.0.0.1:1080->x.example:443: unknown error general SOCKS server failure`: "не соединился",
+		`socks connect tcp 127.0.0.1:1080->x.example:443: unknown error connection refused`:                                     "отказ",
+		`socks connect tcp 127.0.0.1:1080->x.example:443: unknown error network unreachable`:                                    "нет маршрута",
+		`socks connect tcp 127.0.0.1:1080->x.example:443: unknown error TTL expired`:                                            "таймаут",
+		`socks connect tcp 127.0.0.1:1080->x.example:443: unknown error connection not allowed by ruleset`:                      "запрещено правилами туннеля",
+		`socks connect tcp 127.0.0.1:1080->x.example:443: something new`:                                                        "ошибка туннеля",
+	} {
+		if got := reason(errors.New(msg)); got != want {
+			t.Errorf("reason(%q) = %q, want %q", msg, got, want)
+		}
+	}
+}
+
+func TestText_DirectGroupIsCompact(t *testing.T) {
+	r := &Result{Pages: []Page{{Seed: "example.com", Status: 200}}}
+	for i := 0; i < 30; i++ {
+		r.Hosts = append(r.Hosts, Host{Name: fmt.Sprintf("host%02d.example-a.net", i), Class: ClassDirect, Via: []string{ViaCSP}, Direct: ok(404)})
+	}
+	txt := r.Text()
+	if strings.Contains(txt, "отвечает (404)") || strings.Contains(txt, "политика CSP") {
+		t.Errorf("direct hosts listed with their answers:\n%s", txt)
+	}
+	if !strings.Contains(txt, "(30):") || !strings.Contains(txt, "host00.example-a.net,") || !strings.HasSuffix(txt, "host29.example-a.net") {
+		t.Errorf("not every direct host is named:\n%s", txt)
+	}
+	for _, line := range strings.Split(txt, "\n") {
+		if len([]rune(line)) > 110 {
+			t.Errorf("line of %d columns: %q", len([]rune(line)), line)
+		}
+	}
+}
+
+func TestWrapNames(t *testing.T) {
+	if got := wrapNames(nil, "  ", 40); got != "" {
+		t.Errorf("empty = %q", got)
+	}
+	got := wrapNames([]string{"aaaaaaaaaa", "bbbbbbbbbb", "cccccccccc", "dddddddddd"}, "  ", 30)
+	if got != "  aaaaaaaaaa, bbbbbbbbbb,\n  cccccccccc, dddddddddd\n" {
+		t.Errorf("wrapped = %q", got)
+	}
+	// A name longer than the width still gets a line of its own.
+	if got := wrapNames([]string{strings.Repeat("x", 50), "y"}, "", 20); got != strings.Repeat("x", 50)+",\ny\n" {
+		t.Errorf("long name = %q", got)
+	}
+}

@@ -488,3 +488,20 @@ func TestNewScanToken_UniqueAndShort(t *testing.T) {
 		seen[tok] = true
 	}
 }
+
+// The offer names the domains it will read, and says so when it will not
+// read all of them.
+func TestTelegramBot_ScanOffer_NamesTheDomains(t *testing.T) {
+	_, fake, store := newScanBot(t)
+	startScanAgent(t, store, func(c Command) (string, string) { return "список: +5 записей", "" })
+	addThroughWizard(t, fake, "a.example.com b.example.com c.example.com d.example.com e.example.com")
+	offer := waitForButtonMsg(t, fake, "rsq:")
+	for _, want := range []string{"a.example.com, b.example.com, c.example.com", "первые 3 из 5"} {
+		if !strings.Contains(offer.Text, want) {
+			t.Errorf("the offer lacks %q:\n%s", want, offer.Text)
+		}
+	}
+	if strings.Contains(offer.Text, "d.example.com,") || strings.Contains(offer.Text, ", d.example.com") {
+		t.Errorf("the offer names a domain it will not read:\n%s", offer.Text)
+	}
+}

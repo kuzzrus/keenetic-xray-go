@@ -20,6 +20,18 @@ const MaxSeeds = 3
 // internal name). Entries beyond the cap are dropped silently: the caller
 // has what it can scan.
 func ParseSeeds(args ...string) (seeds, problems []string) {
+	return parseSeeds(MaxSeeds, args)
+}
+
+// CountSeeds is how many distinct scannable domains args hold, with no cap:
+// the caller says "the first MaxSeeds of N" when N is larger.
+func CountSeeds(args ...string) int {
+	seeds, _ := parseSeeds(0, args)
+	return len(seeds)
+}
+
+// parseSeeds is ParseSeeds with the cap as a parameter; limit <= 0 means none.
+func parseSeeds(limit int, args []string) (seeds, problems []string) {
 	seen := map[string]struct{}{}
 	for _, a := range args {
 		for _, raw := range strings.FieldsFunc(a, func(r rune) bool {
@@ -34,7 +46,7 @@ func ParseSeeds(args ...string) (seeds, problems []string) {
 				continue
 			}
 			seen[name] = struct{}{}
-			if len(seeds) < MaxSeeds {
+			if limit <= 0 || len(seeds) < limit {
 				seeds = append(seeds, name)
 			}
 		}

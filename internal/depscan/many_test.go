@@ -80,3 +80,15 @@ func TestCoveredIndex(t *testing.T) {
 		t.Logf("names %v", names)
 	}
 }
+
+func TestCountSeeds(t *testing.T) {
+	if n := CountSeeds("a.example.com b.example.com", "c.example.com, d.example.com", "e.example.com", "A.example.com 10.0.0.1"); n != 5 {
+		t.Errorf("CountSeeds = %d, want 5 distinct domains (no cap; the duplicate and the IP don't count)", n)
+	}
+	if seeds, _ := ParseSeeds("a.example.com b.example.com c.example.com d.example.com e.example.com"); len(seeds) != MaxSeeds {
+		t.Errorf("ParseSeeds kept %d, want the cap %d", len(seeds), MaxSeeds)
+	}
+	if n := CountSeeds(); n != 0 {
+		t.Errorf("CountSeeds() = %d", n)
+	}
+}

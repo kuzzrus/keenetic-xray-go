@@ -121,9 +121,13 @@ func (b *TelegramBot) offerScan(ctx context.Context, chatID int64, routerID, lis
 		return
 	}
 	tok := b.putScan(&scanSession{routerID: routerID, chatID: chatID, list: list, seeds: seeds})
+	who := strings.Join(seeds, ", ")
+	if total := depscan.CountSeeds(entries...); total > len(seeds) {
+		who += fmt.Sprintf(" (первые %d из %d; остальные добавь отдельно)", len(seeds), total)
+	}
 	text += "\n\n🔎 Страница сайта часто грузит картинки, скрипты и вход с других доменов; " +
 		"если те тоже закрыты, а в списке их нет, сайт откроется не полностью. " +
-		"Прочитать страницу через туннель и найти такие домены? Займёт до минуты."
+		"Прочитать через туннель " + who + " и найти такие домены? Займёт до минуты."
 	kb := inlineKeyboard{InlineKeyboard: [][]inlineButton{
 		{{Text: "🔎 Найти связанные домены", CallbackData: "rsq:" + tok}},
 		{{Text: "Не надо", CallbackData: "rsx:" + tok}},

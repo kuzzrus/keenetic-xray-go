@@ -31,7 +31,7 @@ func TestTunTransportScreen(t *testing.T) {
 	}
 
 	text := tunTransportScreenText("r1")
-	for _, want := range []string{"r1", "экспериментальный", "OpkgTunN", "VLESS-сервера", "keenetic-xray-tun"} {
+	for _, want := range []string{"r1", "экспериментальный", "OpkgTunN", "VLESS-сервера", "keenetic-xray-tun", "Скорость", "Proxy0"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("TUN screen text lacks %q:\n%s", want, text)
 		}

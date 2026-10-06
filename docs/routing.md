@@ -277,6 +277,26 @@ goes); a restarted xray has carrier 2-4 s after it starts and the routes are
 back about a second later. `interface OpkgTunN down` / `up`, which the gate
 uses, take effect in ~1.4 s / ~2 s. The extra cost of the hop is small: an
 HTTPS request took ~300 ms through the tunnel against ~200 ms direct, a STUN
-round trip ~65 ms against ~20 ms. Not measured yet: throughput and CPU load
-under a bulk transfer, IPv6. Enable it with `keenetic-xray setup` (option 5),
-the bot, or `transport tun on`.
+round trip ~65 ms against ~20 ms. Enable it with `keenetic-xray setup`
+(option 5), the bot, or `transport tun on`.
+
+**Throughput is the price.** Measured on the same router (2 cores, 497 MB)
+with a LAN client downloading one large file for 20 s per path, the same
+client and the same xray each time:
+
+| path | 1 stream | 4 streams |
+|---|---|---|
+| straight out the WAN | 397 Mbit/s | 584 Mbit/s |
+| through xray's SOCKS inbound (the Proxy0 path) | 167 Mbit/s | 118 Mbit/s (one stream was refused by the file server, so 3 effective) |
+| through the TUN | 54.5 Mbit/s | 69.9 Mbit/s |
+
+The TUN path saturates the CPU: ~70-100% busy over both cores, xray at about
+one core (99-115%), another ~30% in softirq (NAT). xray's `tun` inbound
+terminates every TCP flow in a userspace stack, one packet at a time, in a
+single dispatcher -- so more streams do not help much. That is plenty for
+lists of services (4K video is ~25 Mbit/s, messengers and browsing are
+nothing), but not for bulk downloads: keep those on Proxy0. Other effects of a
+heavy transfer: the gate did **not** trip (its checks still got through at
+100% CPU); xray's resident memory grew from ~54 MB to ~110 MB and stays there
+(Go keeps it), and free memory fell to ~85 MB at the peak on a 497 MB router.
+Not measured: IPv6, a faster router, a larger MTU (the default is 1280).

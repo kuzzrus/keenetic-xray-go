@@ -11,9 +11,9 @@ import (
 // split as dns_test_top: structure for the buttons, no string-scraping of
 // text meant for people.
 //
-//	#page  seed  finalHost  status  direct  note
+//	#page  seed  finalHost  status  direct  note  seedIPs  seedIPsDropped
 //	#more  more  skipped
-//	host   class tier(A|B)  flags  via  covered-by  direct  tunnel
+//	host   class tier(A|B)  flags  via  covered-by  direct  tunnel  IPs  IPsDropped
 //
 // flags is a comma list of shared, tracker, unchecked. A Reach is "-"
 // (not tried), "ok:<status>" or "err:<reason>".
@@ -24,6 +24,7 @@ func (r *Result) TSV() string {
 	for _, p := range r.Pages {
 		b.WriteString(strings.Join([]string{
 			"#page", cell(p.Seed), cell(p.FinalHost), strconv.Itoa(p.Status), encReach(p.Direct), cell(p.Note),
+			orDash(strings.Join(p.SeedIPs, ",")), strconv.Itoa(p.SeedIPsDropped),
 		}, "\t"))
 		b.WriteByte('\n')
 	}
@@ -47,6 +48,7 @@ func (r *Result) TSV() string {
 			h.Name, string(h.Class), tier, orDash(strings.Join(flags, ",")),
 			orDash(strings.Join(h.Via, ",")), orDash(cell(h.CoveredBy)),
 			encReach(h.Direct), encReach(h.Tunnel),
+			orDash(strings.Join(h.IPs, ",")), strconv.Itoa(h.IPsDropped),
 		}, "\t"))
 		b.WriteByte('\n')
 	}
@@ -66,9 +68,14 @@ func ParseTSV(s string) (*Result, error) {
 		f := strings.Split(line, "\t")
 		switch f[0] {
 		case "#page":
-			f = pad(f, 6)
+			f = pad(f, 8)
 			st, _ := strconv.Atoi(f[3])
-			r.Pages = append(r.Pages, Page{Seed: f[1], FinalHost: f[2], Status: st, Direct: decReach(f[4]), Note: f[5]})
+			dropped, _ := strconv.Atoi(f[7])
+			pg := Page{Seed: f[1], FinalHost: f[2], Status: st, Direct: decReach(f[4]), Note: f[5], SeedIPsDropped: dropped}
+			if f[6] != "-" && f[6] != "" {
+				pg.SeedIPs = strings.Split(f[6], ",")
+			}
+			r.Pages = append(r.Pages, pg)
 		case "#more":
 			f = pad(f, 3)
 			r.More, _ = strconv.Atoi(f[1])
@@ -99,6 +106,12 @@ func ParseTSV(s string) (*Result, error) {
 			}
 			if f[5] != "-" {
 				h.CoveredBy = f[5]
+			}
+			if len(f) >= 10 { // older agents end at the tunnel column
+				if f[8] != "-" && f[8] != "" {
+					h.IPs = strings.Split(f[8], ",")
+				}
+				h.IPsDropped, _ = strconv.Atoi(f[9])
 			}
 			r.Hosts = append(r.Hosts, h)
 		}

@@ -47,6 +47,7 @@ type scanSession struct {
 	sel       map[string]bool // ticked host names
 	page      int
 	showMaybe bool
+	withIPs   bool // also add the addresses (the scanned domains' and the ticked hosts') to the IP companion list
 }
 
 func (b *TelegramBot) scanTimeout() time.Duration {
@@ -127,7 +128,8 @@ func (b *TelegramBot) offerScan(ctx context.Context, chatID int64, routerID, lis
 	}
 	text += "\n\n🔎 Страница сайта часто грузит картинки, скрипты и вход с других доменов; " +
 		"если те тоже закрыты, а в списке их нет, сайт откроется не полностью. " +
-		"Прочитать через туннель " + who + " и найти такие домены? Займёт до минуты."
+		"Прочитать через туннель " + who + " и найти такие домены? Заодно покажу IP-адреса: они нужны " +
+		"приложениям, которые ходят на адрес без запроса DNS (например, звонкам). Займёт до минуты."
 	kb := inlineKeyboard{InlineKeyboard: [][]inlineButton{
 		{{Text: "🔎 Найти связанные домены", CallbackData: "rsq:" + tok}},
 		{{Text: "Не надо", CallbackData: "rsx:" + tok}},
@@ -144,7 +146,7 @@ func (b *TelegramBot) handleScanCallback(ctx context.Context, cb tgCallbackQuery
 		return false
 	}
 	switch verb {
-	case "rsq", "rsx", "rst", "rsp", "rsm", "rsa":
+	case "rsq", "rsx", "rst", "rsp", "rsm", "rsa", "rsi":
 	default:
 		return false
 	}
@@ -206,6 +208,14 @@ func (b *TelegramBot) handleScanCallback(ctx context.Context, cb tgCallbackQuery
 				}
 			}
 			s.page = 0
+			text, kb = scanScreen(tok, s, "")
+		})
+	case "rsi":
+		b.withScan(tok, chatID, func(s *scanSession) {
+			if s.res == nil || len(s.res.IPs(s.sel)) == 0 {
+				return // nothing to switch on
+			}
+			s.withIPs = !s.withIPs
 			text, kb = scanScreen(tok, s, "")
 		})
 	case "rsa":
@@ -288,7 +298,7 @@ func (b *TelegramBot) scanStart(ctx context.Context, chatID int64, msgID int, to
 // scanAdd adds the ticked hosts to the list with the ordinary routes_add.
 func (b *TelegramBot) scanAdd(ctx context.Context, chatID int64, msgID int, tok string) {
 	var routerID, list string
-	var hosts []string
+	var hosts, ips []string
 	var text string
 	var kb inlineKeyboard
 	b.withScan(tok, chatID, func(s *scanSession) {
@@ -301,24 +311,50 @@ func (b *TelegramBot) scanAdd(ctx context.Context, chatID int64, msgID int, tok 
 				hosts = append(hosts, h.Name)
 			}
 		}
-		if len(hosts) == 0 {
+		if s.withIPs {
+			ips = s.res.IPs(s.sel)
+		}
+		if len(hosts) == 0 && len(ips) == 0 {
 			text, kb = scanScreen(tok, s, "Ничего не отмечено — отметь номера кнопками или закрой.")
 		}
 	})
 	if routerID == "" {
 		return
 	}
-	if len(hosts) == 0 {
+	if len(hosts) == 0 && len(ips) == 0 {
 		b.editMessageText(ctx, chatID, msgID, text, kb)
 		return
 	}
-	b.editMessageText(ctx, chatID, msgID, fmt.Sprintf("➕ Добавляю в список %q: %d доменов…", list, len(hosts)), inlineKeyboard{})
+	b.editMessageText(ctx, chatID, msgID, fmt.Sprintf("➕ Добавляю в список %q: доменов %d, IP-адресов %d…", list, len(hosts), len(ips)), inlineKeyboard{})
 	go func() {
-		out, answered, errText := b.enqueueAndWait(ctx, routerID, ActionRoutesAdd, []string{list, strings.Join(hosts, " ")})
-		msg := b.stepResult(routerID, answered, errText, "✅ "+strings.TrimSpace(out))
-		if answered && errText == "" {
-			msg += "\n\nРоутер узнаёт адреса из DNS-ответов, поэтому первый заход на сайт может пойти напрямую. " +
-				"Если картинки не появились — подожди пару минут или очисти DNS-кэш на устройстве."
+		var parts []string
+		okSoFar, ipsAdded := true, false
+		if len(hosts) > 0 {
+			out, answered, errText := b.enqueueAndWait(ctx, routerID, ActionRoutesAdd, []string{list, strings.Join(hosts, " ")})
+			parts = append(parts, b.stepResult(routerID, answered, errText, "✅ "+strings.TrimSpace(out)))
+			okSoFar = answered && errText == ""
+		}
+		// The addresses go to the list's IP companion ("<list>-ip"), after the
+		// domains: if those failed, say so and stop rather than half-apply.
+		if okSoFar && len(ips) > 0 {
+			out, answered, errText := b.enqueueAndWait(ctx, routerID, ActionRoutesAddIP, []string{list, strings.Join(ips, " ")})
+			parts = append(parts, b.stepResult(routerID, answered, errText, "🔢 "+strings.TrimSpace(out)))
+			okSoFar = answered && errText == ""
+			ipsAdded = okSoFar
+		}
+		msg := strings.Join(parts, "\n\n")
+		if okSoFar {
+			if len(hosts) > 0 {
+				msg += "\n\nРоутер узнаёт адреса из DNS-ответов, поэтому первый заход на сайт может пойти напрямую. " +
+					"Если картинки не появились — подожди пару минут или очисти DNS-кэш на устройстве."
+			}
+			if ipsAdded {
+				msg += "\n\nIP-адреса лежат в отдельном списке: его можно привязать к другому интерфейсу. " +
+					"Звонки идут по UDP — если через Proxy0 они не заработали, привяжи этот список к WireGuard или OpkgTun " +
+					"(📍 Маршруты → список → 🎯 Интерфейс). Адреса у сервисов меняются: список стоит время от времени обновлять. " +
+					"Серверы, через которые приложение ведёт сам звонок, лежат в диапазонах его провайдера, а не за доменом: " +
+					"для Telegram, WhatsApp и Discord такие диапазоны есть в 📦 Готовых списках («Домены + IP-диапазоны»)."
+			}
 			b.dropScan(tok)
 		}
 		b.editMessageText(ctx, chatID, msgID, msg, backKB("rtm:"+routerID))
@@ -366,7 +402,13 @@ func scanScreen(tok string, s *scanSession, note string) (string, inlineKeyboard
 
 	view := s.view()
 	needN, maybeN := r.Count(depscan.ClassNeed), r.Count(depscan.ClassMaybe)
+	pageRead := false
+	for _, p := range r.Pages {
+		pageRead = pageRead || p.Status != 0
+	}
 	switch {
+	case needN == 0 && maybeN == 0 && !pageRead:
+		// No page could be read (an app's host): the addresses below are the answer.
 	case needN == 0 && maybeN == 0:
 		b.WriteString("\nДобавлять нечего: связанных доменов, которым нужен туннель, не нашлось.\n")
 	case needN == 0:
@@ -387,6 +429,23 @@ func scanScreen(tok string, s *scanSession, note string) (string, inlineKeyboard
 			tag = "❔ "
 		}
 		fmt.Fprintf(&b, "%s %d. %s%s — %s\n", mark, i+1, tag, h.Name, h.Describe())
+	}
+	ipsAll := r.IPs(s.sel)
+	if len(ipsAll) > 0 {
+		state := "выключено"
+		if s.withIPs {
+			state = "ВКЛЮЧЕНО"
+		}
+		fmt.Fprintf(&b, "\n🔢 IP-адреса: %d (самих доменов и отмеченных хостов). Они нужны приложениям, которые ходят на адрес без запроса DNS, например звонкам. Сейчас: %s.\n", len(ipsAll), state)
+		if s.withIPs {
+			b.WriteString("   " + joinTrunc(ipsAll, 12) + "\n")
+		}
+		if d := droppedIPs(s); d > 0 {
+			fmt.Fprintf(&b, "   Ещё %d отброшено (служебные, российские, Cloudflare или сверх лимита).\n", d)
+		}
+	} else if d := droppedIPs(s); d > 0 {
+		// Found, but none is one to add: say so rather than say nothing.
+		fmt.Fprintf(&b, "\n🔢 IP-адреса: подходящих нет — отброшено %d (служебные, российские, Cloudflare или сверх лимита).\n", d)
 	}
 	if maybeN > 0 && !s.showMaybe {
 		fmt.Fprintf(&b, "\nВозможно нужны: %d (не отмечены: найдены только в политике сайта или в скриптах, либо это аналитика) — «👁 Показать».\n", maybeN)
@@ -445,14 +504,29 @@ func scanScreen(tok string, s *scanSession, note string) (string, inlineKeyboard
 		}
 		rows = append(rows, nav)
 	}
-	if len(view) > 0 {
-		ticked := 0
-		for _, on := range s.sel {
-			if on {
-				ticked++
+	ticked := 0
+	for _, on := range s.sel {
+		if on {
+			ticked++
+		}
+	}
+	if len(view) > 0 || len(ipsAll) > 0 {
+		label := fmt.Sprintf("✅ Добавить выбранные (%d)", ticked)
+		if s.withIPs && len(ipsAll) > 0 {
+			if ticked > 0 {
+				label = fmt.Sprintf("✅ Добавить: %d доменов + %d IP", ticked, len(ipsAll))
+			} else {
+				label = fmt.Sprintf("✅ Добавить IP (%d)", len(ipsAll))
 			}
 		}
-		rows = append(rows, []inlineButton{{Text: fmt.Sprintf("✅ Добавить выбранные (%d)", ticked), CallbackData: "rsa:" + tok}})
+		rows = append(rows, []inlineButton{{Text: label, CallbackData: "rsa:" + tok}})
+	}
+	if len(ipsAll) > 0 {
+		ipLabel := fmt.Sprintf("🔢 + IP (%d): выкл", len(ipsAll))
+		if s.withIPs {
+			ipLabel = fmt.Sprintf("🔢 + IP (%d): ВКЛ", len(ipsAll))
+		}
+		rows = append(rows, []inlineButton{{Text: ipLabel, CallbackData: "rsi:" + tok}})
 	}
 	if maybeN > 0 {
 		label := fmt.Sprintf("👁 Показать возможные (%d)", maybeN)
@@ -463,4 +537,27 @@ func scanScreen(tok string, s *scanSession, note string) (string, inlineKeyboard
 	}
 	rows = append(rows, []inlineButton{{Text: "✖ Закрыть", CallbackData: "rsx:" + tok}})
 	return b.String(), inlineKeyboard{InlineKeyboard: rows}
+}
+
+// droppedIPs is how many addresses the scan left out for the domains and
+// hosts the screen is about: the scanned domains' and the ticked hosts'.
+func droppedIPs(s *scanSession) int {
+	n := 0
+	for _, p := range s.res.Pages {
+		n += p.SeedIPsDropped
+	}
+	for _, h := range s.res.Hosts {
+		if s.sel[h.Name] {
+			n += h.IPsDropped
+		}
+	}
+	return n
+}
+
+// joinTrunc joins at most max items, ending with "…" when there were more.
+func joinTrunc(items []string, max int) string {
+	if len(items) <= max {
+		return strings.Join(items, ", ")
+	}
+	return strings.Join(items[:max], ", ") + ", …"
 }

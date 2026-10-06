@@ -124,8 +124,42 @@ func (p *fakeProber) probedDirect(h string) bool {
 	return false
 }
 
+// fakeResolver answers from a map; a name not in it does not resolve. It
+// records every lookup. Tests never reach the real DNS.
+type fakeResolver struct {
+	mu    sync.Mutex
+	addrs map[string][]string
+	asked []string
+	block bool // wait for ctx instead of answering
+}
+
+func (r *fakeResolver) LookupIPv4(ctx context.Context, host string) ([]string, error) {
+	r.mu.Lock()
+	r.asked = append(r.asked, host)
+	r.mu.Unlock()
+	if r.block {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	if a, ok := r.addrs[host]; ok {
+		return a, nil
+	}
+	return nil, &net.DNSError{Err: "no such host", Name: host}
+}
+
+func (r *fakeResolver) lookedUp(host string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, h := range r.asked {
+		if h == host {
+			return true
+		}
+	}
+	return false
+}
+
 func scanOpts(t *fakeTunnel, p Prober) Options {
-	return Options{Tunnel: t, Prober: p, Budget: 5 * time.Second}
+	return Options{Tunnel: t, Prober: p, Budget: 5 * time.Second, Resolver: &fakeResolver{}}
 }
 
 func hostByName(r *Result, name string) *Host {
@@ -496,7 +530,7 @@ func TestScan_ReadsAtMostMaxBody(t *testing.T) {
 	rt := roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/html"}}, Body: io.NopCloser(big), Request: req}, nil
 	})
-	if _, err := Scan(context.Background(), "example.com", Options{Tunnel: rt, Prober: &fakeProber{}, Budget: 5 * time.Second}); err != nil {
+	if _, err := Scan(context.Background(), "example.com", Options{Tunnel: rt, Prober: &fakeProber{}, Budget: 5 * time.Second, Resolver: &fakeResolver{}}); err != nil {
 		t.Fatal(err)
 	}
 	if got := atomic.LoadInt64(&read); got > maxBody+(64<<10) {
@@ -606,5 +640,84 @@ func TestMerge(t *testing.T) {
 	}
 	if len(m.Pages) != 2 || m.More != 3 || m.Skipped != 3 {
 		t.Errorf("pages=%d more=%d skipped=%d", len(m.Pages), m.More, m.Skipped)
+	}
+}
+
+// flakyProber fails a host's first direct try with the given reason and
+// answers every later one.
+type flakyProber struct {
+	fakeProber
+	reason string
+	mu2    sync.Mutex
+	tries  map[string]int
+}
+
+func (p *flakyProber) Direct(ctx context.Context, host string) Reach {
+	p.mu2.Lock()
+	if p.tries == nil {
+		p.tries = map[string]int{}
+	}
+	p.tries[host]++
+	n := p.tries[host]
+	p.mu2.Unlock()
+	if host == "example.com" {
+		return ok(200)
+	}
+	if n == 1 {
+		return fail(p.reason)
+	}
+	return ok(200)
+}
+
+func TestScan_AResetThatDoesNotRepeatIsNotABlock(t *testing.T) {
+	for _, tc := range []struct {
+		reason string
+		want   Class
+		tries  int
+	}{
+		{"сброс", ClassDirect, 2}, // a glitch: the second try opens it
+		{"отказ", ClassDirect, 2}, // likewise
+		{"таймаут", ClassNeed, 1}, // not retried: it would cost the whole limit
+		{"DNS", ClassNeed, 1},
+	} {
+		t.Run(tc.reason, func(t *testing.T) {
+			tun := &fakeTunnel{sites: map[string]site{"https://example.com/": page(`<img src="https://flaky.example-a.net/a.png">`)}}
+			pr := &flakyProber{reason: tc.reason}
+			pr.tunnel = map[string]Reach{"flaky.example-a.net": ok(200)}
+			res, err := Scan(context.Background(), "example.com", scanOpts(tun, pr))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if h := hostByName(res, "flaky.example-a.net"); h == nil || h.Class != tc.want {
+				t.Errorf("%s: host = %+v, want class %s", tc.reason, h, tc.want)
+			}
+			if got := pr.tries["flaky.example-a.net"]; got != tc.tries {
+				t.Errorf("%s: %d direct tries, want %d", tc.reason, got, tc.tries)
+			}
+		})
+	}
+}
+
+func TestScan_ARealBlockStaysABlockAfterTheRetry(t *testing.T) {
+	tun := &fakeTunnel{sites: map[string]site{"https://example.com/": page(`<img src="https://blocked.example-a.net/a.png">`)}}
+	pr := &fakeProber{
+		direct: map[string]Reach{"blocked.example-a.net": fail("сброс")}, // every try resets
+		tunnel: map[string]Reach{"blocked.example-a.net": ok(200)},
+	}
+	res, err := Scan(context.Background(), "example.com", scanOpts(tun, pr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h := hostByName(res, "blocked.example-a.net"); h == nil || h.Class != ClassNeed {
+		t.Errorf("host = %+v", h)
+	}
+	n := 0
+	for _, h := range pr.directed {
+		if h == "blocked.example-a.net" {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Errorf("%d direct tries of a host that always resets, want exactly 2", n)
 	}
 }

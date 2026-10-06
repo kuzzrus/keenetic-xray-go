@@ -74,10 +74,10 @@ func TestParseTSV_Tolerance(t *testing.T) {
 func TestTSV_NoRawTabsOrNewlinesInsideCells(t *testing.T) {
 	r := &Result{Pages: []Page{{Seed: "x.example.com", Note: "a\nb\tc"}}, Hosts: []Host{{Name: "h.example-a.net", Class: ClassCovered, CoveredBy: "bad\tname\nx"}}}
 	for _, line := range strings.Split(strings.TrimRight(r.TSV(), "\n"), "\n") {
-		if strings.HasPrefix(line, "#page") && strings.Count(line, "\t") != 5 {
+		if strings.HasPrefix(line, "#page") && strings.Count(line, "\t") != 7 {
 			t.Errorf("page line has %d tabs: %q", strings.Count(line, "\t"), line)
 		}
-		if strings.HasPrefix(line, "h.") && strings.Count(line, "\t") != 7 {
+		if strings.HasPrefix(line, "h.") && strings.Count(line, "\t") != 9 {
 			t.Errorf("host line has %d tabs: %q", strings.Count(line, "\t"), line)
 		}
 	}
@@ -210,5 +210,24 @@ func TestWrapNames(t *testing.T) {
 	// A name longer than the width still gets a line of its own.
 	if got := wrapNames([]string{strings.Repeat("x", 50), "y"}, "", 20); got != strings.Repeat("x", 50)+",\ny\n" {
 		t.Errorf("long name = %q", got)
+	}
+}
+
+func TestText_AnUnreadPageIsNotCalledOpened(t *testing.T) {
+	r := &Result{Pages: []Page{{Seed: "voip.example.com", Note: "страница не открылась", SeedIPs: []string{"1.2.3.4"}}}}
+	txt := r.Text()
+	if strings.Contains(txt, "страница открылась") || strings.Contains(txt, "код 0") || !strings.Contains(txt, "страница не прочитана") {
+		t.Errorf("header of a page that could not be read:\n%s", txt)
+	}
+}
+
+func TestText_AddressesFoundButNoneToOffer(t *testing.T) {
+	r := &Result{Pages: []Page{{Seed: "yandex.ru", FinalHost: "yandex.ru", Status: 200, SeedIPsDropped: 4}}}
+	if txt := r.Text(); !strings.Contains(txt, "IP-адреса домена: подходящих нет (ещё 4 отброшено") {
+		t.Errorf("all addresses dropped, and the report is silent:\n%s", txt)
+	}
+	r.Pages[0].SeedIPsDropped = 0
+	if txt := r.Text(); strings.Contains(txt, "IP-адреса домена") {
+		t.Errorf("a line about addresses though none were found:\n%s", txt)
 	}
 }

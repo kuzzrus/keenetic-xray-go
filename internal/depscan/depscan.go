@@ -55,16 +55,18 @@ const (
 
 // Host is one external host found on the page.
 type Host struct {
-	Name      string
-	Class     Class
-	Tier      Tier
-	Via       []string // sources, sorted (the Via* constants)
-	Shared    bool     // a service many unrelated sites use (see sharedSuffixes)
-	Tracker   bool     // advertising/analytics (see trackerSuffixes)
-	Unchecked bool     // the time budget ran out before it was opened
-	CoveredBy string   // name of the list that already routes it
-	Direct    Reach
-	Tunnel    Reach
+	Name       string
+	Class      Class
+	Tier       Tier
+	Via        []string // sources, sorted (the Via* constants)
+	Shared     bool     // a service many unrelated sites use (see sharedSuffixes)
+	Tracker    bool     // advertising/analytics (see trackerSuffixes)
+	Unchecked  bool     // the time budget ran out before it was opened
+	CoveredBy  string   // name of the list that already routes it
+	IPs        []string // the IPv4 addresses it resolves to here (need/maybe hosts only), offerable ones
+	IPsDropped int      // resolved but left out: reserved, Russian, Cloudflare's, or over the per-host cap
+	Direct     Reach
+	Tunnel     Reach
 }
 
 // Page is what was read for one scanned domain.
@@ -74,6 +76,11 @@ type Page struct {
 	Status    int    // HTTP status of the page
 	Direct    Reach  // can the seed itself be opened directly?
 	Note      string // why the result may be thin, "" when nothing to say
+
+	// SeedIPs are the scanned domain's own addresses -- what an app that
+	// connects to it without asking DNS needs (see ips.go).
+	SeedIPs        []string
+	SeedIPsDropped int
 }
 
 // Result is one scan, or several merged (Merge).
@@ -102,6 +109,12 @@ type Options struct {
 	MaxHosts int
 	// Workers is the probe parallelism; 0 -> DefaultWorkers.
 	Workers int
+	// Resolver looks names up for the address report; nil -> the router's own
+	// resolver.
+	Resolver Resolver
+	// ExcludeIP, if set, says whether an address (text form) must not be
+	// offered -- the Russian ranges.
+	ExcludeIP func(ip string) bool
 }
 
 // Defaults. The budget sits well inside the agent's 60 s command limit and
@@ -171,11 +184,29 @@ func Scan(ctx context.Context, seed string, o Options) (*Result, error) {
 		seedDirect = prober.Direct(ctx, name)
 	}()
 
+	resolver := o.Resolver
+	if resolver == nil {
+		resolver = netResolver{}
+	}
+
 	pg, ferr := fetchPage(ctx, o.Tunnel, name)
 	if ferr != nil {
-		cancel()
+		// An app's host has no web page to read -- but its addresses are
+		// still what an operator who added it needs (see ips.go). If the name
+		// resolves, say so and offer them; if it does not, this is a typo or
+		// a dead name and the scan has nothing to give.
+		ips, dropped := resolveIPs(ctx, resolver, o.ExcludeIP, name)
+		if len(ips) == 0 {
+			cancel()
+			seedWG.Wait()
+			return nil, fmt.Errorf("через туннель страница %s не открылась: %w", name, ferr)
+		}
 		seedWG.Wait()
-		return nil, fmt.Errorf("через туннель страница %s не открылась: %w", name, ferr)
+		why := strings.SplitN(ferr.Error(), "\n", 2)[0]
+		return &Result{Pages: []Page{{
+			Seed: name, Direct: seedDirect, SeedIPs: ips, SeedIPsDropped: dropped,
+			Note: "страница не открылась через туннель (" + why + ") — у серверов приложений сайта нет; IP-адреса домена найдены",
+		}}}, nil
 	}
 
 	res := &Result{Pages: []Page{{Seed: name, FinalHost: pg.final.Hostname(), Status: pg.status}}}
@@ -246,6 +277,17 @@ func Scan(ctx context.Context, seed string, o Options) (*Result, error) {
 	for i := range hosts {
 		hosts[i].Class = classify(&hosts[i])
 	}
+
+	// Addresses for the scanned domain itself and for the hosts that need
+	// the tunnel -- the ones an operator will add (see ips.go).
+	tasks := []ipTask{{name: name, ips: &page.SeedIPs, dropped: &page.SeedIPsDropped}}
+	for i := range hosts {
+		if c := hosts[i].Class; (c == ClassNeed || c == ClassMaybe) && !hosts[i].Unchecked {
+			tasks = append(tasks, ipTask{name: hosts[i].Name, ips: &hosts[i].IPs, dropped: &hosts[i].IPsDropped})
+		}
+	}
+	resolveAll(ctx, resolver, o.ExcludeIP, o.Workers, tasks)
+
 	sortHosts(hosts)
 	res.Hosts = hosts
 	return res, nil
@@ -303,6 +345,19 @@ func probeAll(ctx context.Context, p Prober, todo []*Host, workers int) {
 				return
 			}
 			h.Direct = p.Direct(ctx, h.Name)
+			// A connection that is reset or refused fails fast, and a block
+			// resets every time while a glitch does not: one more try, cheap,
+			// keeps a passing hiccup from being reported as "needs the tunnel".
+			// (A timeout is not retried -- it costs the whole limit.)
+			if !h.Direct.OK && fastFailure(h.Direct.Err) && ctx.Err() == nil {
+				select {
+				case <-time.After(retryPause):
+					if again := p.Direct(ctx, h.Name); again.OK {
+						h.Direct = again
+					}
+				case <-ctx.Done():
+				}
+			}
 			if ctx.Err() != nil && !h.Direct.OK {
 				h.Unchecked = true // the failure is the budget's, not the host's
 				return
@@ -528,3 +583,10 @@ func looksLikeHTML(ctype string, body []byte) bool {
 	}
 	return false
 }
+
+// retryPause is the wait before the second direct try of a fast failure.
+const retryPause = 250 * time.Millisecond
+
+// fastFailure reports whether a direct failure is the kind that happens
+// at once and is worth one more try: the connection was reset or refused.
+func fastFailure(reason string) bool { return reason == "сброс" || reason == "отказ" }

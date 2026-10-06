@@ -37,6 +37,27 @@ func TestTunGateConfig_ProbeIsOffWithoutATransport(t *testing.T) {
 	}
 }
 
+// What the gate checks with is the failover's own health-check target; with
+// none configured there is no verdict -- never a failure that would close the
+// interface for good.
+func TestGateProbeOptions(t *testing.T) {
+	cfg := config.Default()
+	cfg.Failover.SOCKSPort = 10081
+	opts, ok := gateProbeOptions(cfg)
+	if !ok || opts.SOCKSAddr != "127.0.0.1:10081" || opts.URL != cfg.Failover.HealthCheckURL || opts.Retries != 0 || opts.Timeout != tunGateProbeTimeout {
+		t.Fatalf("defaults: %+v, %v", opts, ok)
+	}
+
+	cfg.Failover.HealthCheckURL = ""
+	if _, ok := gateProbeOptions(cfg); ok {
+		t.Error("an empty URL with no fallbacks still produced a probe")
+	}
+	cfg.Failover.HealthCheckFallbackURLs = []string{"https://example.com/generate_204"}
+	if opts, ok := gateProbeOptions(cfg); !ok || len(opts.FallbackURLs) != 1 {
+		t.Errorf("a fallback alone should be enough: %+v, %v", opts, ok)
+	}
+}
+
 // An unreadable config says nothing about the tunnel: the gate must neither
 // close nor open on it.
 func TestTunGateConfig_UnreadableConfigIsNoVerdict(t *testing.T) {

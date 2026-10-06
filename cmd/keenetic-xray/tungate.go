@@ -62,12 +62,26 @@ func (s *tunGateConfig) probe(ctx context.Context) error {
 	if t := cfg.TunTransport; !t.Enabled || t.Iface == "" || !keenetic.Available() {
 		return tungate.ErrOff
 	}
-	return xrayctl.Probe(ctx, xrayctl.ProbeOptions{
+	opts, ok := gateProbeOptions(cfg)
+	if !ok {
+		return tungate.ErrSkip
+	}
+	return xrayctl.Probe(ctx, opts)
+}
+
+// gateProbeOptions is what the gate checks the tunnel with, or false when
+// the config names no health-check URL at all: that is no verdict, not a
+// failure -- an empty setting must never close the interface for good.
+func gateProbeOptions(cfg *config.Config) (xrayctl.ProbeOptions, bool) {
+	if cfg.Failover.HealthCheckURL == "" && len(cfg.Failover.HealthCheckFallbackURLs) == 0 {
+		return xrayctl.ProbeOptions{}, false
+	}
+	return xrayctl.ProbeOptions{
 		SOCKSAddr:    fmt.Sprintf("127.0.0.1:%d", cfg.Failover.SOCKSPort),
 		URL:          cfg.Failover.HealthCheckURL,
 		FallbackURLs: cfg.Failover.HealthCheckFallbackURLs,
 		Timeout:      tunGateProbeTimeout,
-	})
+	}, true
 }
 
 // set opens or closes the configured interface.

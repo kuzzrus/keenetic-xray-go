@@ -95,6 +95,8 @@ func transportSummary(cfg *config.Config) string {
 	switch {
 	case cfg.WGTransport.Enabled && cfg.WGTransport.Iface != "":
 		return "WireGuard (" + cfg.WGTransport.Iface + ")"
+	case cfg.TunTransport.Enabled && cfg.TunTransport.Iface != "":
+		return "TUN (" + cfg.TunTransport.Iface + ")"
 	case cfg.Proxy0.Enabled:
 		proto := cfg.Proxy0.Protocol
 		if proto == "" {

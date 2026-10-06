@@ -241,7 +241,7 @@ interface the gate holds down on purpose.
   `description keenetic-xray-tun`; only an interface carrying that mark is
   ever read, changed or removed, so someone else's `OpkgTun0` (the
   AmneziaWG-go and tun2socks guides both build on it) is never touched.
-  It is created `security-level public`, MTU 1280 (`tun_transport.mtu`,
+  It is created `security-level public`, MTU 1500 (`tun_transport.mtu`,
   1280..1500), `ip tcp adjust-mss pmtu`, and deliberately **without**
   `ip global`, so it can never become a default-route candidate. The
   interface name maps to the kernel device by lowercasing
@@ -288,7 +288,7 @@ client and the same xray each time:
 |---|---|---|
 | straight out the WAN | 397 Mbit/s | 584 Mbit/s |
 | through xray's SOCKS inbound (the Proxy0 path) | 167 Mbit/s | 118 Mbit/s (one stream was refused by the file server, so 3 effective) |
-| through the TUN | 54.5 Mbit/s | 69.9 Mbit/s |
+| through the TUN (MTU 1500, the default) | 55.5 Mbit/s | 81.8 Mbit/s (3 effective streams, see the MTU run below) |
 
 The TUN path saturates the CPU: ~70-100% busy over both cores, xray at about
 one core (99-115%), another ~30% in softirq (NAT). xray's `tun` inbound
@@ -299,4 +299,4 @@ nothing), but not for bulk downloads: keep those on Proxy0. Other effects of a
 heavy transfer: the gate did **not** trip (its checks still got through at
 100% CPU); xray's resident memory grew from ~54 MB to ~110 MB and stays there
 (Go keeps it), and free memory fell to ~85 MB at the peak on a 497 MB router.
-`transport tun mtu <1280..1500|auto>` changes the MTU of the interface and of xray's inbound together (default 1280; a larger one means fewer packets for the userspace stack to chew through -- being measured). Not measured: IPv6, a faster router.
+`transport tun mtu <1280..1500|auto>` changes the MTU of the interface and of xray's inbound together. A larger one means fewer packets for the userspace stack that limits the throughput, and it pays: an A/B/A/B run on the same router, 1280 / 1500 / 1280 / 1500 with one stream and then 1280 / 1500 with four, gave 52.0 / 52.5 / 49.4 / 58.4 Mbit/s and 71.0 / 81.8 Mbit/s -- 1500 ahead in every pair, +9% with one stream and +15% with four (the device counters agree: +7%, +19%, +14%). The clients' segments grew from 1228 to 1448 bytes, so the change really reached xray's stack. Hence the default is 1500; an interface an older version made with `ip mtu 1280` is re-applied by the daemon's reconcile. The CPU load is the same, so what improves is the work per packet, not the ceiling -- the TUN stays ~3x slower than SOCKS. Not measured: IPv6, a faster router.

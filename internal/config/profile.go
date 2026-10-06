@@ -892,13 +892,16 @@ func (w *WGTransportConfig) EnsureKeys() (generated bool, err error) {
 
 // Defaults for TunTransportConfig. The address is a deliberately obscure
 // RFC1918 /32 (next to the WG transport's) unlikely to collide with a
-// hand-made one. MTU 1280 is what the first on-router runs used: xray
-// terminates TCP/UDP in userspace, so the figure never has to fit an
-// encapsulation, and the interface's own `adjust-mss pmtu` clamps what
-// clients negotiate to it.
+// hand-made one. MTU 1500, the LAN's own: xray terminates TCP/UDP in a
+// userspace stack, so the figure never has to fit an encapsulation, and the
+// interface's `adjust-mss pmtu` clamps what clients negotiate to it. Measured
+// on a 2-core router (A/B/A/B, client-side and device counters): 1500 moves
+// 10-15% more than the 1280 the first runs used, because the single-dispatcher
+// stack that limits the throughput has fewer packets to chew through; the
+// clients' segments grow from 1228 to 1448 bytes.
 const (
 	DefaultTunAddr = "172.31.254.2"
-	DefaultTunMTU  = 1280
+	DefaultTunMTU  = 1500
 )
 
 // TunAddr is the /32 the Keenetic side takes on the interface.

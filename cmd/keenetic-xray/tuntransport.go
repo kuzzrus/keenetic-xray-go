@@ -186,7 +186,7 @@ func checkTunTransport(cfg *config.Config, check func(bool, string)) {
 		check(false, "tun-transport is on but no OpkgTun interface is created -- run: keenetic-xray transport tun on")
 		return
 	}
-	ok, why, err := keenetic.TunTransportIntact(ctx, t.Iface)
+	ok, why, err := keenetic.TunTransportIntact(ctx, t.Iface, t.TunMTU())
 	switch {
 	case err != nil:
 		check(false, fmt.Sprintf("tun-transport %s: could not read it: %v", t.Iface, err))
@@ -271,7 +271,7 @@ func ensureTunTransport(ctx context.Context, cfg *config.Config, logf func(strin
 	if tunGate != nil && tunGate.Closed() {
 		check = keenetic.TunTransportPresent
 	}
-	ok, why, err := check(ctx, iface)
+	ok, why, err := check(ctx, iface, cfg.TunTransport.TunMTU())
 	if err != nil {
 		logf("tun-transport: could not read %s: %v", iface, err)
 		return

@@ -332,21 +332,40 @@ func humanBytes(n uint64) string {
 
 // TunTransportIntact is the cheap check the reconcile loop runs: our
 // interface is still in the running-config under our description, is not
-// administratively down, and its kernel device exists. Anything else needs
-// ApplyTunTransport. why says what was wrong. Address and MTU drift is
-// deliberately not checked here -- ndm does not change them by itself, and
-// a mismatch in how this firmware prints them must never turn into a flash
-// write on every tick.
-func TunTransportIntact(ctx context.Context, iface string) (ok bool, why string, err error) {
-	return tunIntact(ctx, iface, true)
+// administratively down, its kernel device exists, and -- if wantMTU > 0 --
+// the `ip mtu` configured on it is not a different number. Anything else
+// needs ApplyTunTransport. why says what was wrong.
+//
+// The MTU is compared only when the config prints one: a firmware that
+// leaves a default-valued `ip mtu` out of the running-config must not turn
+// "nothing to compare" into drift, and with it a flash write on every tick.
+// (Why the MTU is checked at all: the default changed from 1280 to 1500,
+// and an interface made by an older version keeps `ip mtu 1280` -- which also
+// sets the MSS NDM clamps forwarded SYNs to -- unless something re-applies it.)
+// Address drift is deliberately not checked: ndm does not change it by itself.
+func TunTransportIntact(ctx context.Context, iface string, wantMTU int) (ok bool, why string, err error) {
+	return tunIntact(ctx, iface, true, wantMTU)
 }
 
 // TunTransportPresent is TunTransportIntact without the administrative
 // state: the interface is ours, in the running-config, and has its device.
 // What the reconcile loop asks while the gate (internal/tungate) is holding
 // the interface down on purpose -- being down is then not drift.
-func TunTransportPresent(ctx context.Context, iface string) (ok bool, why string, err error) {
-	return tunIntact(ctx, iface, false)
+func TunTransportPresent(ctx context.Context, iface string, wantMTU int) (ok bool, why string, err error) {
+	return tunIntact(ctx, iface, false, wantMTU)
+}
+
+// blockMTU is the `ip mtu` of an interface block, 0 if it prints none.
+func blockMTU(body []string) int {
+	for _, l := range body {
+		if rest, ok := strings.CutPrefix(l, "ip mtu "); ok {
+			n, err := strconv.Atoi(strings.TrimSpace(rest))
+			if err == nil {
+				return n
+			}
+		}
+	}
+	return 0
 }
 
 // SetTunAdmin brings the interface administratively up or down -- the
@@ -371,7 +390,7 @@ func SetTunAdmin(ctx context.Context, iface string, up bool) error {
 	return nil
 }
 
-func tunIntact(ctx context.Context, iface string, adminMatters bool) (ok bool, why string, err error) {
+func tunIntact(ctx context.Context, iface string, adminMatters bool, wantMTU int) (ok bool, why string, err error) {
 	if !Available() {
 		return false, "", errNoNdmc
 	}
@@ -385,6 +404,8 @@ func tunIntact(ctx context.Context, iface string, adminMatters bool) (ok bool, w
 		return false, "the interface is not in the running config", nil
 	case blockDescription(body) != TunIfaceMarker:
 		return false, "the interface lost our description", nil
+	case wantMTU > 0 && blockMTU(body) != 0 && blockMTU(body) != wantMTU:
+		return false, fmt.Sprintf("its configured MTU is %d, the config says %d", blockMTU(body), wantMTU), nil
 	}
 	link, err := TunLinkState(ctx, iface)
 	if err != nil {

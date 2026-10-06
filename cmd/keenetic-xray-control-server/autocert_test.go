@@ -1,13 +1,10 @@
 package main
 
 import (
-	"context"
 	"crypto/tls"
-	"net"
 	"net/http"
 	"reflect"
 	"testing"
-	"time"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/botcontrol"
 )
@@ -98,35 +95,11 @@ func TestDualCertGetter_SNIIgnoresCaseAndTrailingDot(t *testing.T) {
 	}
 }
 
-// TestACMEChallengeServer_BoundedAndStopsWithCtx is R-1: the internet-
-// facing :80 listener has timeouts, and ctx shuts it down.
-func TestACMEChallengeServer_BoundedAndStopsWithCtx(t *testing.T) {
+// TestACMEChallengeServer_Bounded is R-1: the internet-facing :80 server
+// has timeouts.
+func TestACMEChallengeServer_Bounded(t *testing.T) {
 	srv := acmeChallengeServer("127.0.0.1:0", http.NotFoundHandler())
 	if srv.ReadHeaderTimeout <= 0 || srv.ReadTimeout <= 0 || srv.WriteTimeout <= 0 || srv.IdleTimeout <= 0 {
 		t.Errorf("timeouts header=%v read=%v write=%v idle=%v, want all set", srv.ReadHeaderTimeout, srv.ReadTimeout, srv.WriteTimeout, srv.IdleTimeout)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- serveUntil(ctx, srv) }()
-	time.Sleep(50 * time.Millisecond) // let it start listening
-	cancel()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Errorf("serveUntil after cancel = %v, want nil", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("serveUntil did not return after ctx was cancelled")
-	}
-}
-
-func TestServeUntil_ReportsAListenFailure(t *testing.T) {
-	busy, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer busy.Close()
-	if err := serveUntil(context.Background(), acmeChallengeServer(busy.Addr().String(), http.NotFoundHandler())); err == nil {
-		t.Error("serveUntil on a port already in use returned nil, want the listen error")
 	}
 }

@@ -436,6 +436,10 @@ func (h *RouterHandler) status(ctx context.Context) string {
 		}
 		b.WriteByte('\n')
 	}
+	if h.Config.TunTransport.Enabled {
+		b.WriteString(h.tunStatus(ctx))
+		b.WriteByte('\n')
+	}
 
 	if s := h.Config.Subscription; s != nil && s.URL != "" {
 		if s.LastFetchedAt.IsZero() {
@@ -454,6 +458,67 @@ func (h *RouterHandler) status(ctx context.Context) string {
 	}
 
 	return b.String()
+}
+
+// tunStatus is the TUN transport's card for `status`: the interface,
+// whether xray holds its device (the carrier -- what the router's `auto`
+// routes follow, so "no carrier" means listed traffic is going straight to
+// the ISP right now), whether the live xray carries the inbound, and the
+// device's own packet counters -- the only ground truth of traffic through
+// it, since the exit IP is the same for every transport.
+func (h *RouterHandler) tunStatus(ctx context.Context) string {
+	t := h.Config.TunTransport
+	if t.Iface == "" {
+		return "tun-транспорт: вкл, интерфейс ещё не создан ⚠️"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "tun-транспорт: вкл → %s", t.Iface)
+	if keenetic.Available() {
+		switch l, err := keenetic.TunLinkState(ctx, t.Iface); {
+		case err != nil:
+			b.WriteString(" (не прочитан ⚠️)")
+		case l.CarrierUp():
+			b.WriteString(" (xray держит устройство)")
+		default:
+			b.WriteString(" (несущей нет ⚠️ — трафик по спискам идёт напрямую)")
+		}
+	}
+	if h.Daemon != nil {
+		if h.Daemon.TunInboundLive() {
+			b.WriteString(" · tun-inbound в xray: есть")
+		} else {
+			b.WriteString(" · tun-inbound в xray: нет ⚠️")
+		}
+	}
+	if c, ok := keenetic.ReadTunCounts(t.DeviceName()); ok {
+		b.WriteString("\n  трафик устройства: " + c.Summary())
+	}
+	return b.String()
+}
+
+// doctorTun is doctor's block for the TUN transport.
+func (h *RouterHandler) doctorTun(ctx context.Context, check func(bool, string)) {
+	t := h.Config.TunTransport
+	if t.Iface == "" {
+		check(false, "TUN-транспорт включён, но интерфейс не создан — transport tun on")
+		return
+	}
+	ok, why, err := keenetic.TunTransportIntact(ctx, t.Iface)
+	switch {
+	case err != nil:
+		check(false, "TUN-транспорт "+t.Iface+": не прочитан: "+err.Error())
+		return
+	case !ok:
+		check(false, "TUN-транспорт "+t.Iface+": "+why+" — демон пересоберёт интерфейс в течение 2 минут")
+		return
+	}
+	check(true, "TUN-транспорт "+t.Iface+" на месте")
+	if l, err := keenetic.TunLinkState(ctx, t.Iface); err == nil {
+		check(l.CarrierUp(), "xray держит устройство "+t.DeviceName()+" (иначе трафик по спискам идёт напрямую)")
+	}
+	if h.Daemon != nil {
+		check(h.Daemon.TunInboundLive(), "tun-inbound в живом xray (если нет: ждёт устройство, либо демон снял его после падений xray)")
+	}
 }
 
 // doctor mirrors `keenetic-xray doctor` as chat text: pass/fail lines
@@ -509,6 +574,9 @@ func (h *RouterHandler) doctor(ctx context.Context) string {
 
 	if w := h.Config.WGTransport; w.Enabled && w.Iface != "" && keenetic.Available() {
 		check(keenetic.WGInterfaceUp(ctx, w.Iface), "WG-транспорт "+w.Iface+" поднят")
+	}
+	if h.Config.TunTransport.Enabled && keenetic.Available() {
+		h.doctorTun(ctx, check)
 	}
 
 	if h.OptPath != "" {

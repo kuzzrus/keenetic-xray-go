@@ -130,6 +130,39 @@ func checkXrayKnowsTun(ctx context.Context, mtu int) error {
 	return nil
 }
 
+// checkTunTransport is doctor's block for the TUN transport: silent while
+// it's off or off a router. Carrier is the one thing the CLI can read of the
+// daemon's xray -- it is up exactly while xray holds the device, i.e. while
+// the running xray carries the tun inbound.
+func checkTunTransport(cfg *config.Config, check func(bool, string)) {
+	t := cfg.TunTransport
+	if !t.Enabled || !keenetic.Available() {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if t.Iface == "" {
+		check(false, "tun-transport is on but no OpkgTun interface is created -- run: keenetic-xray transport tun on")
+		return
+	}
+	ok, why, err := keenetic.TunTransportIntact(ctx, t.Iface)
+	switch {
+	case err != nil:
+		check(false, fmt.Sprintf("tun-transport %s: could not read it: %v", t.Iface, err))
+		return
+	case !ok:
+		check(false, fmt.Sprintf("tun-transport %s: %s -- the daemon rebuilds it within 2 minutes, or: keenetic-xray transport tun on", t.Iface, why))
+		return
+	}
+	check(true, fmt.Sprintf("tun-transport %s in place (device %s)", t.Iface, t.DeviceName()))
+	if l, err := keenetic.TunLinkState(ctx, t.Iface); err == nil {
+		check(l.CarrierUp(), fmt.Sprintf("xray holds %s -- without it listed traffic goes straight to the ISP (by design; the daemon logs why the tun inbound is missing)", t.DeviceName()))
+	}
+	if c, ok := keenetic.ReadTunCounts(t.DeviceName()); ok {
+		fmt.Printf("[info]  %s: %s\n", t.DeviceName(), c.Summary())
+	}
+}
+
 // tunTransportOff takes the interface down in the order that never pulls
 // the device out from under xray: the config first (so the daemon restarts
 // xray without the inbound), then a wait for xray to let go, then the

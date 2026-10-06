@@ -86,12 +86,12 @@ func TestTunRouteLists(t *testing.T) {
 func TestCmdTransport_TunUsage(t *testing.T) {
 	t.Setenv("KEENETIC_XRAY_CONFIG", filepath.Join(t.TempDir(), "config.json"))
 	err := run([]string{"transport", "tun", "sideways"})
-	if err == nil || !strings.Contains(err.Error(), "transport tun {show|on|off}") {
+	if err == nil || !strings.Contains(err.Error(), "transport tun {show|on|off|mtu") {
 		t.Errorf("err = %v, want the usage line", err)
 	}
 	// An unknown transport now lists tun among the valid ones.
 	err = run([]string{"transport", "nonsense"})
-	if err == nil || !strings.Contains(err.Error(), "tun {show|on|off}") {
+	if err == nil || !strings.Contains(err.Error(), "tun {show|on|off|mtu}") {
 		t.Errorf("transport usage does not mention tun: %v", err)
 	}
 }
@@ -143,6 +143,90 @@ func TestCmdTransport_TunOff(t *testing.T) {
 	}
 	if len(got.Routing.Lists) != 1 || got.Routing.Lists[0].Interface != "OpkgTun0" {
 		t.Errorf("off rewrote the route lists: %+v", got.Routing.Lists)
+	}
+}
+
+func TestCmdTransport_TunMTU(t *testing.T) {
+	cfgFile := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("KEENETIC_XRAY_CONFIG", cfgFile)
+	saved := func() config.TunTransportConfig {
+		t.Helper()
+		cfg, err := config.Load(cfgFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cfg.TunTransport
+	}
+
+	// Showing says the default and the allowed range, and changes nothing.
+	out := captureStdout(t, func() {
+		if err := run([]string{"transport", "tun", "mtu"}); err != nil {
+			t.Errorf("transport tun mtu: %v", err)
+		}
+	})
+	if !strings.Contains(out, "1280 (по умолчанию)") || !strings.Contains(out, "1280..1500") {
+		t.Errorf("show output:\n%s", out)
+	}
+
+	// Setting saves it (off a router, or with the transport off, that is all
+	// there is to do) and a re-run shows it without the default note.
+	out = captureStdout(t, func() {
+		if err := run([]string{"transport", "tun", "mtu", "1500"}); err != nil {
+			t.Errorf("transport tun mtu 1500: %v", err)
+		}
+	})
+	if got := saved().MTU; got != 1500 {
+		t.Errorf("saved MTU = %d, want 1500", got)
+	}
+	if !strings.Contains(out, "сохранено") {
+		t.Errorf("a set with nothing live to apply did not say it was only saved:\n%s", out)
+	}
+	out = captureStdout(t, func() { _ = run([]string{"transport", "tun", "mtu"}) })
+	if !strings.Contains(out, "1500") || strings.Contains(out, "по умолчанию") {
+		t.Errorf("show after set:\n%s", out)
+	}
+
+	// It touches nothing else: the transport stays as configured.
+	cfg := config.Default()
+	cfg.TunTransport = config.TunTransportConfig{Enabled: true, Iface: "OpkgTun0", MTU: 1400}
+	if err := cfg.Save(cfgFile); err != nil {
+		t.Fatal(err)
+	}
+	// Enabled, but this is not a router: still just saved.
+	if err := run([]string{"transport", "tun", "mtu", "1450"}); err != nil {
+		t.Fatalf("transport tun mtu 1450: %v", err)
+	}
+	if got := saved(); got.MTU != 1450 || !got.Enabled || got.Iface != "OpkgTun0" {
+		t.Errorf("after set on an enabled transport: %+v", got)
+	}
+
+	// auto = back to the default.
+	for _, word := range []string{"auto", "AUTO", "default"} {
+		if err := run([]string{"transport", "tun", "mtu", "1500"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := run([]string{"transport", "tun", "mtu", word}); err != nil {
+			t.Fatalf("mtu %s: %v", word, err)
+		}
+		if got := saved().MTU; got != 0 {
+			t.Errorf("mtu %s left MTU = %d, want 0 (default)", word, got)
+		}
+	}
+
+	// Anything outside 1280..1500 or not a number is refused and changes nothing.
+	if err := run([]string{"transport", "tun", "mtu", "1450"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"1279", "1501", "9000", "0", "-1", "abc", "1500.5", ""} {
+		if err := run([]string{"transport", "tun", "mtu", bad}); err == nil {
+			t.Errorf("mtu %q was accepted", bad)
+		}
+		if got := saved().MTU; got != 1450 {
+			t.Fatalf("a refused mtu %q changed the saved value to %d", bad, got)
+		}
+	}
+	if err := run([]string{"transport", "tun", "mtu", "1300", "extra"}); err == nil {
+		t.Error("mtu with an extra argument was accepted")
 	}
 }
 

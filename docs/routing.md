@@ -299,4 +299,4 @@ nothing), but not for bulk downloads: keep those on Proxy0. Other effects of a
 heavy transfer: the gate did **not** trip (its checks still got through at
 100% CPU); xray's resident memory grew from ~54 MB to ~110 MB and stays there
 (Go keeps it), and free memory fell to ~85 MB at the peak on a 497 MB router.
-Not measured: IPv6, a faster router, a larger MTU (the default is 1280).
+`transport tun mtu <1280..1500|auto>` changes the MTU of the interface and of xray's inbound together (default 1280; a larger one means fewer packets for the userspace stack to chew through -- being measured). Not measured: IPv6, a faster router.

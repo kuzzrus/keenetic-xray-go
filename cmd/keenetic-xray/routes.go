@@ -55,7 +55,7 @@ func cmdRoutes(args []string) error {
 func routesUsage() error {
 	return fmt.Errorf("usage: keenetic-xray routes {list | show [name] | manual | new <name> [entries…] | " +
 		"add <name> <entries…> | del <name> <entries…> | rm <name> | enable <name> | disable <name> | " +
-		"set <name> [--iface=Proxy0|Wireguard4] [--exclusive] [--no-exclusive] | " +
+		"set <name> [--iface=Proxy0|Wireguard4|OpkgTun0] [--exclusive] [--no-exclusive] | " +
 		"preset {list | show <name> | add <name> [--ip] [--iface=…] [--exclusive] | sync [<name>|--all] | update} | apply}")
 }
 

@@ -798,6 +798,7 @@ const helpText = `/menu — меню с кнопками (проще всего)
 /proxy0 <router> interface Proxy0|Proxy1|… — какой Proxy-интерфейс Keenetic вести
 /proxy0 <router> mss auto|off|1200..1452 — клампинг MSS на пути Proxy0 (лечит залипание видео)
 /proxy0 <router> wg on|off|show — WG-транспорт: интерфейс WireGuard на роутере в локальный xray
+/proxy0 <router> tun on|off|show — TUN-транспорт (экспериментальный): интерфейс OpkgTun на роутере, к которому xray подключается tun-инбаундом
 /restart <router> — перезапустить демон
 /ensure_core <router> — доустановить ядро xray, если его нет
 /update_core <router> [vX.Y.Z|stable] — обновить/переключить ядро xray (перезапустит xray)
@@ -807,7 +808,7 @@ const helpText = `/menu — меню с кнопками (проще всего)
 /watchdog <router> show|enable|disable|log — cron, что перезапускает демон, если он упал
 /logs <router> [N] — последние N строк лога демона (по умолч. 200)
 /ports <router> <socks-port> <http-port> — сменить локальные порты (применяется на лету)
-/routes <router> list|show|new <имя> <домены…>|add|del|rm|on|off|iface <имя> <ProxyN|WireguardN> — списки доменов в туннель (KeeneticOS 5.0+)
+/routes <router> list|show|new <имя> <домены…>|add|del|rm|on|off|iface <имя> <ProxyN|WireguardN|OpkgTunN> — списки доменов в туннель (KeeneticOS 5.0+)
 /routes <router> preset add <имя> [ip]|sync [<имя>|all] — готовые списки по сервисам (или кнопка 📦 Готовые списки)
 /dns <router> show|test|preset <id> [dot|doh|both]|off — защищённый DNS (DoT/DoH) для роутерного dns-proxy (или кнопка 🧭 DNS)`
 
@@ -944,7 +945,7 @@ func (b *TelegramBot) dispatchFailover(ctx context.Context, args []string) strin
 // dispatchRoutes routes /routes <router> {list|show [name]|new <name> <entries…>|
 // add <name> <entries…>|del <name> <entries…>|rm <name>|on <name>|off <name>}.
 func (b *TelegramBot) dispatchRoutes(ctx context.Context, args []string) string {
-	usage := "формат: /routes <роутер> {list | show [имя] | new <имя> <записи…> | add <имя> <записи…> | del <имя> <записи…> | rm <имя> | on <имя> | off <имя> | iface <имя> <ProxyN|WireguardN> | preset add <имя> [ip] | preset sync [<имя>|all]}"
+	usage := "формат: /routes <роутер> {list | show [имя] | new <имя> <записи…> | add <имя> <записи…> | del <имя> <записи…> | rm <имя> | on <имя> | off <имя> | iface <имя> <ProxyN|WireguardN|OpkgTunN> | preset add <имя> [ip] | preset sync [<имя>|all]}"
 	if len(args) < 2 {
 		if len(args) == 1 {
 			return b.runRouterCommand(ctx, args[:1], ActionRoutesList, nil)
@@ -1030,7 +1031,7 @@ func (b *TelegramBot) dispatchWatchdog(ctx context.Context, args []string) strin
 // dispatchProxy0 routes /proxy0 <router> [show|on|off|protocol <socks5|http>|interface <ProxyN>|mss <auto|off|N>];
 // default is show.
 func (b *TelegramBot) dispatchProxy0(ctx context.Context, args []string) string {
-	usage := "формат: /proxy0 <роутер> [show|on|off|protocol socks5|http|interface Proxy0|mss auto|off|1200..1452|wg on|off|show]"
+	usage := "формат: /proxy0 <роутер> [show|on|off|protocol socks5|http|interface Proxy0|mss auto|off|1200..1452|wg on|off|show|tun on|off|show]"
 	if len(args) < 1 {
 		return usage
 	}
@@ -1065,6 +1066,17 @@ func (b *TelegramBot) dispatchProxy0(ctx context.Context, args []string) string 
 			return b.runRouterCommand(ctx, args[:1], ActionWGTransportOn, nil)
 		case args[2] == "off":
 			return b.runRouterCommand(ctx, args[:1], ActionWGTransportOff, nil)
+		default:
+			return usage
+		}
+	case "tun":
+		switch {
+		case len(args) == 2 || args[2] == "show":
+			return b.runRouterCommand(ctx, args[:1], ActionTunTransportShow, nil)
+		case args[2] == "on":
+			return b.runRouterCommand(ctx, args[:1], ActionTunTransportOn, nil)
+		case args[2] == "off":
+			return b.runRouterCommand(ctx, args[:1], ActionTunTransportOff, nil)
 		default:
 			return usage
 		}

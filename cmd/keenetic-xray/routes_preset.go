@@ -93,7 +93,7 @@ func presetShow(cfg *config.Config, name string) error {
 
 func presetAdd(cfg *config.Config, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: routes preset add <name> [--ip] [--iface=Proxy0|Wireguard4] [--exclusive]")
+		return fmt.Errorf("usage: routes preset add <name> [--ip] [--iface=Proxy0|Wireguard4|OpkgTun0] [--exclusive]")
 	}
 	name := args[0]
 	var withIP, exclusive bool

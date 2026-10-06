@@ -98,33 +98,11 @@ func tunTransportApply(cfg *config.Config) error {
 	return nil
 }
 
-// tunProbeDevice is the device name the support check puts in its config:
-// one that can be no ndm interface and no operator's, so the check can never
-// reach a real device. (xray opens the device in Handler.Start, which
-// `-test` never reaches -- this is for a future core that does it earlier.)
-const tunProbeDevice = "kxtunprobe"
-
-// checkXrayKnowsTun asks the installed xray-core to build a config holding
-// only a `tun` inbound (`xray run -test`: nothing is started, no device is
-// opened).
+// checkXrayKnowsTun asks the installed xray-core whether it knows the `tun`
+// inbound (xrayctl.CheckTunSupport: `xray run -test`, nothing started, no
+// device opened).
 func checkXrayKnowsTun(ctx context.Context, mtu int) error {
-	data, err := config.TunSupportProbeConfig(config.TunInboundOptions{Name: tunProbeDevice, MTU: mtu})
-	if err != nil {
-		return err
-	}
-	f, err := os.CreateTemp("", "keenetic-xray-tun-probe-*.json")
-	if err != nil {
-		return fmt.Errorf("временный файл для проверки xray: %w", err)
-	}
-	defer os.Remove(f.Name())
-	_, werr := f.Write(data)
-	if cerr := f.Close(); werr == nil {
-		werr = cerr
-	}
-	if werr != nil {
-		return fmt.Errorf("временный файл для проверки xray: %w", werr)
-	}
-	if err := xrayctl.ValidateConfig(ctx, xrayBinaryPath(), f.Name(), nil); err != nil {
+	if err := xrayctl.CheckTunSupport(ctx, xrayBinaryPath(), mtu); err != nil {
 		return fmt.Errorf("установленный xray-core не принимает tun-inbound (нужна свежая сборка, v26.x): %w", err)
 	}
 	return nil
@@ -187,7 +165,7 @@ func tunTransportOff(cfg *config.Config) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
 		if iface != "" {
-			waitTunCarrierGone(ctx, iface, 20*time.Second)
+			keenetic.WaitTunCarrierGone(ctx, iface, 20*time.Second)
 		}
 		if err := keenetic.ClearTunTransport(ctx); err != nil {
 			fmt.Printf("предупреждение: не удалось убрать интерфейс: %v\n", err)
@@ -195,25 +173,6 @@ func tunTransportOff(cfg *config.Config) error {
 	}
 	fmt.Println("TUN-транспорт выключен (интерфейс снят; xray перестраивается без tun-inbound)")
 	return nil
-}
-
-// waitTunCarrierGone waits until nothing holds the TUN device any more --
-// xray was restarted without the inbound, or is not running at all -- up
-// to limit. Removing the interface anyway after that is the right call:
-// the operator asked for it off.
-func waitTunCarrierGone(ctx context.Context, iface string, limit time.Duration) {
-	deadline := time.Now().Add(limit)
-	for time.Now().Before(deadline) {
-		l, err := keenetic.TunLinkState(ctx, iface)
-		if err != nil || !l.CarrierUp() {
-			return
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(time.Second):
-		}
-	}
 }
 
 // tunRouteLists names the route lists that target iface.

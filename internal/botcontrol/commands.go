@@ -23,6 +23,7 @@ import (
 	"github.com/kuzzrus/keenetic-xray-go/internal/subscription"
 	"github.com/kuzzrus/keenetic-xray-go/internal/version"
 	"github.com/kuzzrus/keenetic-xray-go/internal/xraycore"
+	"github.com/kuzzrus/keenetic-xray-go/internal/xrayctl"
 )
 
 // RouterHandler implements Handler against a live failover.Daemon (both
@@ -255,6 +256,12 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 		return h.wgTransportOn(ctx)
 	case ActionWGTransportOff:
 		return h.wgTransportOff(ctx)
+	case ActionTunTransportShow:
+		return h.tunTransportShow(ctx)
+	case ActionTunTransportOn:
+		return h.tunTransportOn(ctx)
+	case ActionTunTransportOff:
+		return h.tunTransportOff(ctx)
 	case ActionAdaptiveRouteShow:
 		return h.adaptiveRouteShow(ctx)
 	case ActionAdaptiveRouteOn:
@@ -1069,6 +1076,99 @@ func (h *RouterHandler) wgTransportOff(ctx context.Context) (string, error) {
 	}
 	h.rebindXray(ctx)
 	return "WG-транспорт выключен (интерфейс снят; xray перестроен без wg-inbound)", nil
+}
+
+// tunTransportShow reports the OpkgTun transport: config + the live
+// interface and its device counters.
+func (h *RouterHandler) tunTransportShow(ctx context.Context) (string, error) {
+	t := h.Config.TunTransport
+	var b strings.Builder
+	if !t.Enabled {
+		b.WriteString("TUN-транспорт: выкл")
+	} else {
+		iface := t.Iface
+		if iface == "" {
+			iface = "интерфейс не выбран"
+		}
+		fmt.Fprintf(&b, "TUN-транспорт: вкл — %s, MTU %d", iface, t.TunMTU())
+	}
+	if keenetic.Available() {
+		if live, err := keenetic.ShowTunTransport(ctx, t.Iface); err == nil && live != "" {
+			b.WriteString("\n" + live)
+		}
+	}
+	if t.Enabled && h.Daemon != nil {
+		if h.Daemon.TunInboundLive() {
+			b.WriteString("\ntun-inbound в живом xray: есть")
+		} else {
+			b.WriteString("\ntun-inbound в живом xray: нет ⚠️ (ждёт устройство, либо демон снял его после падений xray)")
+		}
+	}
+	return b.String(), nil
+}
+
+// tunTransportOn stands up the OpkgTun interface and rebinds xray so the
+// `tun` inbound attaches to its device. The installed core is asked first
+// whether it knows the inbound at all -- before the router is touched.
+func (h *RouterHandler) tunTransportOn(ctx context.Context) (string, error) {
+	if !keenetic.Available() {
+		return "", fmt.Errorf("ndmc не найден — работает только на роутере Keenetic")
+	}
+	if h.XrayBinary != "" {
+		if err := xrayctl.CheckTunSupport(ctx, h.XrayBinary, h.Config.TunTransport.TunMTU()); err != nil {
+			return "", fmt.Errorf("установленный xray-core не принимает tun-inbound (нужна свежая сборка, v26.x): %w", err)
+		}
+	}
+	if h.Config.TunTransport.Iface == "" {
+		iface, err := keenetic.FreeOpkgTunIface(ctx)
+		if err != nil {
+			return "", err
+		}
+		h.Config.TunTransport.Iface = iface
+	}
+	t := h.Config.TunTransport
+	spec := keenetic.TunTransportSpec{Iface: t.Iface, Address: t.TunAddr(), MTU: t.TunMTU()}
+	if err := keenetic.ApplyTunTransport(ctx, spec); err != nil {
+		return "", err
+	}
+	h.Config.TunTransport.Enabled = true
+	if err := h.Config.Save(h.ConfigPath); err != nil {
+		return "", err
+	}
+	h.rebindXray(ctx)
+	return fmt.Sprintf("TUN-транспорт включён: %s (MTU %d).\n"+
+		"Заворачивай трафик: 📍 Маршруты → список с интерфейсом %s (или политикой Keenetic).\n"+
+		"Пока xray не работает, маршруты в этот интерфейс сами снимаются и трафик идёт напрямую.",
+		spec.Iface, spec.MTU, spec.Iface), nil
+}
+
+// tunTransportOff takes the inbound out of xray first, waits for xray to
+// let go of the device, and only then removes the interface -- never the
+// device out from under a process that holds it. The pinned interface name
+// is released so the next `on` picks the lowest free one again.
+func (h *RouterHandler) tunTransportOff(ctx context.Context) (string, error) {
+	iface := h.Config.TunTransport.Iface
+	h.Config.TunTransport.Enabled = false
+	h.Config.TunTransport.Iface = ""
+	if err := h.Config.Save(h.ConfigPath); err != nil {
+		return "", err
+	}
+	h.rebindXray(ctx)
+	var note string
+	if keenetic.Available() {
+		if iface != "" {
+			keenetic.WaitTunCarrierGone(ctx, iface, 20*time.Second)
+		}
+		if err := keenetic.ClearTunTransport(ctx); err != nil {
+			return "", err
+		}
+	}
+	for _, l := range h.Config.Routing.Lists {
+		if iface != "" && l.Interface == iface {
+			note += "\n⚠️ список «" + l.Name + "» смотрит на " + iface + " — перенацель его (📍 Маршруты)"
+		}
+	}
+	return "TUN-транспорт выключен (интерфейс снят; xray перестроен без tun-inbound)" + note, nil
 }
 
 // daemonRestart spawns a detached "restart after a short delay" so this

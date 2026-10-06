@@ -67,7 +67,7 @@ const (
 	ActionRoutesDel        = "routes_del"      // args[0]=name, args[1]=entries to remove
 	ActionRoutesRemoveList = "routes_rmlist"   // args[0]=name
 	ActionRoutesToggle     = "routes_toggle"   // args[0]=name, args[1]="on"|"off"
-	ActionRoutesSetIface   = "routes_setiface" // args[0]=name, args[1]=interface (ProxyN | WireguardN)
+	ActionRoutesSetIface   = "routes_setiface" // args[0]=name, args[1]=interface (ProxyN | WireguardN | OpkgTunN)
 	ActionRoutesNames      = "routes_names"    // no args -> one "name\tcount\tstate\tiface" line per list (machine-readable, for the bot's list-as-buttons screen)
 	ActionRoutesManual     = "routes_manual"   // no args -> read-only list of the operator's own (non-keenetic-xray) domain route lists on the router
 	// Built-in curated preset lists (internal/presets), refreshed daily in
@@ -81,6 +81,11 @@ const (
 	ActionWGTransportShow = "wg_show" // no args
 	ActionWGTransportOn   = "wg_on"   // no args -- creates/reconciles the interface, generates keys
 	ActionWGTransportOff  = "wg_off"  // no args -- removes the interface
+	// In-router OpkgTun transport (LAN -> OpkgTunN -> xray tun inbound ->
+	// tunnel). See internal/keenetic.ApplyTunTransport.
+	ActionTunTransportShow = "tun_show" // no args
+	ActionTunTransportOn   = "tun_on"   // no args -- checks the xray core, creates/reconciles the interface
+	ActionTunTransportOff  = "tun_off"  // no args -- takes xray's inbound out, then removes the interface
 	// Adaptive routing (Susanin Phase 2): a conntrack classifier feeding
 	// an iptables REDIRECT rule into xray's dokodemo-door inbound, riding
 	// whatever profile is already the live egress. See

@@ -165,6 +165,7 @@ func portsTransportScreenKB(id string) inlineKeyboard {
 		{{Text: "📶 MSS: Авто", CallbackData: "ptmss:" + id + ":auto"}, {Text: "1400", CallbackData: "ptmss:" + id + ":1400"}},
 		{{Text: "1280", CallbackData: "ptmss:" + id + ":1280"}, {Text: "MSS: Выкл", CallbackData: "ptmss:" + id + ":off"}},
 		{{Text: "🔌 WG-транспорт", CallbackData: "wgt:" + id}, {Text: "🧭 DNS", CallbackData: "dnsm:" + id}},
+		{{Text: "🕳 TUN-транспорт (эксперим.)", CallbackData: "tunt:" + id}},
 		{{Text: "🎯 Адаптивная маршрутизация", CallbackData: "adrt:" + id}},
 		{{Text: "📊 Показать", CallbackData: "act:proxy0_show:" + id}, {Text: "⬅️ Назад", CallbackData: "router:" + id}},
 	}}
@@ -187,6 +188,30 @@ func wgTransportScreenKB(id string) inlineKeyboard {
 	return inlineKeyboard{InlineKeyboard: [][]inlineButton{
 		{{Text: "✅ Включить", CallbackData: "act:wg_on:" + id}, {Text: "⛔ Выключить", CallbackData: "act:wg_off:" + id}},
 		{{Text: "📊 Показать", CallbackData: "act:wg_show:" + id}, {Text: "⬅️ Назад", CallbackData: "ptm:" + id}},
+	}}
+}
+
+func tunTransportScreenText(id string) string {
+	return "🕳 TUN-транспорт " + id + " (экспериментальный)\n\n" +
+		"Ставит на роутере интерфейс OpkgTunN, к которому xray подключается своим tun-инбаундом: " +
+		"LAN → OpkgTunN → xray → туннель. Без SOCKS-хопа, без инкапсуляции и без отдельного процесса. " +
+		"Работает вместе с Proxy0 и WG — что гнать сюда, выбираешь в 📍 Маршруты (интерфейс списка, " +
+		"кнопка OpkgTun0) или политикой Keenetic.\n\n" +
+		"Главное отличие: он умеет «выключаться». У интерфейса есть несущая, только пока xray держит " +
+		"устройство, и Keenetic сам снимает маршруты через него примерно за секунду после остановки xray " +
+		"(возвращает через 2–3 с после старта) — трафик по спискам идёт напрямую к провайдеру, а не в " +
+		"чёрную дыру. Ping-check для этого не нужен.\n\n" +
+		"Интерфейс берётся первый свободный (OpkgTun0…), метка `keenetic-xray-tun` — чужие OpkgTun " +
+		"(AmneziaWG-go и т. п.) не трогаются. Если xray не может поднять инбаунд и падает, демон после " +
+		"трёх падений снимает его сам и пишет сюда.\n\n" +
+		"⚠️ Не гони через него адрес самого VLESS-сервера — xray ходит по тому же маршруту, что и все.\n" +
+		"Состояние, счётчики пакетов и несущая — 📊 Показать."
+}
+
+func tunTransportScreenKB(id string) inlineKeyboard {
+	return inlineKeyboard{InlineKeyboard: [][]inlineButton{
+		{{Text: "✅ Включить", CallbackData: "act:tun_on:" + id}, {Text: "⛔ Выключить", CallbackData: "act:tun_off:" + id}},
+		{{Text: "📊 Показать", CallbackData: "act:tun_show:" + id}, {Text: "⬅️ Назад", CallbackData: "ptm:" + id}},
 	}}
 }
 
@@ -323,6 +348,12 @@ func callbackAction(name string) string {
 		return ActionWGTransportOn
 	case "wg_off":
 		return ActionWGTransportOff
+	case "tun_show":
+		return ActionTunTransportShow
+	case "tun_on":
+		return ActionTunTransportOn
+	case "tun_off":
+		return ActionTunTransportOff
 	case "adrt_show":
 		return ActionAdaptiveRouteShow
 	case "adrt_on":
@@ -467,6 +498,13 @@ func (b *TelegramBot) handleCallback(ctx context.Context, cb tgCallbackQuery) {
 			return
 		}
 		b.editCB(ctx, cb, wgTransportScreenText(id), wgTransportScreenKB(id))
+	case strings.HasPrefix(data, "tunt:"):
+		id := strings.TrimPrefix(data, "tunt:")
+		if !b.Store.HasRouter(id) {
+			b.editCB(ctx, cb, "нет такого роутера: "+id, b.routersListKB())
+			return
+		}
+		b.editCB(ctx, cb, tunTransportScreenText(id), tunTransportScreenKB(id))
 	case strings.HasPrefix(data, "adrt:"):
 		id := strings.TrimPrefix(data, "adrt:")
 		if !b.Store.HasRouter(id) {

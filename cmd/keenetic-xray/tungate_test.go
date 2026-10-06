@@ -48,7 +48,13 @@ func TestGateProbeOptions(t *testing.T) {
 		t.Fatalf("defaults: %+v, %v", opts, ok)
 	}
 
+	// The defaults carry fallback URLs of their own, so an empty primary
+	// alone is still a probe.
 	cfg.Failover.HealthCheckURL = ""
+	if opts, ok := gateProbeOptions(cfg); !ok || len(opts.FallbackURLs) == 0 {
+		t.Errorf("an empty primary URL with the default fallbacks gave %+v, %v", opts, ok)
+	}
+	cfg.Failover.HealthCheckFallbackURLs = nil
 	if _, ok := gateProbeOptions(cfg); ok {
 		t.Error("an empty URL with no fallbacks still produced a probe")
 	}

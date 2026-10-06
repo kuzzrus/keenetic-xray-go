@@ -58,7 +58,21 @@ func waitUntil(t *testing.T, timeout time.Duration, cond func() bool) {
 // entirely, and the concurrency property under test doesn't depend on
 // probes succeeding.
 func TestMain(m *testing.M) {
-	if os.Getenv("FAILOVER_TEST_HELPER") == "1" {
+	switch os.Getenv("FAILOVER_TEST_HELPER") {
+	case "1":
+		time.Sleep(time.Hour)
+		return
+	case "crash-on-tun":
+		// An xray-core that cannot bring up the TUN inbound: exits at
+		// once if its config (`run -c <path>`) has one, runs like any
+		// other fake otherwise.
+		for i, a := range os.Args {
+			if a == "-c" && i+1 < len(os.Args) {
+				if data, err := os.ReadFile(os.Args[i+1]); err == nil && strings.Contains(string(data), `"protocol": "tun"`) {
+					os.Exit(1)
+				}
+			}
+		}
 		time.Sleep(time.Hour)
 		return
 	}

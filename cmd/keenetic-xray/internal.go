@@ -219,6 +219,11 @@ func cmdPrermCleanup(args []string) error {
 		if err := keenetic.ClearWGTransport(ctx); err != nil {
 			fmt.Println("warning: could not remove the WG-transport interface:", err)
 		}
+		// Same for the OpkgTun transport interface (keenetic-xray-tun marker;
+		// an operator's own OpkgTun interface is untouched).
+		if err := keenetic.ClearTunTransport(ctx); err != nil {
+			fmt.Println("warning: could not remove the TUN-transport interface:", err)
+		}
 		// Drop the secure-DNS upstreams we manage (catalogue IPs/URLs only;
 		// a hand-added upstream is untouched).
 		if _, err := keenetic.ClearDNS(ctx, dnsupstream.AllTLSIPs(), dnsupstream.AllDoHURLs()); err != nil {

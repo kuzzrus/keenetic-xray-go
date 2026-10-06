@@ -65,6 +65,13 @@ func FreeWireguardIface(ctx context.Context) (string, error) {
 // existing `interface WireguardN` names plus the name of the one bearing
 // WGIfaceMarker ("" if none).
 func scanWireguardIfaces(ctx context.Context) (used map[string]bool, ours string, err error) {
+	return scanIfaces(ctx, "Wireguard", WGIfaceMarker)
+}
+
+// scanIfaces is scanWireguardIfaces for any interface family: the set of
+// `interface <prefix>N` names in the running-config plus the name of the
+// one whose description is marker ("" if none).
+func scanIfaces(ctx context.Context, prefix, marker string) (used map[string]bool, ours string, err error) {
 	out, err := ndmcRun(ctx, "show running-config")
 	if err != nil {
 		return nil, "", fmt.Errorf("show running-config: %w", err)
@@ -79,13 +86,13 @@ func scanWireguardIfaces(ctx context.Context) (used map[string]bool, ours string
 		f := strings.Fields(body)
 		if body == line { // column-0: block boundary
 			cur = ""
-			if len(f) == 2 && f[0] == "interface" && strings.HasPrefix(f[1], "Wireguard") {
+			if len(f) == 2 && f[0] == "interface" && strings.HasPrefix(f[1], prefix) {
 				used[f[1]] = true
 				cur = f[1]
 			}
 			continue
 		}
-		if cur != "" && len(f) >= 2 && f[0] == "description" && unquote(strings.TrimSpace(strings.TrimPrefix(body, "description "))) == WGIfaceMarker {
+		if cur != "" && len(f) >= 2 && f[0] == "description" && unquote(strings.TrimSpace(strings.TrimPrefix(body, "description "))) == marker {
 			ours = cur
 		}
 	}

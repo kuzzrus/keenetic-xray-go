@@ -43,6 +43,12 @@ type XrayConfigOptions struct {
 	// recovery-pretest instance.
 	WG *WGInboundOptions
 
+	// Tun, when set, adds a `tun` inbound that attaches to a kernel device
+	// ndm already created (a Keenetic OpkgTun interface), so selected LAN
+	// traffic reaches xray as raw IP packets with no SOCKS hop and no
+	// extra process. Never set for the isolated recovery-pretest instance.
+	Tun *TunInboundOptions
+
 	// Transparent, when set, adds a `dokodemo-door` inbound for
 	// REDIRECT-based transparent proxying -- adaptive per-IP routing
 	// (Susanin Phase 2, see docs/HANDOFF-susanin.md) points an iptables
@@ -85,6 +91,16 @@ type WGInboundOptions struct {
 	PeerPublicKey  string   // the Keenetic interface's public key, base64
 	PeerPSK        string   // shared pre-shared key, base64; "" -> omit
 	PeerAllowedIPs []string // nil -> ["0.0.0.0/0"]
+}
+
+// TunInboundOptions describes the xray `tun` inbound for the in-router
+// OpkgTun transport. xray only attaches to the device by name: it assigns
+// no address and installs no routes (no gateway / autoSystemRoutingTable),
+// because Keenetic owns both -- the address on the interface, the routes
+// through the routing table, withdrawn by ndm itself while xray is down.
+type TunInboundOptions struct {
+	Name string // kernel device name, as ndm made it ("opkgtun0")
+	MTU  int    // 0 -> omit (xray default)
 }
 
 func (o XrayConfigOptions) listenHost() string {
@@ -135,6 +151,13 @@ func GenerateXrayConfig(opts XrayConfigOptions) ([]byte, error) {
 			return nil, err
 		}
 		inbounds = append(inbounds, wgIn)
+	}
+	if opts.Tun != nil {
+		tunIn, err := tunInbound(*opts.Tun)
+		if err != nil {
+			return nil, err
+		}
+		inbounds = append(inbounds, tunIn)
 	}
 	if opts.Transparent != nil {
 		tIn, err := transparentInbound(*opts.Transparent)
@@ -212,6 +235,59 @@ func wgInbound(o WGInboundOptions) (xrayInbound, error) {
 		Settings: settings,
 		Tag:      "wg-in",
 	}, nil
+}
+
+// TunSupportProbeConfig renders the smallest config that makes xray build a
+// `tun` inbound: that inbound and a freedom outbound. `xray run -test` on it
+// says whether the installed core knows the protocol, without involving any
+// profile -- an AmneziaWG or naive primary needs things that check is not
+// about, and would fail it for reasons of its own.
+func TunSupportProbeConfig(o TunInboundOptions) ([]byte, error) {
+	in, err := tunInbound(o)
+	if err != nil {
+		return nil, err
+	}
+	return json.MarshalIndent(xrayConfig{
+		Log:       xrayLog{LogLevel: "none"},
+		Inbounds:  []xrayInbound{in},
+		Outbounds: []xrayOutbound{{Tag: "direct", Protocol: "freedom"}},
+	}, "", "  ")
+}
+
+// tunInbound renders the `tun` inbound. It has no listen address or port --
+// the device is its only endpoint -- hence the omitempty on those two
+// fields of xrayInbound. Like wg-in and transparent-in it needs no routing
+// block: it falls through to the single default "proxy" outbound.
+func tunInbound(o TunInboundOptions) (xrayInbound, error) {
+	if !validNetdevName(o.Name) {
+		return xrayInbound{}, fmt.Errorf("tun inbound: bad device name %q", o.Name)
+	}
+	if o.MTU < 0 || o.MTU > 65535 {
+		return xrayInbound{}, fmt.Errorf("tun inbound: bad MTU %d", o.MTU)
+	}
+	settings := map[string]any{"name": o.Name}
+	if o.MTU > 0 {
+		settings["mtu"] = o.MTU
+	}
+	return xrayInbound{
+		Protocol: "tun",
+		Settings: settings,
+		Tag:      "tun-in",
+	}, nil
+}
+
+// validNetdevName reports whether s can be a Linux network device name:
+// 1..15 bytes (IFNAMSIZ - 1), no '/', no whitespace.
+func validNetdevName(s string) bool {
+	if s == "" || len(s) > 15 {
+		return false
+	}
+	for _, r := range s {
+		if r == '/' || r <= ' ' || r == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 // transparentInbound renders the `dokodemo-door` inbound. followRedirect
@@ -481,8 +557,8 @@ type xrayLog struct {
 }
 
 type xrayInbound struct {
-	Listen   string         `json:"listen"`
-	Port     int            `json:"port"`
+	Listen   string         `json:"listen,omitempty"` // every inbound but `tun` always sets it
+	Port     int            `json:"port,omitempty"`   // ditto, and is validated > 0 first
 	Protocol string         `json:"protocol"`
 	Settings map[string]any `json:"settings"`
 	Tag      string         `json:"tag"`

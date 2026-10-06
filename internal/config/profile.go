@@ -585,6 +585,27 @@ type WGTransportConfig struct {
 	PSK               string `json:"psk,omitempty"`
 }
 
+// TunTransportConfig manages a Keenetic OpkgTun interface backed by xray's
+// own `tun` inbound: LAN -> OpkgTunN -> xray tun inbound -> VLESS/xhttp
+// out. The third way selected traffic can reach the tunnel, next to
+// Proxy0/SOCKS and the WG transport -- all three coexist. Unlike Proxy0 it
+// can go offline: the interface only has carrier while xray holds the
+// device, and Keenetic withdraws every `auto` route through it within about
+// a second of that ending, so listed traffic falls back to the ISP by
+// itself. Nothing but the interface name is generated or exchanged -- the
+// kernel device is created by ndm, xray just attaches to it by name. Off by
+// default.
+type TunTransportConfig struct {
+	Enabled bool `json:"enabled"`
+
+	// Iface is the Keenetic interface this owns ("OpkgTun0"). Picked on
+	// first enable (the lowest free one) and pinned here so re-runs are
+	// stable.
+	Iface string `json:"iface,omitempty"`
+	Addr  string `json:"addr,omitempty"` // the /32 the Keenetic side takes on the interface; "" -> DefaultTunAddr
+	MTU   int    `json:"mtu,omitempty"`  // 0 -> DefaultTunMTU
+}
+
 // RCIConfig toggles reading the running config over the local RCI JSON
 // API. URL is the router-local base (scheme + host + port), default
 // DefaultRCIURL. Up to KeeneticOS 5.1 RCI needs no credentials on
@@ -869,19 +890,62 @@ func (w *WGTransportConfig) EnsureKeys() (generated bool, err error) {
 	return generated, nil
 }
 
-// wgIfaceRe / routeIfaceRe: a Keenetic WireGuard interface name, and the
-// wider set a `routes` list may target (a Proxy interface OR a WireGuard
-// one -- both are valid `dns-proxy route` destinations).
+// Defaults for TunTransportConfig. The address is a deliberately obscure
+// RFC1918 /32 (next to the WG transport's) unlikely to collide with a
+// hand-made one. MTU 1280 is what the first on-router runs used: xray
+// terminates TCP/UDP in userspace, so the figure never has to fit an
+// encapsulation, and the interface's own `adjust-mss pmtu` clamps what
+// clients negotiate to it.
+const (
+	DefaultTunAddr = "172.31.254.2"
+	DefaultTunMTU  = 1280
+)
+
+// TunAddr is the /32 the Keenetic side takes on the interface.
+func (t TunTransportConfig) TunAddr() string {
+	if t.Addr == "" {
+		return DefaultTunAddr
+	}
+	return t.Addr
+}
+
+func (t TunTransportConfig) TunMTU() int {
+	if t.MTU == 0 {
+		return DefaultTunMTU
+	}
+	return t.MTU
+}
+
+// DeviceName is the kernel network device ndm creates for Iface -- the
+// name xray's tun inbound has to attach to. ndm lowercases it
+// ("OpkgTun0" -> "opkgtun0"; verified on KeeneticOS 5.1), unlike a
+// WireGuard interface ("Wireguard4" -> "nwg0"), so the one is derived from
+// the other. "" while Iface is unset or malformed.
+func (t TunTransportConfig) DeviceName() string {
+	if !ValidTunIface(t.Iface) {
+		return ""
+	}
+	return strings.ToLower(t.Iface)
+}
+
+// wgIfaceRe / tunIfaceRe / routeIfaceRe: a Keenetic WireGuard interface
+// name, an OpkgTun one, and the wider set a `routes` list may target (a
+// Proxy, WireGuard or OpkgTun interface -- all valid `dns-proxy route`
+// destinations).
 var (
 	wgIfaceRe    = regexp.MustCompile(`^Wireguard[0-9]+$`)
-	routeIfaceRe = regexp.MustCompile(`^(Proxy|Wireguard)[0-9]+$`)
+	tunIfaceRe   = regexp.MustCompile(`^OpkgTun[0-9]+$`)
+	routeIfaceRe = regexp.MustCompile(`^(Proxy|Wireguard|OpkgTun)[0-9]+$`)
 )
 
 // ValidWGIface reports whether s names a Keenetic WireGuard interface.
 func ValidWGIface(s string) bool { return wgIfaceRe.MatchString(s) }
 
+// ValidTunIface reports whether s names a Keenetic OpkgTun interface.
+func ValidTunIface(s string) bool { return tunIfaceRe.MatchString(s) }
+
 // ValidRouteIface reports whether s is an acceptable RouteList.Interface:
-// empty (the Proxy0 default) or a Proxy<n>/Wireguard<n> name.
+// empty (the Proxy0 default) or a Proxy<n>/Wireguard<n>/OpkgTun<n> name.
 func ValidRouteIface(s string) bool { return s == "" || routeIfaceRe.MatchString(s) }
 
 // proxyIfaceRe matches the Keenetic Proxy interface names this project
@@ -945,6 +1009,12 @@ type Config struct {
 	// inbound -- an alternative router->xray hop to Proxy0/SOCKS. See
 	// WGTransportConfig and internal/keenetic.ApplyWGTransport.
 	WGTransport WGTransportConfig `json:"wg_transport,omitempty"`
+
+	// TunTransport, when enabled, stands up a Keenetic OpkgTun interface
+	// that xray attaches to with its `tun` inbound -- the third router->xray
+	// hop, and the one that drops out of routing by itself while xray is
+	// down. See TunTransportConfig and internal/keenetic.ApplyTunTransport.
+	TunTransport TunTransportConfig `json:"tun_transport,omitempty"`
 
 	// RCI, when enabled, makes the keenetic layer read the running
 	// config over Keenetic's local RCI JSON API (http://127.0.0.1, no
@@ -1435,6 +1505,9 @@ func (c *Config) Validate() error {
 	if err := c.WGTransport.validate(); err != nil {
 		return err
 	}
+	if err := c.TunTransport.validate(); err != nil {
+		return err
+	}
 	if err := c.DNS.validate(); err != nil {
 		return err
 	}
@@ -1522,6 +1595,21 @@ func (w WGTransportConfig) validate() error {
 		if k != "" && !ValidWGKey(k) {
 			return fmt.Errorf("wg_transport.%s is not a valid 32-byte base64 key", name)
 		}
+	}
+	return nil
+}
+
+func (t TunTransportConfig) validate() error {
+	if t.Iface != "" && !ValidTunIface(t.Iface) {
+		return fmt.Errorf("tun_transport.iface %q: want a name like OpkgTun0", t.Iface)
+	}
+	if t.Addr != "" {
+		if ip := net.ParseIP(t.Addr); ip == nil || ip.To4() == nil {
+			return fmt.Errorf("tun_transport.addr %q: want an IPv4 address", t.Addr)
+		}
+	}
+	if t.MTU != 0 && (t.MTU < 1280 || t.MTU > 1500) {
+		return fmt.Errorf("tun_transport.mtu %d out of range (1280..1500)", t.MTU)
 	}
 	return nil
 }

@@ -58,6 +58,18 @@ type realActions struct {
 	// hence atomic.
 	inboundOnLAN atomic.Bool
 
+	// The TUN inbound's bookkeeping, see tun.go. tunLive: the production
+	// config last written carries it. tunWrittenAt (unix nanos): when that
+	// was, and tunCrashes: production crashes since -- the breaker's input.
+	// tunTrippedAt (unix nanos, 0 = never): when the breaker took the
+	// inbound out again. Written on the Run goroutine (SwitchLiveTo) and the
+	// production Supervisor's (noteXrayCrash), read by the reconcile loop,
+	// hence atomic.
+	tunLive      atomic.Bool
+	tunWrittenAt atomic.Int64
+	tunCrashes   atomic.Int32
+	tunTrippedAt atomic.Int64
+
 	// probes is the recent health-check history, appended by ProbeLive /
 	// ProbeIsolated. Only ever touched on the Run goroutine (Tick calls
 	// the probes; Snapshot copies this) so it needs no lock, same as
@@ -361,6 +373,7 @@ func (a *realActions) SwitchLiveTo(ctx context.Context, role Role) error {
 	if lan {
 		listen = "0.0.0.0"
 	}
+	tun := a.tunInboundOpts()
 	data, err := config.GenerateXrayConfig(config.XrayConfigOptions{
 		SOCKSPort:    a.cfg.Failover.SOCKSPort,
 		HTTPPort:     a.cfg.Failover.HTTPPort,
@@ -368,6 +381,7 @@ func (a *realActions) SwitchLiveTo(ctx context.Context, role Role) error {
 		Outbound:     *profile,
 		XHTTPMode:    a.cfg.XHTTPMode,
 		WG:           wgInboundOpts(a.cfg),
+		Tun:          tun,
 		Transparent:  transparentInboundOpts(a.cfg),
 		SidecarSOCKS: sidecarPort,
 		AccessLog:    a.cfg.XrayAccessLog, // pretest and the quality sweep never log connections
@@ -379,6 +393,7 @@ func (a *realActions) SwitchLiveTo(ctx context.Context, role Role) error {
 		return fmt.Errorf("writing production config: %w", err)
 	}
 	a.inboundOnLAN.Store(lan)
+	a.noteTunWritten(tun != nil)
 
 	if err := a.prod.Restart(); err != nil {
 		return err
@@ -568,6 +583,11 @@ const (
 	// carries a ready Russian description either way, same as
 	// EventXrayCrashLoop.
 	EventBackupRotated
+	// EventTunSuspended: production xray crashed right after the TUN
+	// inbound was added to its config, so the inbound was taken out again
+	// (see tun.go) and the proxy runs without the TUN transport. Detail
+	// carries a ready Russian description.
+	EventTunSuspended
 )
 
 // Event is a noteworthy daemon occurrence, for out-of-band notification
@@ -646,6 +666,7 @@ func NewDaemon(paths Paths, cfg *config.Config) *Daemon {
 // so it needs no lock; emit is a non-blocking channel send, safe from
 // any goroutine.
 func (d *Daemon) noteXrayCrash() {
+	d.noteTunCrash()
 	now := time.Now()
 	if n := len(d.crashes); n > 0 && now.Sub(d.crashes[n-1]) > crashLoopWindow {
 		d.crashes = d.crashes[:0] // stable for a full window -> recovered
@@ -852,7 +873,11 @@ func (d *Daemon) ForceSwitch(ctx context.Context, role Role) error {
 // complexity of reaching into an in-progress pretest here too.
 func (d *Daemon) ReloadConfig(ctx context.Context, fresh *config.Config) bool {
 	return d.do(ctx, func(ctx context.Context) {
+		tunBefore := d.cfg.TunTransport
 		*d.cfg = *fresh
+		if d.cfg.TunTransport != tunBefore {
+			d.actions.tunTrippedAt.Store(0) // an operator's change of the transport is a fresh attempt
+		}
 		d.actions.socks = fmt.Sprintf("127.0.0.1:%d", d.cfg.Failover.SOCKSPort)
 		d.machine.cfg = failoverConfig(d.cfg.Failover)
 		// FAIL-01: d.machine.cfg above already picked up a changed

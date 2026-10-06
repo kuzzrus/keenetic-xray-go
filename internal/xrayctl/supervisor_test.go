@@ -31,6 +31,14 @@ func runTestHelperProcess() {
 	case "stdout-then-sleep":
 		fmt.Println("hello from stdout")
 		time.Sleep(time.Hour) // blocks until killed by the supervisor
+	case "test-ok": // `xray run -test` on a good config
+		fmt.Println("Xray 26.9.30 (Xray, Penetrates Everything.)")
+		fmt.Println("Configuration OK.")
+		os.Exit(0)
+	case "test-fail": // ... on one naming an inbound this core does not know
+		fmt.Println("Xray 26.9.30 (Xray, Penetrates Everything.)")
+		fmt.Println(`Failed to start: infra/conf: failed to load inbound detour config: unknown protocol "tun"`)
+		os.Exit(255)
 	default:
 		os.Exit(2)
 	}

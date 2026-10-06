@@ -353,6 +353,105 @@ func TestGenerateXrayConfig_WGInbound(t *testing.T) {
 	}
 }
 
+func TestGenerateXrayConfig_TunInbound(t *testing.T) {
+	base := XrayConfigOptions{SOCKSPort: 1080, HTTPPort: 1081, Outbound: validProfile()}
+
+	data, err := GenerateXrayConfig(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := inboundProtocols(t, data); len(got) != 2 || contains(got, "tun") {
+		t.Fatalf("without Tun: protocols = %v", got)
+	}
+
+	withTun := base
+	withTun.Tun = &TunInboundOptions{Name: "opkgtun0", MTU: 1280}
+	data, err = GenerateXrayConfig(withTun)
+	if err != nil {
+		t.Fatalf("with Tun: %v", err)
+	}
+	var cfg struct {
+		Inbounds []map[string]any `json:"inbounds"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Inbounds) != 3 {
+		t.Fatalf("want 3 inbounds, got %d", len(cfg.Inbounds))
+	}
+	tin := cfg.Inbounds[2]
+	if tin["protocol"] != "tun" || tin["tag"] != "tun-in" {
+		t.Fatalf("tun inbound shell = %#v", tin)
+	}
+	// The device is its only endpoint: no listen address, no port.
+	for _, k := range []string{"listen", "port"} {
+		if v, ok := tin[k]; ok {
+			t.Errorf("tun inbound carries %q = %v, want it absent", k, v)
+		}
+	}
+	s := tin["settings"].(map[string]any)
+	if s["name"] != "opkgtun0" || s["mtu"].(float64) != 1280 {
+		t.Errorf("tun settings = %#v", s)
+	}
+	// xray must not assign an address or install routes: ndm owns both.
+	for _, k := range []string{"gateway", "autoSystemRoutingTable", "autoOutboundsInterface", "autoSystemDnsToGateway"} {
+		if _, ok := s[k]; ok {
+			t.Errorf("tun settings carry %q -- ndm owns the address and routes", k)
+		}
+	}
+
+	// MTU omitted when zero; every other inbound keeps its listen/port.
+	withTun.Tun.MTU = 0
+	if data, err = GenerateXrayConfig(withTun); err != nil {
+		t.Fatal(err)
+	}
+	var c2 struct {
+		Inbounds []map[string]any `json:"inbounds"`
+	}
+	_ = json.Unmarshal(data, &c2)
+	if _, ok := c2.Inbounds[2]["settings"].(map[string]any)["mtu"]; ok {
+		t.Error("mtu present despite 0")
+	}
+	for _, in := range c2.Inbounds[:2] {
+		if in["listen"] == nil || in["port"] == nil {
+			t.Errorf("socks/http inbound lost its listen/port: %#v", in)
+		}
+	}
+
+	for _, bad := range []TunInboundOptions{
+		{Name: ""}, {Name: "has space"}, {Name: "a/b"}, {Name: "sixteen-chars-xx"}, {Name: "opkgtun0", MTU: -1}, {Name: "opkgtun0", MTU: 70000},
+	} {
+		withTun.Tun = &bad
+		if _, err := GenerateXrayConfig(withTun); err == nil {
+			t.Errorf("Tun %+v: expected an error", bad)
+		}
+	}
+}
+
+func TestTunSupportProbeConfig(t *testing.T) {
+	data, err := TunSupportProbeConfig(TunInboundOptions{Name: "opkgtun0", MTU: 1280})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Inbounds  []map[string]any `json:"inbounds"`
+		Outbounds []map[string]any `json:"outbounds"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("not JSON: %v\n%s", err, data)
+	}
+	if len(cfg.Inbounds) != 1 || cfg.Inbounds[0]["protocol"] != "tun" {
+		t.Errorf("inbounds = %#v, want exactly the tun one", cfg.Inbounds)
+	}
+	// No profile involved: a freedom outbound only.
+	if len(cfg.Outbounds) != 1 || cfg.Outbounds[0]["protocol"] != "freedom" {
+		t.Errorf("outbounds = %#v, want a single freedom one", cfg.Outbounds)
+	}
+	if _, err := TunSupportProbeConfig(TunInboundOptions{Name: ""}); err == nil {
+		t.Error("an unnamed device was accepted")
+	}
+}
+
 func TestGenerateXrayConfig_TransparentInbound(t *testing.T) {
 	// ListenHost left at its "" (-> 127.0.0.1) default at the top level,
 	// deliberately: the transparent inbound must bind 0.0.0.0 on its own,

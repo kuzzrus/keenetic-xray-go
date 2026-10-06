@@ -204,3 +204,57 @@ presets on `⚙️ Порты и транспорт`, or `/proxy0 <router> mss a
   localhost hop and ~60 bytes of encapsulation. Reach for it when you
   want the cleaner Keenetic routing integration (policies, `ip route`,
   `dns-proxy route` all target a real interface), not for raw speed.
+
+## Routing through an OpkgTun interface (experimental)
+
+`routes ... --iface=` also accepts an `OpkgTunN` name, and
+`transport tun on` stands one up for you: `LAN → OpkgTunN → xray tun
+inbound → VLESS/xhttp out`. A third router→xray hop next to Proxy0 and the
+WG transport, with no SOCKS hop, no encapsulation, and no extra process --
+xray's own `tun` inbound attaches to the kernel device KeeneticOS creates
+for the interface.
+
+What sets it apart is that it can go *offline*. The interface only has
+carrier while a process holds its device, and KeeneticOS withdraws every
+`auto` route through an interface without carrier. Measured on KeeneticOS
+5.1 (aarch64): the routes are gone about a second after xray stops, so
+listed traffic goes straight out the ISP instead of into a dead proxy, and
+they are back 2-3 seconds after xray returns (xray start to carrier: 2-4 s).
+Proxy0 needs a ping-check profile bound to it to get the same behaviour;
+this needs nothing. `interface OpkgTunN down` / `up` is an instant kill
+switch on top of that (route withdrawn in under a second, back in about two,
+with xray running throughout).
+
+- **Ownership.** The tool picks the lowest free `OpkgTunN` and marks it
+  `description keenetic-xray-tun`; only an interface carrying that mark is
+  ever read, changed or removed, so someone else's `OpkgTun0` (the
+  AmneziaWG-go and tun2socks guides both build on it) is never touched.
+  It is created `security-level public`, MTU 1280 (`tun_transport.mtu`,
+  1280..1500), `ip tcp adjust-mss pmtu`, and deliberately **without**
+  `ip global`, so it can never become a default-route candidate. The
+  interface name maps to the kernel device by lowercasing
+  (`OpkgTun0` → `opkgtun0`).
+- **Checked before anything is changed.** `transport tun on` asks the
+  installed xray-core to build a config with a `tun` inbound
+  (`xray run -test`) before it touches the router, so a core from before
+  the inbound existed is refused with xray's own message.
+- **A tun inbound that won't start can't take the proxy down.** The inbound
+  lives in the production xray process, and an xray that exits on startup
+  is restarted by the supervisor for as long as it keeps dying. So when
+  production crashes 3 times within 90 s of a config that carried the
+  inbound, the daemon rewrites the config without it, tells you (bot
+  event), and tries once more after 30 minutes. `transport tun off` and
+  `on` again retries at once.
+- **Don't route the VLESS server itself into it.** xray's own outbound
+  connections follow the same routing table as everything else; a list
+  that covers the server's address sends xray's connection back into its
+  own tunnel.
+- `transport tun off` stops the daemon's xray from carrying the inbound,
+  waits for it to let go of the device, and only then removes the
+  interface; lists that targeted it are not touched (they are named in a
+  warning). The daemon re-asserts the interface at start and every two
+  minutes, and a package purge removes it.
+
+Status: the router-side behaviour above is verified on hardware. Forwarded
+LAN traffic through it (NAT, DNS routes, UDP) is still being verified, so
+it has no setup-wizard entry or bot screen yet.

@@ -283,11 +283,62 @@ func TestTunTransportIntact(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			tunDevices(t, tc.devices...)
 			fakeNdmc(t, map[string]string{"show running-config": tc.rc, "show interface OpkgTun1": tc.show})
-			ok, why, err := TunTransportIntact(context.Background(), "OpkgTun1")
+			ok, why, err := TunTransportIntact(context.Background(), "OpkgTun1", 0)
 			if err != nil || ok != tc.wantOK || !strings.Contains(why, tc.wantWhy) {
 				t.Errorf("TunTransportIntact = (%v, %q, %v), want ok=%v why~%q", ok, why, err, tc.wantOK, tc.wantWhy)
 			}
 		})
+	}
+}
+
+// The MTU the config wants is compared with the `ip mtu` the interface block
+// prints: an interface made by an older version keeps `ip mtu 1280` after the
+// default moved to 1500, and that must be noticed. But a block that prints no
+// `ip mtu` (a firmware may leave a default out) is NOT drift -- it would
+// otherwise be re-applied, and flash-saved, on every tick for ever.
+func TestTunTransportIntact_MTU(t *testing.T) {
+	tunDevices(t, "opkgtun1")
+	block := func(extra string) string {
+		return tunRC + "interface OpkgTun1\n    description " + TunIfaceMarker + "\n" + extra + "    up\n!\n"
+	}
+	cases := []struct {
+		name    string
+		extra   string
+		want    int
+		wantOK  bool
+		wantWhy string
+	}{
+		{"matches", "    ip mtu 1500\n", 1500, true, ""},
+		{"left at the old default", "    ip mtu 1280\n", 1500, false, "configured MTU is 1280, the config says 1500"},
+		{"the other way round", "    ip mtu 1500\n", 1280, false, "configured MTU is 1500, the config says 1280"},
+		{"printed none: nothing to compare", "", 1500, true, ""},
+		{"not asked to compare", "    ip mtu 1280\n", 0, true, ""},
+		{"garbage in the line is no verdict", "    ip mtu abc\n", 1500, true, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeNdmc(t, map[string]string{"show running-config": block(tc.extra), "show interface OpkgTun1": tunIfaceShow})
+			ok, why, err := TunTransportIntact(context.Background(), "OpkgTun1", tc.want)
+			if err != nil || ok != tc.wantOK || !strings.Contains(why, tc.wantWhy) {
+				t.Errorf("TunTransportIntact(want %d) = (%v, %q, %v), want ok=%v why~%q", tc.want, ok, why, err, tc.wantOK, tc.wantWhy)
+			}
+			// Present looks at the same thing.
+			okP, whyP, _ := TunTransportPresent(context.Background(), "OpkgTun1", tc.want)
+			if okP != tc.wantOK || !strings.Contains(whyP, tc.wantWhy) {
+				t.Errorf("TunTransportPresent(want %d) = (%v, %q)", tc.want, okP, whyP)
+			}
+		})
+	}
+}
+
+func TestBlockMTU(t *testing.T) {
+	for in, want := range map[string]int{"ip mtu 1500": 1500, "ip mtu  1280 ": 1280, "ip mtu x": 0, "ip tcp adjust-mss pmtu": 0, "": 0} {
+		if got := blockMTU([]string{"description a", in, "up"}); got != want {
+			t.Errorf("blockMTU(%q) = %d, want %d", in, got, want)
+		}
+	}
+	if got := blockMTU(nil); got != 0 {
+		t.Errorf("blockMTU(nil) = %d", got)
 	}
 }
 
@@ -298,15 +349,15 @@ func TestTunTransportPresent_IgnoresAdminState(t *testing.T) {
 	down := strings.Replace(tunIfaceShow, "state: up", "state: down", 1)
 	rc := tunRC + "interface OpkgTun1\n    description " + TunIfaceMarker + "\n    up\n!\n"
 	fakeNdmc(t, map[string]string{"show running-config": rc, "show interface OpkgTun1": down})
-	if ok, why, err := TunTransportIntact(context.Background(), "OpkgTun1"); err != nil || ok || !strings.Contains(why, "administratively down") {
+	if ok, why, err := TunTransportIntact(context.Background(), "OpkgTun1", 0); err != nil || ok || !strings.Contains(why, "administratively down") {
 		t.Errorf("Intact on a down interface = (%v, %q, %v)", ok, why, err)
 	}
-	if ok, why, err := TunTransportPresent(context.Background(), "OpkgTun1"); err != nil || !ok {
+	if ok, why, err := TunTransportPresent(context.Background(), "OpkgTun1", 0); err != nil || !ok {
 		t.Errorf("Present on a down interface = (%v, %q, %v), want present", ok, why, err)
 	}
 	// Everything else still counts for Present.
 	tunDevices(t) // no device
-	if ok, why, _ := TunTransportPresent(context.Background(), "OpkgTun1"); ok || !strings.Contains(why, "opkgtun1 is missing") {
+	if ok, why, _ := TunTransportPresent(context.Background(), "OpkgTun1", 0); ok || !strings.Contains(why, "opkgtun1 is missing") {
 		t.Errorf("Present without a device = (%v, %q)", ok, why)
 	}
 }
@@ -345,7 +396,7 @@ func TestTunTransportIntact_IgnoresCarrier(t *testing.T) {
 	noCarrier := strings.NewReplacer("link: up", "link: down", "connected: yes", "connected: no").Replace(tunIfaceShow)
 	rc := tunRC + "interface OpkgTun1\n    description " + TunIfaceMarker + "\n    up\n!\n"
 	fakeNdmc(t, map[string]string{"show running-config": rc, "show interface OpkgTun1": noCarrier})
-	if ok, why, err := TunTransportIntact(context.Background(), "OpkgTun1"); err != nil || !ok {
+	if ok, why, err := TunTransportIntact(context.Background(), "OpkgTun1", 0); err != nil || !ok {
 		t.Errorf("TunTransportIntact without carrier = (%v, %q, %v), want intact", ok, why, err)
 	}
 }

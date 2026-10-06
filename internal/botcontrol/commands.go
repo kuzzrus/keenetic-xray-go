@@ -542,7 +542,7 @@ func (h *RouterHandler) doctorTun(ctx context.Context, check func(bool, string))
 	if h.TunGate != nil && h.TunGate.Closed() {
 		intact = keenetic.TunTransportPresent
 	}
-	ok, why, err := intact(ctx, t.Iface)
+	ok, why, err := intact(ctx, t.Iface, t.TunMTU())
 	switch {
 	case err != nil:
 		check(false, "TUN-транспорт "+t.Iface+": не прочитан: "+err.Error())

@@ -164,7 +164,7 @@ func TestCmdTransport_TunMTU(t *testing.T) {
 			t.Errorf("transport tun mtu: %v", err)
 		}
 	})
-	if !strings.Contains(out, "1280 (по умолчанию)") || !strings.Contains(out, "1280..1500") {
+	if !strings.Contains(out, fmt.Sprintf("%d (по умолчанию)", config.DefaultTunMTU)) || !strings.Contains(out, "1280..1500") {
 		t.Errorf("show output:\n%s", out)
 	}
 

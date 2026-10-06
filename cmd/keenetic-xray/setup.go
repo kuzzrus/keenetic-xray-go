@@ -557,7 +557,7 @@ func promptTransport(reader *bufio.Reader, cfg *config.Config, o setupOpts) {
 	fmt.Println("  3) WireGuard-транспорт — LAN → WireguardN → xray, ключи сгенерируются сами")
 	fmt.Println("  4) не трогать Keenetic — только локальный прокси на портах выше")
 	fmt.Println("  5) TUN-транспорт (экспериментальный) — LAN → OpkgTunN → xray; пропадает сам, когда xray остановлен;")
-	fmt.Println("     на больших закачках заметно медленнее Proxy0 (на 2-ядерном роутере ~55–70 против ~170 Мбит/с)")
+	fmt.Println("     на больших закачках заметно медленнее Proxy0 (на 2-ядерном роутере ~55–80 против ~170 Мбит/с)")
 	fmt.Print("> ")
 	line, _ := reader.ReadString('\n')
 	switch strings.TrimSpace(line) {

@@ -71,7 +71,7 @@ func cmdTransport(args []string) error {
 	case "l7sni":
 		return transportL7SNI(cfg, args[1:])
 	default:
-		return fmt.Errorf("usage: keenetic-xray transport {show|mode <mode>|mode-clear|mss <1200..1452|auto|off>|wg {show|on|off}|tun {show|on|off}|adaptive {show|on|off|flush}|l7sni {show|on|off}}")
+		return fmt.Errorf("usage: keenetic-xray transport {show|mode <mode>|mode-clear|mss <1200..1452|auto|off>|wg {show|on|off}|tun {show|on|off|mtu}|adaptive {show|on|off|flush}|l7sni {show|on|off}}")
 	}
 
 	if err := cfg.Save(configPath()); err != nil {

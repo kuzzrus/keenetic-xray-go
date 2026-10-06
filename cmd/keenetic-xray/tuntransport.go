@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -45,9 +46,71 @@ func transportTun(cfg *config.Config, args []string) error {
 		return tunTransportOn(cfg)
 	case "off":
 		return tunTransportOff(cfg)
+	case "mtu":
+		return tunTransportMTU(cfg, args[1:])
 	default:
-		return fmt.Errorf("usage: keenetic-xray transport tun {show|on|off}")
+		return fmt.Errorf("usage: keenetic-xray transport tun {show|on|off|mtu [<1280..1500>|auto]}")
 	}
+}
+
+// tunMTUMin / tunMTUMax bound `transport tun mtu`: the same range
+// config.TunTransportConfig.validate accepts.
+const (
+	tunMTUMin = 1280
+	tunMTUMax = 1500
+)
+
+// tunTransportMTU is `transport tun mtu [<1280..1500>|auto]`: show or set the
+// MTU of the OpkgTun interface and of xray's tun inbound. They always follow
+// the one setting -- xray sets the device's MTU itself every time it starts,
+// so the interface (`ip mtu`, which also drives the MSS clamp NDM applies to
+// forwarded SYNs) and the inbound must never disagree. A bigger MTU means
+// fewer packets for the userspace stack to chew through, which is what limits
+// the throughput (docs/routing.md). `auto` is the default (1280).
+func tunTransportMTU(cfg *config.Config, args []string) error {
+	usage := fmt.Errorf("usage: keenetic-xray transport tun mtu [<%d..%d>|auto]", tunMTUMin, tunMTUMax)
+	if len(args) == 0 {
+		note := ""
+		if cfg.TunTransport.MTU == 0 {
+			note = " (по умолчанию)"
+		}
+		fmt.Printf("MTU TUN-транспорта: %d%s; допустимо %d..%d\n", cfg.TunTransport.TunMTU(), note, tunMTUMin, tunMTUMax)
+		return nil
+	}
+	if len(args) != 1 {
+		return usage
+	}
+	v := 0
+	if a := strings.ToLower(args[0]); a != "auto" && a != "default" {
+		n, err := strconv.Atoi(a)
+		if err != nil || n < tunMTUMin || n > tunMTUMax {
+			return usage
+		}
+		v = n
+	}
+	cfg.TunTransport.MTU = v
+
+	live := cfg.TunTransport.Enabled && cfg.TunTransport.Iface != "" && keenetic.Available()
+	if live {
+		// The interface first: its `ip mtu` moves now, xray's follows when
+		// the daemon restarts it with the new config a moment later.
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		if err := keenetic.ApplyTunTransport(ctx, tunSpec(cfg)); err != nil {
+			return err
+		}
+	}
+	if err := cfg.Save(configPath()); err != nil {
+		return err
+	}
+	fmt.Printf("MTU TUN-транспорта: %d\n", cfg.TunTransport.TunMTU())
+	if !live {
+		fmt.Println("сохранено — применится, когда TUN-транспорт будет включён")
+		return nil
+	}
+	fmt.Println("xray перезапускается с новым MTU (на пару секунд прокси недоступен)")
+	applyDaemonChange(bufio.NewReader(os.Stdin), true)
+	return nil
 }
 
 func tunTransportOn(cfg *config.Config) error {

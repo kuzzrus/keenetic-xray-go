@@ -267,6 +267,16 @@ interface the gate holds down on purpose.
   warning). The daemon re-asserts the interface at start and every two
   minutes, and a package purge removes it.
 
-Status: the router-side behaviour above is verified on hardware. Forwarded
-LAN traffic through it (NAT, DNS routes, UDP) is still being verified, so
-it has no setup-wizard entry yet.
+Status: verified on a real router (KeeneticOS 5.1, aarch64) with a LAN
+client: static routes and DNS routes into the interface carry TCP and UDP
+(a STUN query returns the tunnel's exit address), and the router NATs the
+LAN sources leaving the interface itself -- xray sees them as the interface
+address, `ip global` is not needed. Killing xray puts the client back on the
+ISP within about a second (the routes are withdrawn the moment the carrier
+goes); a restarted xray has carrier 2-4 s after it starts and the routes are
+back about a second later. `interface OpkgTunN down` / `up`, which the gate
+uses, take effect in ~1.4 s / ~2 s. The extra cost of the hop is small: an
+HTTPS request took ~300 ms through the tunnel against ~200 ms direct, a STUN
+round trip ~65 ms against ~20 ms. Not measured yet: throughput and CPU load
+under a bulk transfer, IPv6. Enable it with `keenetic-xray setup` (option 5),
+the bot, or `transport tun on`.

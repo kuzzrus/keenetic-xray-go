@@ -262,13 +262,17 @@ func runSetupInteractive(reader *bufio.Reader, cfg *config.Config, o setupOpts) 
 }
 
 // transportIface names the Keenetic interface the wizard just pointed
-// router traffic at -- the in-router WireGuard transport, or Proxy0 --
-// or "" when the operator kept Keenetic untouched (transport option 4)
-// or this isn't a router. WG wins if both somehow got set.
+// router traffic at -- the in-router WireGuard transport, the OpkgTun
+// transport, or Proxy0 -- or "" when the operator kept Keenetic untouched
+// (transport option 4) or this isn't a router. When several are set, WG
+// wins, then TUN: the order the transports were added in, so a router that
+// already runs one keeps its choice.
 func transportIface(cfg *config.Config) string {
 	switch {
 	case cfg.WGTransport.Enabled && cfg.WGTransport.Iface != "":
 		return cfg.WGTransport.Iface
+	case cfg.TunTransport.Enabled && cfg.TunTransport.Iface != "":
+		return cfg.TunTransport.Iface
 	case cfg.Proxy0.Enabled:
 		return cfg.Proxy0.IfaceName()
 	default:
@@ -533,7 +537,9 @@ func doSetupProxy0(cfg *config.Config) {
 
 // promptTransport asks how to get the router's LAN traffic into xray:
 // Keenetic's Proxy0 (SOCKS5 or HTTP), the in-router WireGuard transport,
-// or nothing (local proxy only). Replaces the old y/N Proxy0 question.
+// the OpkgTun transport, or nothing (local proxy only). Replaces the old
+// y/N Proxy0 question. The OpkgTun option is numbered 5, after "leave
+// Keenetic alone" (4): the numbers existing options had must not move.
 func promptTransport(reader *bufio.Reader, cfg *config.Config, o setupOpts) {
 	switch {
 	case o.Proxy0 == "no":
@@ -550,6 +556,7 @@ func promptTransport(reader *bufio.Reader, cfg *config.Config, o setupOpts) {
 	fmt.Println("  2) Proxy0 · HTTP")
 	fmt.Println("  3) WireGuard-транспорт — LAN → WireguardN → xray, ключи сгенерируются сами")
 	fmt.Println("  4) не трогать Keenetic — только локальный прокси на портах выше")
+	fmt.Println("  5) TUN-транспорт (экспериментальный) — LAN → OpkgTunN → xray; пропадает сам, когда xray остановлен")
 	fmt.Print("> ")
 	line, _ := reader.ReadString('\n')
 	switch strings.TrimSpace(line) {
@@ -568,6 +575,13 @@ func promptTransport(reader *bufio.Reader, cfg *config.Config, o setupOpts) {
 		cfg.Proxy0.Enabled = false
 		_ = cfg.Save(configPath())
 		fmt.Println("  Keenetic не трогаем. Прокси на 127.0.0.1 и в LAN на портах выше.")
+	case "5":
+		cfg.Proxy0.Enabled = false // the TUN transport is the chosen path, don't also wire Proxy0
+		if err := tunTransportApply(cfg); err != nil {
+			fmt.Println("  TUN-транспорт не поднялся:", err)
+			fmt.Println("  позже:  keenetic-xray transport tun on")
+			return
+		}
 	default: // "1" or Enter
 		cfg.Proxy0.Protocol = "socks5"
 		_ = cfg.Save(configPath())

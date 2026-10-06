@@ -468,12 +468,45 @@ func TestTransportIface(t *testing.T) {
 			"Wireguard3",
 		},
 		{"wg enabled but no iface pinned", &config.Config{WGTransport: config.WGTransportConfig{Enabled: true}}, ""},
+		{"tun transport", &config.Config{TunTransport: config.TunTransportConfig{Enabled: true, Iface: "OpkgTun1"}}, "OpkgTun1"},
+		{
+			"tun wins over proxy0",
+			&config.Config{
+				Proxy0:       config.Proxy0Config{Enabled: true},
+				TunTransport: config.TunTransportConfig{Enabled: true, Iface: "OpkgTun1"},
+			},
+			"OpkgTun1",
+		},
+		{
+			"wg wins over tun",
+			&config.Config{
+				WGTransport:  config.WGTransportConfig{Enabled: true, Iface: "Wireguard3"},
+				TunTransport: config.TunTransportConfig{Enabled: true, Iface: "OpkgTun1"},
+			},
+			"Wireguard3",
+		},
+		{"tun enabled but no iface pinned", &config.Config{TunTransport: config.TunTransportConfig{Enabled: true}}, ""},
 		{"nothing wired (option 4 / not a router)", &config.Config{}, ""},
 	}
 	for _, c := range cases {
 		if got := transportIface(c.cfg); got != c.want {
 			t.Errorf("%s: transportIface = %q, want %q", c.name, got, c.want)
 		}
+	}
+}
+
+func TestTransportSummary_Tun(t *testing.T) {
+	cfg := &config.Config{TunTransport: config.TunTransportConfig{Enabled: true, Iface: "OpkgTun2"}}
+	if got := transportSummary(cfg); got != "TUN (OpkgTun2)" {
+		t.Errorf("transportSummary = %q, want %q", got, "TUN (OpkgTun2)")
+	}
+	cfg.Proxy0.Enabled = true // Proxy0 alongside: TUN is still what the summary names
+	if got := transportSummary(cfg); got != "TUN (OpkgTun2)" {
+		t.Errorf("with Proxy0 also on: %q", got)
+	}
+	cfg.TunTransport.Enabled = false
+	if got := transportSummary(cfg); got != "Proxy0 / socks5" {
+		t.Errorf("TUN off: %q, want the Proxy0 summary", got)
 	}
 }
 

@@ -422,6 +422,24 @@ func TestTelegramBot_TransportScreen_ProtocolAndInterface(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
+	// "🕳 TUN-транспорт" -> its sub-screen; "Включить" -> tun_on.
+	fake.pushCallback(1, msgID, "ptm:r1")
+	fake.waitForEditContaining(t, 3*time.Second, "Порты и транспорт")
+	fake.pushCallback(1, msgID, "tunt:r1")
+	fake.waitForEditContaining(t, 3*time.Second, "TUN-транспорт")
+	fake.pushCallback(1, msgID, "act:tun_on:r1")
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if cmd, _ := store.Dequeue("r1"); cmd != nil {
+			if cmd.Action != ActionTunTransportOn {
+				t.Errorf("dequeued = %q, want tun_on", cmd.Action)
+			}
+			_ = store.RecordResult("r1", Result{CommandID: cmd.ID, Output: "TUN-транспорт включён"})
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
 	// Back to "Порты и транспорт", then "🎯 Адаптивная маршрутизация" ->
 	// its sub-screen; "Включить" -> adrt_on.
 	fake.pushCallback(1, msgID, "ptm:r1")

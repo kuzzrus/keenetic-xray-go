@@ -231,6 +231,37 @@ func TestTunLinkState(t *testing.T) {
 	}
 }
 
+func TestWaitTunCarrierGone(t *testing.T) {
+	orig := tunCarrierPoll
+	tunCarrierPoll = 5 * time.Millisecond
+	t.Cleanup(func() { tunCarrierPoll = orig })
+
+	noCarrier := strings.NewReplacer("link: up", "link: down", "connected: yes", "connected: no").Replace(tunIfaceShow)
+
+	// Already gone: returns at once.
+	fakeNdmc(t, map[string]string{"show interface OpkgTun1": noCarrier})
+	if !WaitTunCarrierGone(context.Background(), "OpkgTun1", time.Second) {
+		t.Error("WaitTunCarrierGone = false with no carrier")
+	}
+
+	// Still held: gives up after the limit and says so.
+	fakeNdmc(t, map[string]string{"show interface OpkgTun1": tunIfaceShow})
+	start := time.Now()
+	if WaitTunCarrierGone(context.Background(), "OpkgTun1", 40*time.Millisecond) {
+		t.Error("WaitTunCarrierGone = true while xray still holds the device")
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Errorf("waited %v for a 40ms limit", time.Since(start))
+	}
+
+	// A cancelled context stops the wait.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if WaitTunCarrierGone(ctx, "OpkgTun1", time.Hour) {
+		t.Error("WaitTunCarrierGone = true on a cancelled context with the device held")
+	}
+}
+
 func TestTunTransportIntact(t *testing.T) {
 	ours := tunRC + "interface OpkgTun1\n    description " + TunIfaceMarker + "\n    up\n!\n"
 	down := strings.Replace(tunIfaceShow, "state: up", "state: down", 1)

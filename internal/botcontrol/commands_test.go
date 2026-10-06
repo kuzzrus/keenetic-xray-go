@@ -447,6 +447,65 @@ func TestRouterHandler_WGTransport_WithoutNdmc(t *testing.T) {
 	}
 }
 
+func TestRouterHandler_TunTransport_WithoutNdmc(t *testing.T) {
+	h := &RouterHandler{Config: config.Default(), ConfigPath: filepath.Join(t.TempDir(), "c.json")}
+
+	// show is informational and never fails; off by default.
+	out, err := h.Handle(context.Background(), Command{Action: ActionTunTransportShow})
+	if err != nil {
+		t.Fatalf("tun_show: %v", err)
+	}
+	if !strings.Contains(out, "TUN-транспорт: выкл") {
+		t.Errorf("tun_show output = %q", out)
+	}
+
+	// on needs a router, and changes nothing without one.
+	_, err = h.Handle(context.Background(), Command{Action: ActionTunTransportOn})
+	if err == nil || !strings.Contains(err.Error(), "ndmc") {
+		t.Errorf("tun_on without ndmc: err = %v, want the no-router refusal", err)
+	}
+	if h.Config.TunTransport.Enabled {
+		t.Error("a refused tun_on left the transport enabled")
+	}
+
+	// off flips the flag, releases the pinned interface, saves -- and says
+	// which route lists were pointing at the interface it just released.
+	h.Config.TunTransport = config.TunTransportConfig{Enabled: true, Iface: "OpkgTun0", MTU: 1400}
+	h.Config.Routing.Lists = []config.RouteList{{Name: "yt", Interface: "OpkgTun0", Entries: []string{"youtube.com"}}}
+	out, err = h.Handle(context.Background(), Command{Action: ActionTunTransportOff})
+	if err != nil {
+		t.Fatalf("tun_off: %v", err)
+	}
+	if !strings.Contains(out, "«yt»") || !strings.Contains(out, "OpkgTun0") {
+		t.Errorf("tun_off did not warn about the list still aimed at the interface: %q", out)
+	}
+	saved, err := config.Load(h.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.TunTransport.Enabled || saved.TunTransport.Iface != "" || saved.TunTransport.MTU != 1400 {
+		t.Errorf("saved TunTransport = %+v, want disabled, interface freed, MTU kept", saved.TunTransport)
+	}
+}
+
+// show says what the daemon thinks about the inbound, and a transport that
+// is on but whose inbound is not in the live xray is flagged.
+func TestRouterHandler_TunTransport_ShowFlagsMissingInbound(t *testing.T) {
+	d := newTestDaemon(t)
+	cfg := config.Default()
+	cfg.TunTransport = config.TunTransportConfig{Enabled: true, Iface: "OpkgTun2"}
+	h := &RouterHandler{Daemon: d, Config: cfg, ConfigPath: filepath.Join(t.TempDir(), "c.json")}
+	out, err := h.Handle(context.Background(), Command{Action: ActionTunTransportShow})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"TUN-транспорт: вкл — OpkgTun2", "tun-inbound в живом xray: нет ⚠️"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("tun_show lacks %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestRouterHandler_AdaptiveRoute_WithoutNdmc(t *testing.T) {
 	h := &RouterHandler{Config: config.Default(), ConfigPath: filepath.Join(t.TempDir(), "c.json")}
 

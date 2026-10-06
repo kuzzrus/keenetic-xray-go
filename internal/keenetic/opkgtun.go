@@ -250,6 +250,33 @@ func TunLinkState(ctx context.Context, iface string) (TunLink, error) {
 	}, nil
 }
 
+// WaitTunCarrierGone waits until nothing holds iface's device any more --
+// xray was restarted without the tun inbound, or is not running at all --
+// up to limit, and reports whether the carrier is gone. Removing the
+// interface from under a process that still holds the device is what the
+// caller is waiting to avoid; after the limit it is the operator's call
+// that decides, so callers go on regardless.
+func WaitTunCarrierGone(ctx context.Context, iface string, limit time.Duration) bool {
+	deadline := time.Now().Add(limit)
+	for {
+		l, err := TunLinkState(ctx, iface)
+		if err != nil || !l.CarrierUp() {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(tunCarrierPoll):
+		}
+	}
+}
+
+// tunCarrierPoll is how often WaitTunCarrierGone looks. A var so tests don't sleep.
+var tunCarrierPoll = time.Second
+
 // TunCounts are the kernel's own counters for the OpkgTun device, seen from
 // the kernel's side of it: Tx is what the kernel handed to xray (LAN ->
 // tunnel), Rx is what xray handed back (tunnel -> LAN). They are the only

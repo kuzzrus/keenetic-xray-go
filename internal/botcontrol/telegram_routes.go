@@ -157,7 +157,7 @@ func routeListScreenKB(id string, idx int, it routeItem) inlineKeyboard {
 }
 
 // openRouteIfaceScreen offers the common interface choices as buttons,
-// plus a manual entry for any other WireguardN.
+// plus a manual entry for any other WireguardN / OpkgTunN.
 func (b *TelegramBot) openRouteIfaceScreen(ctx context.Context, cb tgCallbackQuery, id string, idx int) {
 	it, ok := b.routeMenuItem(cb.Message.Chat.ID, id, idx)
 	if !ok {
@@ -166,13 +166,14 @@ func (b *TelegramBot) openRouteIfaceScreen(ctx context.Context, cb tgCallbackQue
 	}
 	kb := inlineKeyboard{InlineKeyboard: [][]inlineButton{
 		{{Text: "Proxy0", CallbackData: fmt.Sprintf("rtSi:%s:%d:p0", id, idx)}, {Text: "Wireguard4", CallbackData: fmt.Sprintf("rtSi:%s:%d:w4", id, idx)}},
+		{{Text: "OpkgTun0", CallbackData: fmt.Sprintf("rtSi:%s:%d:t0", id, idx)}},
 		{{Text: "✏️ Другой интерфейс", CallbackData: fmt.Sprintf("rtIm:%s:%d", id, idx)}},
 		{{Text: "⬅️ Назад", CallbackData: fmt.Sprintf("rtL:%s:%d", id, idx)}},
 	}}
-	b.editCB(ctx, cb, fmt.Sprintf("📁 %s — куда гнать?\n\nСейчас: %s\nProxy0 — обычный путь, Wireguard4 — WG-транспорт.", it.name, it.iface), kb)
+	b.editCB(ctx, cb, fmt.Sprintf("📁 %s — куда гнать?\n\nСейчас: %s\nProxy0 — обычный путь, Wireguard4 — WG-транспорт, OpkgTun0 — TUN-транспорт (если он на другом номере — «Другой интерфейс»).", it.name, it.iface), kb)
 }
 
-var routeIfaceTokens = map[string]string{"p0": "Proxy0", "w4": "Wireguard4"}
+var routeIfaceTokens = map[string]string{"p0": "Proxy0", "w4": "Wireguard4", "t0": "OpkgTun0"}
 
 // handleRouteCallback routes every rt* callback that isn't the plain
 // "rtm:" open. Returns false if data isn't one of ours.

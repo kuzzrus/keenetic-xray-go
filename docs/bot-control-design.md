@@ -188,7 +188,10 @@ shows every window (`acme: :80 opened …`, `acme: :80 closed`). If the
 port can't be bound (something else holds it, or `CAP_NET_BIND_SERVICE`
 is missing) the request to the CA fails at once and the reason is
 logged -- autocert logs nothing itself, and a renewal failing silently
-would let the certificate lapse.
+would let the certificate lapse. The flip side of binding on demand: a
+port that cannot be bound is noticed when the CA is next contacted (the
+first handshake of a fresh install, or the next renewal), not at
+start-up.
 
 The VPS's firewall / cloud security group still has to let port 80 in
 from the internet (in addition to `listen_addr`, 8443 by default): the
@@ -197,6 +200,7 @@ during a window. The packaged systemd unit grants `CAP_NET_BIND_SERVICE`
 via `AmbientCapabilities` so the unprivileged service user can bind it.
 TLS-ALPN-01 (validation on port 443 instead of 80) is no alternative
 when something else owns 443 on the VPS.
+
 `autocert_cache_dir` (default `/var/lib/keenetic-xray-control-server/autocert-cache`)
 persists the issued certificate and ACME account across restarts --
 without it, a restart would re-issue, and Let's Encrypt rate-limits how

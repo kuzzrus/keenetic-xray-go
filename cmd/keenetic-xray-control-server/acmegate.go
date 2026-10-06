@@ -182,8 +182,8 @@ func (g *acmeGate) cancelIdleLocked() {
 
 // closeLocked frees the port before it returns -- a request that arrives
 // right after must be able to bind it again -- and drops whatever
-// connection is still open: nothing worth waiting for is, as the CA only
-// ever connects while one of our requests is under way or just done.
+// connection is still open: none is worth waiting for, as the CA only
+// connects while a request of ours is under way or has just finished.
 func (g *acmeGate) closeLocked() {
 	srv, ln := g.srv, g.ln
 	g.srv, g.ln = nil, nil

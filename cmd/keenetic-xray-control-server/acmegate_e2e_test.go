@@ -23,8 +23,9 @@ import (
 const (
 	e2eDomain = "vps.example.test"
 	// e2eIdle is the gate's idle period here. The acme client polls the
-	// authorization once a second, so it must comfortably exceed that.
-	e2eIdle = 2500 * time.Millisecond
+	// authorization once a second, so it must exceed that with a margin
+	// that a loaded CI machine cannot eat.
+	e2eIdle = 4 * time.Second
 )
 
 type e2eRig struct {

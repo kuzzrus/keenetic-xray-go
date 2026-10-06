@@ -410,8 +410,8 @@ func TestACMEGate_RealTimerClosesItAfterTheIdlePeriod(t *testing.T) {
 	t.Cleanup(g.Close)
 	callCA(t, g)
 	addr := probe.addr()
-	if !isOpen(addr) {
-		t.Fatal("not open right after the request")
+	if probe.binds() != 1 {
+		t.Fatalf("binds = %d, want the request to have opened the port", probe.binds())
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for isOpen(addr) {

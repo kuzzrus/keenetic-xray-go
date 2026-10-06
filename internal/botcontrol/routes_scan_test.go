@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 	"github.com/kuzzrus/keenetic-xray-go/internal/depscan"
+	"github.com/kuzzrus/keenetic-xray-go/internal/georanges"
 )
 
 type nopRT struct{}
@@ -159,5 +161,77 @@ func TestRouterHandler_RoutesScan_OneFailureKeepsTheOthers(t *testing.T) {
 	})
 	if _, err := hAll.routesScan(context.Background(), []string{"a.example.com"}); err == nil {
 		t.Error("an all-failed scan returned no error")
+	}
+}
+
+func TestRouterHandler_RoutesAddIP(t *testing.T) {
+	h := scanHandler(t, nil)
+	h.Config.Routing.Lists = []config.RouteList{{Name: "calls", Entries: []string{"example.com"}, Interface: "OpkgTun0"}}
+
+	out, err := h.routesAddIP(context.Background(), []string{"calls", "95.47.173.35 95.47.173.36, example.org 192.168.1.5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`создан IP-список "calls-ip"`, "+2 записей", "отклонено 2"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("answer lacks %q:\n%s", want, out)
+		}
+	}
+	l := h.Config.Routing.Lists[1]
+	if l.Name != "calls-ip" || l.Interface != "OpkgTun0" || len(l.Entries) != 2 {
+		t.Errorf("companion = %+v", l)
+	}
+	// Saved: the file on disk has it.
+	saved, err := config.Load(h.ConfigPath)
+	if err != nil || len(saved.Routing.Lists) != 2 {
+		t.Errorf("saved config: %v %+v", err, saved)
+	}
+
+	// Again with one new address: the same list, no new one.
+	out, err = h.routesAddIP(context.Background(), []string{"calls", "95.47.173.36 95.47.173.37"})
+	if err != nil || !strings.Contains(out, `IP-список "calls-ip": +1 записей, всего 3`) || len(h.Config.Routing.Lists) != 2 {
+		t.Errorf("second add: %q %v", out, err)
+	}
+}
+
+func TestRouterHandler_RoutesAddIP_Refusals(t *testing.T) {
+	h := scanHandler(t, nil)
+	h.Config.Routing.Lists = []config.RouteList{{Name: "calls"}}
+	for _, args := range [][]string{nil, {"calls"}, {"calls", "  "}} {
+		if _, err := h.routesAddIP(context.Background(), args); err == nil {
+			t.Errorf("args %q accepted", args)
+		}
+	}
+	if _, err := h.routesAddIP(context.Background(), []string{"nope", "8.8.4.4"}); err == nil || !strings.Contains(err.Error(), "нет списка") {
+		t.Errorf("unknown list: %v", err)
+	}
+	// Nothing acceptable: no list is left behind and nothing is saved.
+	before := len(h.Config.Routing.Lists)
+	out, err := h.routesAddIP(context.Background(), []string{"calls", "example.org 10.0.0.1"})
+	if err != nil || !strings.Contains(out, "IP-список не создан") || len(h.Config.Routing.Lists) != before {
+		t.Errorf("all rejected: %q %v lists=%d", out, err, len(h.Config.Routing.Lists))
+	}
+	if _, statErr := os.Stat(h.ConfigPath); statErr == nil {
+		t.Error("config saved though nothing changed")
+	}
+	// Through the dispatcher.
+	if _, err := h.Handle(context.Background(), Command{Action: ActionRoutesAddIP, Args: []string{"calls", "8.8.4.4"}}); err != nil {
+		t.Errorf("Handle: %v", err)
+	}
+}
+
+func TestRouterHandler_RoutesScan_OffersNoRussianAddress(t *testing.T) {
+	var exclude func(string) bool
+	h := scanHandler(t, func(_ context.Context, seed string, o depscan.Options) (*depscan.Result, error) {
+		exclude = o.ExcludeIP
+		return resultFor(seed), nil
+	})
+	georanges.SetCurrent(georanges.Parse("5.255.0.0/16\n"))
+	t.Cleanup(func() { georanges.SetCurrent(nil) })
+	if _, err := h.routesScan(context.Background(), []string{"example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if exclude == nil || !exclude("5.255.255.77") || exclude("8.8.4.4") {
+		t.Errorf("the Russian-range filter is not wired (set=%v)", exclude != nil)
 	}
 }

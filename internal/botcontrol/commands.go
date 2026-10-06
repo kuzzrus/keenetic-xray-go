@@ -332,6 +332,8 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 		return h.routesShow(ctx, cmd.Args)
 	case ActionRoutesManual:
 		return h.routesManual(ctx)
+	case ActionRoutesAddIP:
+		return h.routesAddIP(ctx, cmd.Args)
 	case ActionRoutesScan:
 		return h.routesScan(ctx, cmd.Args)
 	case ActionRoutesAdd:

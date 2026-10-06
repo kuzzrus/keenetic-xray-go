@@ -71,6 +71,7 @@ const (
 	ActionRoutesNames      = "routes_names"    // no args -> one "name\tcount\tstate\tiface" line per list (machine-readable, for the bot's list-as-buttons screen)
 	ActionRoutesManual     = "routes_manual"   // no args -> read-only list of the operator's own (non-keenetic-xray) domain route lists on the router
 	ActionRoutesScan       = "routes_scan"     // args=1..3 domains -> depscan TSV: the other hosts their pages load and which of them need the tunnel (read-only; the bot adds the ticked ones with routes_add)
+	ActionRoutesAddIP      = "routes_add_ip"   // args[0]=list, args[1]=IPv4 addresses/subnets -> into its IP companion "<list>-ip" (created like the list; config.AddCompanionIPs)
 	// Built-in curated preset lists (internal/presets), refreshed daily in
 	// the repo. See cmd/keenetic-xray/routes_preset.go.
 	ActionRoutesPresetList   = "routes_preset_list"   // no args -> TSV: name, service, title, category, kind, count, installed(0|1), driftAdded, driftRemoved; first lines are "#gen\t<date>" and "#cats\t<cat>\t<cat>..."

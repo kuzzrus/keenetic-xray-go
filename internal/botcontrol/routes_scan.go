@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/depscan"
+	"github.com/kuzzrus/keenetic-xray-go/internal/georanges"
 	"github.com/kuzzrus/keenetic-xray-go/internal/keenetic"
 	"github.com/kuzzrus/keenetic-xray-go/internal/netfetch"
 )
@@ -31,11 +32,20 @@ func (h *RouterHandler) routesScan(ctx context.Context, args []string) (string, 
 	if !ok {
 		return "", errors.New("туннель не работает (xray не запущен или не настроен профиль) — сканировать нечем")
 	}
-	res, err := depscan.ScanMany(ctx, seeds, depscan.Options{Tunnel: tunnel, Covered: h.coveredBy(ctx)}, h.scanFn)
+	res, err := depscan.ScanMany(ctx, seeds, depscan.Options{Tunnel: tunnel, Covered: h.coveredBy(ctx), ExcludeIP: russianIP}, h.scanFn)
 	if err != nil {
 		return "", err
 	}
 	return res.TSV(), nil
+}
+
+// russianIP reports whether ip is in a Russian range -- the daemon keeps the
+// table fresh (internal/georanges); an empty table excludes nothing. A
+// Russian address must not be offered for a route entry: services there
+// expect a Russian client, and a poisoned DNS answer is typically one.
+func russianIP(ip string) bool {
+	_, ok := georanges.Lookup(ip)
+	return ok
 }
 
 func (h *RouterHandler) tunnelTransport() (http.RoundTripper, bool) {
@@ -68,4 +78,34 @@ func (h *RouterHandler) coveredBy(ctx context.Context) func(string) string {
 		cancel()
 	}
 	return depscan.CoveredIndex(lists)
+}
+
+// routesAddIP is the routes_add_ip action: addresses go into the IP
+// companion of a list ("<list>-ip"), created like its base -- same
+// interface, same exclusive/disabled state -- and left for the operator to
+// rebind (config.AddCompanionIPs says why they are a list of their own).
+func (h *RouterHandler) routesAddIP(ctx context.Context, args []string) (string, error) {
+	if len(args) < 2 || strings.TrimSpace(args[1]) == "" {
+		return "", fmt.Errorf("usage: routes_add_ip <список> <IP-адреса>")
+	}
+	res, err := h.Config.AddCompanionIPs(args[0], splitRouteEntries(args[1]))
+	if err != nil {
+		return "", err
+	}
+	var head string
+	switch {
+	case res.Created:
+		head = fmt.Sprintf("создан IP-список %q (интерфейс и режим как у %q): +%d записей", res.List, strings.TrimSpace(args[0]), len(res.Added))
+	case res.List == "":
+		head = "IP-список не создан"
+	default:
+		head = fmt.Sprintf("IP-список %q: +%d записей, всего %d", res.List, len(res.Added), res.Total)
+	}
+	if len(res.Rejected) > 0 {
+		head += fmt.Sprintf(", отклонено %d:\n  %s", len(res.Rejected), strings.Join(res.Rejected, "\n  "))
+	}
+	if len(res.Added) == 0 {
+		return head, nil // nothing changed: no reason to save or touch the router
+	}
+	return h.applyRoutes(ctx, head)
 }

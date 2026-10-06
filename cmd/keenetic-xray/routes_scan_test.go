@@ -18,8 +18,9 @@ import (
 func fakeScan(t *testing.T, res *depscan.Result, err error) *[]string {
 	t.Helper()
 	var asked []string
-	oldFn, oldSOCKS := scanManyFn, netfetch.TunnelSOCKS
-	t.Cleanup(func() { scanManyFn, netfetch.TunnelSOCKS = oldFn, oldSOCKS })
+	oldFn, oldSOCKS, oldRanges := scanManyFn, netfetch.TunnelSOCKS, loadRussianRanges
+	t.Cleanup(func() { scanManyFn, netfetch.TunnelSOCKS, loadRussianRanges = oldFn, oldSOCKS, oldRanges })
+	loadRussianRanges = func() {} // the global table is not the test's to fill
 	netfetch.TunnelSOCKS = func() string { return "127.0.0.1:1" }
 	scanManyFn = func(_ context.Context, seeds []string, _ depscan.Options, _ depscan.ScanFunc) (*depscan.Result, error) {
 		asked = append(asked, seeds...)

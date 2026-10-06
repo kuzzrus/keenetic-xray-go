@@ -312,7 +312,11 @@ After a wizard add, the confirmation offers `🔎 Найти связанные 
 each host it names opened directly and through the tunnel -- and answers
 with depscan's TSV, which the bot parses back into a result screen:
 numbered tick buttons (`rst:<token>:<index>`, five to a row, ten hosts a
-page, `rsp:`), `rsm:` to show the "maybe" hosts, `rsa:` to add the ticked
+page, `rsp:`), `rsm:` to show the "maybe" hosts, `rsi:` to switch the
+addresses (IPs) on -- the scanned domains' own plus the ticked hosts', for
+apps that connect by address; they go with `routes_add_ip <list> <ips>`
+into the list's IP companion `<list>-ip`, created like its base
+(`config.AddCompanionIPs`) -- `rsa:` to add the ticked
 ones with the ordinary `routes_add`, `rsx:` to close. A button carries
 only an 8-hex token and an index (callback_data is 64 bytes); the result
 lives in the bot's memory per session (2 h, 40 sessions), so after a

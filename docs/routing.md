@@ -89,6 +89,7 @@ keenetic-xray routes disable youtube                  # keep the list, stop rout
 keenetic-xray routes show youtube                     # config vs what's live on the router
 keenetic-xray routes scan habr.com                    # which other hosts its page needs, and which of them need the tunnel
 keenetic-xray routes scan habr.com --add youtube      # ...and add the recommended ones to that list
+keenetic-xray routes scan voip.example.com --add calls --ip   # ...and the addresses to the list "calls-ip"
 keenetic-xray routes rm youtube
 ```
 
@@ -120,7 +121,10 @@ it is trusted:
 
 A host that opens directly is left out (routing it would only add
 traffic), unless it answers `403`/`451` directly and something else
-through the tunnel -- a regional refusal. A host an enabled list already
+through the tunnel -- a regional refusal. A direct attempt that is reset
+or refused is made once more a moment later: a block resets every time, a
+passing glitch does not, so one bad try is not taken for a block (a
+timeout is not retried -- it would cost the whole limit). A host an enabled list already
 covers, or one of your own lists on the router, is not probed.
 Subdomains of the scanned domain are not listed: its own entry covers
 them. Only *exact hosts* are ever suggested, never a whole CDN zone
@@ -135,6 +139,45 @@ is added without that tap. (`/routes <router> add …` has no such button:
 a slash command has no chat to attach it to.) The CLI form prints the
 same report and, with `--add <list>`, adds the recommended hosts to an
 existing list.
+
+### Addresses, for apps that connect by IP (calls)
+
+A domain entry catches everything that asks DNS for the name: the router
+sees the answer and routes the address. An app that sets up a call does
+not -- it connects to a media server's address it was handed over its own
+signalling, or remembered, or resolved with its own DoH; the router's DNS
+never sees the name, and only an *address* entry catches the connection.
+So the scan also reports the IPv4 addresses that the scanned domains and
+the hosts that need the tunnel resolve to (by the router's own resolver).
+They are offered separately and never added on their own: in the bot a
+`🔢 + IP` switch under the result (off by default), in the CLI `--ip`
+together with `--add`.
+
+They go to an **IP companion list**, `<list>-ip`, the same pairing the
+ready-made lists use (`youtube` + `youtube-ip`) and created like its base
+(interface, `exclusive`, disabled). It is a list of its own on purpose:
+call traffic is UDP, which a SOCKS-based `Proxy0` may not carry while a
+WireGuard or TUN interface does, so the companion can be rebound by
+itself (`routes set <list>-ip --iface=OpkgTun0`). If `<list>-ip` is a
+preset's, the entries go to `<list>-ips` instead -- a preset sync would
+rewrite the other one.
+
+Not offered, because adding it would do more harm than good: a private,
+reserved or sinkholed (`0.0.0.0`) address; a **Russian** address (a
+poisoned DNS answer is typically one, and Russian services must not leave
+through a foreign exit -- the daemon's range table, `georanges`); one of
+**Cloudflare's** published ranges (an anycast address serves thousands of
+unrelated sites, so a `/32` for it would route every one of them); and
+anything past 8 per name. The count left out is shown. The domain's own
+page does not have to open: for a name with no website at all (an app's
+host) the scan still returns its addresses.
+
+What this is not: the addresses a name resolves to are a snapshot --
+services change them, so the companion needs refreshing now and then --
+and they cover only what the name points at. The relay servers a call app
+is handed during the call are in the provider's address ranges, not behind
+the domain; for the few apps that publish them (Telegram) the ready-made
+`<name>-ip` lists carry those ranges.
 
 Limits, stated plainly: one page is read and no script is run, so a page
 that is an empty shell for a JavaScript app, or a bot-check page, shows

@@ -76,16 +76,26 @@ func (r *Result) Text() string {
 	var b strings.Builder
 	for _, p := range r.Pages {
 		fmt.Fprintf(&b, "🔎 %s", p.Seed)
-		if p.FinalHost != "" && p.FinalHost != p.Seed {
-			fmt.Fprintf(&b, " → %s", p.FinalHost)
+		if p.Status == 0 {
+			b.WriteString(": страница не прочитана")
+		} else {
+			if p.FinalHost != "" && p.FinalHost != p.Seed {
+				fmt.Fprintf(&b, " → %s", p.FinalHost)
+			}
+			fmt.Fprintf(&b, ": страница открылась через туннель (код %d)", p.Status)
 		}
-		fmt.Fprintf(&b, ": страница открылась через туннель (код %d)", p.Status)
 		if p.Direct.OK {
 			b.WriteString("; напрямую тоже открывается")
 		}
 		b.WriteByte('\n')
 		if p.Note != "" {
 			fmt.Fprintf(&b, "   ⚠️ %s\n", p.Note)
+		}
+		switch {
+		case len(p.SeedIPs) > 0:
+			fmt.Fprintf(&b, "   IP-адреса домена: %s%s\n", strings.Join(p.SeedIPs, ", "), droppedNote(p.SeedIPsDropped))
+		case p.SeedIPsDropped > 0:
+			fmt.Fprintf(&b, "   IP-адреса домена: подходящих нет%s\n", droppedNote(p.SeedIPsDropped))
 		}
 	}
 	groups := []struct {
@@ -120,7 +130,11 @@ func (r *Result) Text() string {
 			continue
 		}
 		for _, h := range hs {
-			fmt.Fprintf(&b, "  %s — %s\n", h.Name, h.Describe())
+			line := h.Describe()
+			if len(h.IPs) > 0 {
+				line += "; IP: " + strings.Join(h.IPs, ", ") + droppedNote(h.IPsDropped)
+			}
+			fmt.Fprintf(&b, "  %s — %s\n", h.Name, line)
 		}
 	}
 	if r.More > 0 {
@@ -167,4 +181,12 @@ func wrapNames(names []string, indent string, width int) string {
 		b.WriteString(line + "\n")
 	}
 	return b.String()
+}
+
+// droppedNote says how many addresses were left out, "" when none.
+func droppedNote(n int) string {
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (ещё %d отброшено: служебные, российские, Cloudflare или сверх лимита)", n)
 }

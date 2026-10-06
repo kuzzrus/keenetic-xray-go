@@ -272,6 +272,48 @@ func TestTunTransportIntact_IgnoresCarrier(t *testing.T) {
 	}
 }
 
+func TestReadTunCounts(t *testing.T) {
+	dir := tunDevices(t, "opkgtun1")
+	stats := filepath.Join(dir, "opkgtun1", "statistics")
+	if err := os.Mkdir(stats, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, v := range map[string]string{"tx_packets": "1500\n", "rx_packets": "1200\n", "tx_bytes": "2097152\n", "rx_bytes": "512\n"} {
+		if err := os.WriteFile(filepath.Join(stats, name), []byte(v), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c, ok := ReadTunCounts("opkgtun1")
+	if !ok || c.TxPackets != 1500 || c.RxPackets != 1200 || c.TxBytes != 2097152 || c.RxBytes != 512 {
+		t.Fatalf("ReadTunCounts = %+v, %v", c, ok)
+	}
+	want := "в туннель 2.0 МБ (1500 пакетов), из туннеля 512 Б (1200)"
+	if got := c.Summary(); got != want {
+		t.Errorf("Summary = %q, want %q", got, want)
+	}
+
+	// A device without counters, or a missing one, is not an error -- just no card.
+	if _, ok := ReadTunCounts("opkgtun9"); ok {
+		t.Error("ReadTunCounts of a missing device = ok")
+	}
+	if err := os.Remove(filepath.Join(stats, "rx_bytes")); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ReadTunCounts("opkgtun1"); ok {
+		t.Error("ReadTunCounts with a counter missing = ok")
+	}
+}
+
+func TestHumanBytes(t *testing.T) {
+	for n, want := range map[uint64]string{
+		0: "0 Б", 1023: "1023 Б", 1024: "1.0 КБ", 1536: "1.5 КБ", 1 << 20: "1.0 МБ", 5 << 30: "5.0 ГБ", 3 << 40: "3.0 ТБ", 3000 << 40: "3000.0 ТБ",
+	} {
+		if got := humanBytes(n); got != want {
+			t.Errorf("humanBytes(%d) = %q, want %q", n, got, want)
+		}
+	}
+}
+
 func TestShowTunTransport(t *testing.T) {
 	tunDevices(t, "opkgtun1")
 	fakeNdmc(t, map[string]string{"show running-config": tunRC})
@@ -282,11 +324,20 @@ func TestShowTunTransport(t *testing.T) {
 
 	rc := tunRC + "interface OpkgTun1\n    description " + TunIfaceMarker + "\n    up\n!\n"
 	fakeNdmc(t, map[string]string{"show running-config": rc, "show interface OpkgTun1": tunIfaceShow})
+	stats := filepath.Join(sysClassNet, "opkgtun1", "statistics")
+	if err := os.Mkdir(stats, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"tx_packets", "rx_packets", "tx_bytes", "rx_bytes"} {
+		if err := os.WriteFile(filepath.Join(stats, n), []byte("2048\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	got, err = ShowTunTransport(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"OpkgTun1", "opkgtun1: есть", "состояние: up", "несущая (xray держит устройство): есть", "172.31.254.2", "mtu: 1280"} {
+	for _, want := range []string{"OpkgTun1", "opkgtun1: есть", "состояние: up", "несущая (xray держит устройство): есть", "172.31.254.2", "mtu: 1280", "трафик устройства: в туннель 2.0 КБ (2048 пакетов)"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("ShowTunTransport output lacks %q:\n%s", want, got)
 		}

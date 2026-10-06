@@ -289,6 +289,38 @@ func TestRouterHandler_Status_TransportLines(t *testing.T) {
 	}
 }
 
+// The TUN transport's card: shown when it's on, silent when it's off, and
+// honest about what it can't see (no router in CI -> no carrier line, but
+// the interface name and the daemon's own view of the inbound are there).
+func TestRouterHandler_Status_TunCard(t *testing.T) {
+	d := newTestDaemon(t)
+	cfg := config.Default()
+	cfg.Profiles = []config.Profile{testProfile("primary", "a"), testProfile("backup", "b")}
+	cfg.PrimaryIndex, cfg.BackupIndex = 0, 1
+	h := &RouterHandler{Daemon: d, Config: cfg, OptPath: t.TempDir()}
+
+	out, err := h.Handle(context.Background(), Command{Action: ActionStatus})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "tun-транспорт") {
+		t.Errorf("a TUN line with the transport off:\n%s", out)
+	}
+
+	cfg.TunTransport = config.TunTransportConfig{Enabled: true}
+	if out, _ = h.Handle(context.Background(), Command{Action: ActionStatus}); !strings.Contains(out, "tun-транспорт: вкл, интерфейс ещё не создан") {
+		t.Errorf("enabled without an interface not reported:\n%s", out)
+	}
+
+	cfg.TunTransport.Iface = "OpkgTun3"
+	out, _ = h.Handle(context.Background(), Command{Action: ActionStatus})
+	for _, want := range []string{"tun-транспорт: вкл → OpkgTun3", "tun-inbound в xray: нет"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status lacks %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestRouterHandler_Doctor(t *testing.T) {
 	cfg := config.Default()
 	cfg.Profiles = []config.Profile{testProfile("primary", "a.example.com"), testProfile("backup", "b.example.com")}

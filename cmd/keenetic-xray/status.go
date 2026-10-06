@@ -78,6 +78,9 @@ func cmdStatus(args []string) error {
 	}
 	fmt.Printf("agent enabled: %v\n", cfg.Agent.Enabled)
 	fmt.Printf("proxy0: %v\n", cfg.Proxy0.Enabled)
+	if t := cfg.TunTransport; t.Enabled {
+		fmt.Printf("tun-transport: on (%s)\n", firstNonEmptyStr(t.Iface, "no interface yet"))
+	}
 	if line, err := xrayCoreVersion(); err != nil {
 		fmt.Printf("xray-core: not installed (%v)\n", err)
 	} else {
@@ -127,6 +130,7 @@ func cmdDoctor(args []string) error {
 		checkProxy0(cfg, check)
 	}
 	checkProxy0Health(cfg, check) // enabled or not -- see proxy0InUse
+	checkTunTransport(cfg, check)
 
 	if cfg.RCI.Enabled {
 		if _, _, err := rciProbe(cfg.RCI.BaseURL(), cfg.RCI.Token); err != nil {

@@ -159,6 +159,34 @@ func TestPrintTransport_TunLines(t *testing.T) {
 	}
 }
 
+func TestCmdStatus_TunLine(t *testing.T) {
+	cfgFile := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("KEENETIC_XRAY_CONFIG", cfgFile)
+	cfg := config.Default()
+	if err := cfg.Save(cfgFile); err != nil {
+		t.Fatal(err)
+	}
+	if out := captureStdout(t, func() { _ = cmdStatus(nil) }); strings.Contains(out, "tun-transport") {
+		t.Errorf("a tun-transport line with the transport off:\n%s", out)
+	}
+	cfg.TunTransport = config.TunTransportConfig{Enabled: true, Iface: "OpkgTun0"}
+	if err := cfg.Save(cfgFile); err != nil {
+		t.Fatal(err)
+	}
+	if out := captureStdout(t, func() { _ = cmdStatus(nil) }); !strings.Contains(out, "tun-transport: on (OpkgTun0)") {
+		t.Errorf("tun-transport line missing:\n%s", out)
+	}
+}
+
+// doctor's block says nothing off a router -- there is nothing to check.
+func TestCheckTunTransport_NoRouterIsSilent(t *testing.T) {
+	cfg := config.Default()
+	cfg.TunTransport = config.TunTransportConfig{Enabled: true, Iface: "OpkgTun0"}
+	checkTunTransport(cfg, func(ok bool, msg string) {
+		t.Errorf("checkTunTransport reported without a router: %v %q", ok, msg)
+	})
+}
+
 // The reconcile step must be a safe no-op without a router, whatever the
 // config asks for -- the same guard as TestReconcileSteps_NoRouterIsNoop.
 func TestReconcileTunTransport_NoRouterIsNoop(t *testing.T) {

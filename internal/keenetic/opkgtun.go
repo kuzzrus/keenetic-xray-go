@@ -250,6 +250,59 @@ func TunLinkState(ctx context.Context, iface string) (TunLink, error) {
 	}, nil
 }
 
+// TunCounts are the kernel's own counters for the OpkgTun device, seen from
+// the kernel's side of it: Tx is what the kernel handed to xray (LAN ->
+// tunnel), Rx is what xray handed back (tunnel -> LAN). They are the only
+// ground truth of whether traffic really goes through the interface -- the
+// exit IP is the same for every transport -- and they keep their values
+// while xray restarts (the device belongs to ndm).
+type TunCounts struct {
+	TxPackets, RxPackets uint64
+	TxBytes, RxBytes     uint64
+}
+
+// ReadTunCounts reads the counters of the kernel device dev; ok is false
+// when it does not exist or its counters can't be read.
+func ReadTunCounts(dev string) (c TunCounts, ok bool) {
+	if !TunDevicePresent(dev) {
+		return TunCounts{}, false
+	}
+	read := func(name string) (uint64, bool) {
+		b, err := os.ReadFile(filepath.Join(sysClassNet, dev, "statistics", name))
+		if err != nil {
+			return 0, false
+		}
+		n, err := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64)
+		return n, err == nil
+	}
+	var okAll [4]bool
+	c.TxPackets, okAll[0] = read("tx_packets")
+	c.RxPackets, okAll[1] = read("rx_packets")
+	c.TxBytes, okAll[2] = read("tx_bytes")
+	c.RxBytes, okAll[3] = read("rx_bytes")
+	return c, okAll[0] && okAll[1] && okAll[2] && okAll[3]
+}
+
+// Summary is the counters as one line for a human.
+func (c TunCounts) Summary() string {
+	return fmt.Sprintf("в туннель %s (%d пакетов), из туннеля %s (%d)",
+		humanBytes(c.TxBytes), c.TxPackets, humanBytes(c.RxBytes), c.RxPackets)
+}
+
+func humanBytes(n uint64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d Б", n)
+	}
+	units := []string{"КБ", "МБ", "ГБ", "ТБ"}
+	f, i := float64(n)/unit, 0
+	for f >= unit && i < len(units)-1 {
+		f /= unit
+		i++
+	}
+	return fmt.Sprintf("%.1f %s", f, units[i])
+}
+
 // TunTransportIntact is the cheap check the reconcile loop runs: our
 // interface is still in the running-config under our description, is not
 // administratively down, and its kernel device exists. Anything else needs
@@ -319,6 +372,9 @@ func ShowTunTransport(ctx context.Context, iface string) (string, error) {
 	}
 	if l.MTU != "" {
 		fmt.Fprintf(&b, "\nmtu: %s", l.MTU)
+	}
+	if c, ok := ReadTunCounts(dev); ok {
+		fmt.Fprintf(&b, "\nтрафик устройства: %s", c.Summary())
 	}
 	return b.String(), nil
 }

@@ -198,6 +198,9 @@ func renderFailoverEvent(fe failover.Event, leftPrimaryAt *time.Time) (Event, bo
 	if fe.Kind == failover.EventBackupRotated {
 		return Event{Kind: "backup_rotated", Time: fe.At, Text: "🔁 " + fe.Detail}, true
 	}
+	if fe.Kind == failover.EventTunSuspended {
+		return Event{Kind: "tun_suspended", Time: fe.At, Text: "⚠️ " + fe.Detail}, true
+	}
 	if fe.Kind != failover.EventFailover {
 		return Event{Kind: "unknown", Text: fe.From.String() + " → " + fe.To.String(), Time: fe.At}, true
 	}

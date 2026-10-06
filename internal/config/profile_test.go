@@ -405,18 +405,78 @@ func TestValidProxyIface(t *testing.T) {
 }
 
 func TestValidRouteIfaceAndWGIface(t *testing.T) {
-	for _, ok := range []string{"", "Proxy0", "Proxy7", "Wireguard0", "Wireguard4", "Wireguard42"} {
+	for _, ok := range []string{"", "Proxy0", "Proxy7", "Wireguard0", "Wireguard4", "Wireguard42", "OpkgTun0", "OpkgTun12"} {
 		if !ValidRouteIface(ok) {
 			t.Errorf("ValidRouteIface(%q) = false, want true", ok)
 		}
 	}
-	for _, bad := range []string{"wireguard0", "Wireguard", "WireGuard0", "eth0", "Proxy 0"} {
+	for _, bad := range []string{"wireguard0", "Wireguard", "WireGuard0", "eth0", "Proxy 0", "opkgtun0", "OpkgTun", "OpkgTun0 ", "Opkgtun0"} {
 		if ValidRouteIface(bad) {
 			t.Errorf("ValidRouteIface(%q) = true, want false", bad)
 		}
 	}
-	if ValidWGIface("") || ValidWGIface("Proxy0") || !ValidWGIface("Wireguard4") {
+	if ValidWGIface("") || ValidWGIface("Proxy0") || ValidWGIface("OpkgTun0") || !ValidWGIface("Wireguard4") {
 		t.Error("ValidWGIface: want only Wireguard<n>")
+	}
+	if ValidTunIface("") || ValidTunIface("Wireguard0") || ValidTunIface("opkgtun0") || ValidTunIface("OpkgTun") || !ValidTunIface("OpkgTun3") {
+		t.Error("ValidTunIface: want only OpkgTun<n>")
+	}
+}
+
+func TestTunTransportConfig_Defaults(t *testing.T) {
+	var c TunTransportConfig
+	if c.TunAddr() != DefaultTunAddr || c.TunMTU() != DefaultTunMTU {
+		t.Errorf("zero-value defaults = %s/%d", c.TunAddr(), c.TunMTU())
+	}
+	if c.DeviceName() != "" {
+		t.Errorf("DeviceName with no iface = %q, want empty", c.DeviceName())
+	}
+	c = TunTransportConfig{Iface: "OpkgTun2", Addr: "10.9.9.9", MTU: 1400}
+	if c.TunAddr() != "10.9.9.9" || c.TunMTU() != 1400 {
+		t.Errorf("explicit values not honored: %+v", c)
+	}
+	// ndm lowercases the whole name for the kernel device.
+	if got := c.DeviceName(); got != "opkgtun2" {
+		t.Errorf("DeviceName = %q, want opkgtun2", got)
+	}
+	// A hand-edited bad name must not become a device name.
+	if got := (TunTransportConfig{Iface: "eth0"}).DeviceName(); got != "" {
+		t.Errorf("DeviceName(eth0) = %q, want empty", got)
+	}
+}
+
+func TestConfigValidate_TunTransport(t *testing.T) {
+	c := Default()
+	c.TunTransport = TunTransportConfig{Enabled: true, Iface: "OpkgTun0", Addr: "172.31.254.2", MTU: 1280}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("valid TUN transport rejected: %v", err)
+	}
+	for _, mut := range []func(*TunTransportConfig){
+		func(c *TunTransportConfig) { c.Iface = "tun0" },
+		func(c *TunTransportConfig) { c.Iface = "Wireguard4" },
+		func(c *TunTransportConfig) { c.Addr = "not-an-ip" },
+		func(c *TunTransportConfig) { c.Addr = "fe80::1" },
+		func(c *TunTransportConfig) { c.MTU = 900 },
+		func(c *TunTransportConfig) { c.MTU = 9000 },
+	} {
+		cc := Default()
+		cc.TunTransport = c.TunTransport
+		mut(&cc.TunTransport)
+		if err := cc.Validate(); err == nil {
+			t.Errorf("mutated TUN transport passed Validate: %+v", cc.TunTransport)
+		}
+	}
+}
+
+// A config.json written before the feature existed has no tun_transport key
+// at all: it must load as off.
+func TestTunTransport_AbsentMeansOff(t *testing.T) {
+	var c Config
+	if err := json.Unmarshal([]byte(`{"wg_transport":{"enabled":false}}`), &c); err != nil {
+		t.Fatal(err)
+	}
+	if c.TunTransport.Enabled || c.TunTransport.Iface != "" {
+		t.Errorf("absent tun_transport = %+v, want zero", c.TunTransport)
 	}
 }
 

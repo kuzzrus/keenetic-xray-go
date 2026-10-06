@@ -146,6 +146,19 @@ func TestRenderFailoverEvent_BackupRotated(t *testing.T) {
 	}
 }
 
+func TestRenderFailoverEvent_TunSuspended(t *testing.T) {
+	var leftPrimaryAt time.Time
+	ev, fwd := renderFailoverEvent(failover.Event{
+		Kind: failover.EventTunSuspended, At: time.Now(), Detail: "xray падал 3 раза подряд сразу после добавления TUN-inbound — снял его",
+	}, &leftPrimaryAt)
+	if !fwd || ev.Kind != "tun_suspended" {
+		t.Fatalf("render = %+v, fwd=%v", ev, fwd)
+	}
+	if !strings.Contains(ev.Text, "TUN-inbound") {
+		t.Errorf("text = %q, want it to carry the detail verbatim", ev.Text)
+	}
+}
+
 func TestFailoverEvents_RendersAndCloses(t *testing.T) {
 	in := make(chan failover.Event, 4)
 	ctx, cancel := context.WithCancel(context.Background())

@@ -275,6 +275,12 @@ func cmdDaemon(args []string) (err error) {
 		func() { applyMSSClamp(cfg, logf) },
 		func() { applyDNSAtStartup(cfg, logf) },
 		func() { applyAdaptiveRouteAtStartup(cfg, logf) },
+		// Not before xray: nothing here changes what the production
+		// config is generated from (no key to re-read, unlike WG), and
+		// once the OpkgTun device exists the first config already
+		// carries the tun inbound. If it was missing, this is what
+		// creates it and then gets the inbound into the running xray.
+		func() { reconcileTunTransport(ctx, d, cfg, logf) },
 	} {
 		startupWG.Add(1)
 		go func(f func()) {
@@ -283,7 +289,7 @@ func cmdDaemon(args []string) (err error) {
 		}(fn)
 	}
 	startupWG.Wait()
-	logf("startup: reconciled wg-transport, then proxy0/routes/mss/dns/adaptive-route alongside xray, in %s", time.Since(startupBegin).Round(time.Millisecond))
+	logf("startup: reconciled wg-transport, then proxy0/routes/mss/dns/adaptive-route/tun-transport alongside xray, in %s", time.Since(startupBegin).Round(time.Millisecond))
 	// Synchronous, bounded, and deliberately AFTER the group above rather
 	// than folded into it: see georangesBootstrap's own doc comment for
 	// why ClrFast/ClrSoft's ExcludedRangeLookup veto must never race its

@@ -64,12 +64,14 @@ func cmdTransport(args []string) error {
 		return nil
 	case "wg":
 		return transportWG(cfg, args[1:])
+	case "tun":
+		return transportTun(cfg, args[1:])
 	case "adaptive":
 		return transportAdaptive(cfg, args[1:])
 	case "l7sni":
 		return transportL7SNI(cfg, args[1:])
 	default:
-		return fmt.Errorf("usage: keenetic-xray transport {show|mode <mode>|mode-clear|mss <1200..1452|auto|off>|wg {show|on|off}|adaptive {show|on|off|flush}|l7sni {show|on|off}}")
+		return fmt.Errorf("usage: keenetic-xray transport {show|mode <mode>|mode-clear|mss <1200..1452|auto|off>|wg {show|on|off}|tun {show|on|off}|adaptive {show|on|off|flush}|l7sni {show|on|off}}")
 	}
 
 	if err := cfg.Save(configPath()); err != nil {
@@ -100,6 +102,12 @@ func printTransport(cfg *config.Config) {
 		fmt.Printf("WG-транспорт: вкл (%s) — ключи ещё не согласованы\n", firstNonEmptyStr(w.Iface, "интерфейс не выбран"))
 	default:
 		fmt.Printf("WG-транспорт: вкл — %s, xray-inbound :%d, MTU %d\n", w.Iface, w.WGPort(), w.WGMTU())
+	}
+
+	if t := cfg.TunTransport; t.Enabled {
+		fmt.Printf("TUN-транспорт: вкл — %s, MTU %d, без своего порта (xray держит устройство)\n", firstNonEmptyStr(t.Iface, "интерфейс не выбран"), t.TunMTU())
+	} else {
+		fmt.Println("TUN-транспорт: выкл")
 	}
 
 	if cfg.AdaptiveRoute.Enabled {

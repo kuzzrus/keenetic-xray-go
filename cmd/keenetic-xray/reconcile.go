@@ -72,6 +72,7 @@ func reconcileOnce(ctx context.Context, d *failover.Daemon, logf func(string, ..
 	reconcileInboundBind(ctx, d, cfg, logf)
 	applyRoutesAtStartup(cfg, logf) // already drift-based and quiet-when-clean
 	reconcileWGTransport(ctx, d, cfg, logf)
+	reconcileTunTransport(ctx, d, cfg, logf)
 	reconcileDNS(ctx, cfg, logf)
 	reconcileSusanin(ctx, logf)
 	reconcileWatchdog(logf)
@@ -229,6 +230,27 @@ func reconcileWGTransport(ctx context.Context, d *failover.Daemon, cfg *config.C
 	applyWGTransportAtStartup(cfg, logf)
 	if cfg.WGTransport.KeeneticPublicKey != prevKey {
 		pushRekeyedWGConfig(ctx, d, cfg, logf)
+	}
+}
+
+// reconcileTunTransport keeps the OpkgTun transport whole: the interface
+// back when ndm lost it (a firmware event, an interface flap), and the tun
+// inbound in step with the kernel device -- the device may have appeared
+// after xray started (boot order, the interface just re-created), or gone
+// from under it. The healthy path is two ndmc reads, a stat, and one
+// round-trip to the daemon that does nothing.
+//
+// Unlike reconcileWGTransport there is no key to re-read, so nothing is
+// written to config.json here.
+func reconcileTunTransport(ctx context.Context, d *failover.Daemon, cfg *config.Config, logf func(string, ...any)) {
+	if !cfg.TunTransport.Enabled || cfg.TunTransport.Iface == "" || !keenetic.Available() {
+		return
+	}
+	cctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	ensureTunTransport(cctx, cfg, logf)
+	cancel()
+	if d != nil && d.RefreshTunInbound(ctx) {
+		logf("tun-transport: xray restarted to match the OpkgTun device (tun inbound live: %v)", d.TunInboundLive())
 	}
 }
 

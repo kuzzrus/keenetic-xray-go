@@ -3,6 +3,7 @@ package botcontrol
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -11,11 +12,13 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 	"github.com/kuzzrus/keenetic-xray-go/internal/failover"
+	"github.com/kuzzrus/keenetic-xray-go/internal/tungate"
 	"github.com/kuzzrus/keenetic-xray-go/internal/xraycore"
 )
 
@@ -318,6 +321,52 @@ func TestRouterHandler_Status_TunCard(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("status lacks %q:\n%s", want, out)
 		}
+	}
+}
+
+// The gate's state shows on the TUN card: open says so, closed says since
+// when and that traffic is going straight to the ISP.
+func TestRouterHandler_Status_TunGateLine(t *testing.T) {
+	d := newTestDaemon(t)
+	cfg := config.Default()
+	cfg.Profiles = []config.Profile{testProfile("primary", "a"), testProfile("backup", "b")}
+	cfg.PrimaryIndex, cfg.BackupIndex = 0, 1
+	cfg.TunTransport = config.TunTransportConfig{Enabled: true, Iface: "OpkgTun3"}
+
+	var dead atomic.Bool
+	gate := &tungate.Gate{
+		Probe: func(context.Context) error {
+			if dead.Load() {
+				return errors.New("таймаут")
+			}
+			return nil
+		},
+		Set: func(context.Context, bool) error { return nil },
+	}
+	h := &RouterHandler{Daemon: d, Config: cfg, OptPath: t.TempDir(), TunGate: gate}
+
+	gate.Step(context.Background())
+	out, _ := h.Handle(context.Background(), Command{Action: ActionStatus})
+	if !strings.Contains(out, "ворота: открыты") {
+		t.Errorf("open gate not shown:\n%s", out)
+	}
+
+	dead.Store(true)
+	for i := 0; i < 3; i++ {
+		gate.Step(context.Background())
+	}
+	out, _ = h.Handle(context.Background(), Command{Action: ActionStatus})
+	for _, want := range []string{"ворота: ЗАКРЫТЫ", "напрямую", "таймаут"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("closed gate: status lacks %q:\n%s", want, out)
+		}
+	}
+
+	// No gate (CLI-only run): the line is simply absent.
+	h.TunGate = nil
+	out, _ = h.Handle(context.Background(), Command{Action: ActionStatus})
+	if strings.Contains(out, "ворота") {
+		t.Errorf("a gate line without a gate:\n%s", out)
 	}
 }
 

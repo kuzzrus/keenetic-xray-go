@@ -201,6 +201,13 @@ func renderFailoverEvent(fe failover.Event, leftPrimaryAt *time.Time) (Event, bo
 	if fe.Kind == failover.EventTunSuspended {
 		return Event{Kind: "tun_suspended", Time: fe.At, Text: "⚠️ " + fe.Detail}, true
 	}
+	if fe.Kind == failover.EventTunGateClosed {
+		return Event{Kind: "tun_gate_closed", Time: fe.At, Text: "🚧 TUN-транспорт закрыт: " + fe.Detail +
+			" — трафик по спискам идёт напрямую, пока туннель не вернётся"}, true
+	}
+	if fe.Kind == failover.EventTunGateOpened {
+		return Event{Kind: "tun_gate_opened", Time: fe.At, Text: "✅ TUN-транспорт открыт: " + fe.Detail}, true
+	}
 	if fe.Kind != failover.EventFailover {
 		return Event{Kind: "unknown", Text: fe.From.String() + " → " + fe.To.String(), Time: fe.At}, true
 	}

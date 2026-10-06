@@ -159,6 +159,22 @@ func TestRenderFailoverEvent_TunSuspended(t *testing.T) {
 	}
 }
 
+func TestRenderFailoverEvent_TunGate(t *testing.T) {
+	var leftPrimaryAt time.Time
+	closed, fwd := renderFailoverEvent(failover.Event{
+		Kind: failover.EventTunGateClosed, At: time.Now(), Detail: "туннель не отвечает (3 проверок подряд: таймаут)",
+	}, &leftPrimaryAt)
+	if !fwd || closed.Kind != "tun_gate_closed" || !strings.Contains(closed.Text, "таймаут") || !strings.Contains(closed.Text, "напрямую") {
+		t.Fatalf("closed render = %+v, fwd=%v", closed, fwd)
+	}
+	opened, fwd := renderFailoverEvent(failover.Event{
+		Kind: failover.EventTunGateOpened, At: time.Now(), Detail: "туннель снова отвечает",
+	}, &leftPrimaryAt)
+	if !fwd || opened.Kind != "tun_gate_opened" || !strings.Contains(opened.Text, "снова отвечает") {
+		t.Fatalf("opened render = %+v, fwd=%v", opened, fwd)
+	}
+}
+
 func TestFailoverEvents_RendersAndCloses(t *testing.T) {
 	in := make(chan failover.Event, 4)
 	ctx, cancel := context.WithCancel(context.Background())

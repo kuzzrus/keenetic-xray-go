@@ -291,6 +291,53 @@ func TestTunTransportIntact(t *testing.T) {
 	}
 }
 
+// While the gate holds the interface down on purpose, "administratively
+// down" is not drift: Present ignores it, Intact does not.
+func TestTunTransportPresent_IgnoresAdminState(t *testing.T) {
+	tunDevices(t, "opkgtun1")
+	down := strings.Replace(tunIfaceShow, "state: up", "state: down", 1)
+	rc := tunRC + "interface OpkgTun1\n    description " + TunIfaceMarker + "\n    up\n!\n"
+	fakeNdmc(t, map[string]string{"show running-config": rc, "show interface OpkgTun1": down})
+	if ok, why, err := TunTransportIntact(context.Background(), "OpkgTun1"); err != nil || ok || !strings.Contains(why, "administratively down") {
+		t.Errorf("Intact on a down interface = (%v, %q, %v)", ok, why, err)
+	}
+	if ok, why, err := TunTransportPresent(context.Background(), "OpkgTun1"); err != nil || !ok {
+		t.Errorf("Present on a down interface = (%v, %q, %v), want present", ok, why, err)
+	}
+	// Everything else still counts for Present.
+	tunDevices(t) // no device
+	if ok, why, _ := TunTransportPresent(context.Background(), "OpkgTun1"); ok || !strings.Contains(why, "opkgtun1 is missing") {
+		t.Errorf("Present without a device = (%v, %q)", ok, why)
+	}
+}
+
+func TestSetTunAdmin(t *testing.T) {
+	sent := fakeNdmc(t, map[string]string{})
+	if err := SetTunAdmin(context.Background(), "OpkgTun1", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetTunAdmin(context.Background(), "OpkgTun1", true); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(*sent, "|"); got != "interface OpkgTun1 down|interface OpkgTun1 up" {
+		t.Errorf("sent %q", got)
+	}
+	// Not saved: a runtime state.
+	for _, s := range *sent {
+		if strings.Contains(s, "save") {
+			t.Errorf("the gate's lever saved the configuration: %q", s)
+		}
+	}
+	for _, bad := range []string{"", "Wireguard0", "opkgtun1", "OpkgTun"} {
+		if err := SetTunAdmin(context.Background(), bad, true); err == nil {
+			t.Errorf("SetTunAdmin(%q) = nil, want an error", bad)
+		}
+	}
+	if len(*sent) != 2 {
+		t.Errorf("a bad name reached ndmc: %v", *sent)
+	}
+}
+
 // Carrier is not part of "intact": it comes and goes with xray, and the
 // reconcile loop must not rebuild the interface every time xray restarts.
 func TestTunTransportIntact_IgnoresCarrier(t *testing.T) {

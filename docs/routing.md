@@ -225,6 +225,18 @@ this needs nothing. `interface OpkgTunN down` / `up` is an instant kill
 switch on top of that (route withdrawn in under a second, back in about two,
 with xray running throughout).
 
+Carrier only tells that xray is *running*, not that the tunnel *works*: with
+the VLESS server down or blocked, xray still holds the device and everything
+routed into the interface goes nowhere. So the daemon runs a **gate**
+(`internal/tungate`): every 5 seconds it checks the live tunnel through
+xray's SOCKS inbound (the same health-check URLs as the failover, not
+through the TUN, so it keeps working while the gate is closed); three
+failed checks in a row close the interface (`interface OpkgTunN down`),
+the first success opens it again. A routine xray restart fits inside the
+three checks and never trips it. The bot is told when it closes and opens,
+`status` / `doctor` show it, and the reconcile loop does not "repair" an
+interface the gate holds down on purpose.
+
 - **Ownership.** The tool picks the lowest free `OpkgTunN` and marks it
   `description keenetic-xray-tun`; only an interface carrying that mark is
   ever read, changed or removed, so someone else's `OpkgTun0` (the
@@ -257,4 +269,4 @@ with xray running throughout).
 
 Status: the router-side behaviour above is verified on hardware. Forwarded
 LAN traffic through it (NAT, DNS routes, UDP) is still being verified, so
-it has no setup-wizard entry or bot screen yet.
+it has no setup-wizard entry yet.

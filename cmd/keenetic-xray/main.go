@@ -232,6 +232,8 @@ func cmdDaemon(args []string) (err error) {
 	}
 	presets.SetOverlay(presetsOverlayDir())
 	netfetch.Logf = logf // which way a download got through, in daemon.log with the rest
+	// Before anything that reads it (the reconcile steps below, the bot).
+	tunGate = newTunGate(d, logf)
 	if cfg.RCI.Enabled {
 		if url, err := keenetic.UseRCI(cfg.RCI.BaseURL(), cfg.RCI.Token); err != nil {
 			logf("rci: %v — читаю конфиг через ndmc", err)
@@ -306,6 +308,7 @@ func cmdDaemon(args []string) (err error) {
 		presetDrift = make(chan botcontrol.Event, 1)
 	}
 	go routerReconcileLoop(ctx, d, logf)
+	go tunGate.Run(ctx)
 	go presetRefreshLoop(ctx, logf, presetDrift)
 	go knownRangesRefreshLoop(ctx, logf)
 	go georangesRefreshLoop(ctx, logf, georangesFetched)
@@ -420,6 +423,7 @@ func startAgent(ctx context.Context, cfg *config.Config, d *failover.Daemon, log
 		SelfUpdateLock:         selfUpdateLockPath(),
 		SelfUpdateEvents:       selfUpdateFail,
 		AdaptiveRouteStatePath: adaptiveRouteStatePath(),
+		TunGate:                tunGate,
 	}
 	opts.StatusFunc = func(ctx context.Context) string {
 		out, _ := handler.Handle(ctx, botcontrol.Command{Action: botcontrol.ActionStatus})

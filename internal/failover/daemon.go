@@ -588,6 +588,11 @@ const (
 	// (see tun.go) and the proxy runs without the TUN transport. Detail
 	// carries a ready Russian description.
 	EventTunSuspended
+	// EventTunGateClosed / EventTunGateOpened: the TUN gate (internal/tungate)
+	// closed the OpkgTun interface because the tunnel stopped answering, or
+	// opened it again. Detail is the reason in Russian. Sent through Notify.
+	EventTunGateClosed
+	EventTunGateOpened
 )
 
 // Event is a noteworthy daemon occurrence, for out-of-band notification
@@ -730,6 +735,15 @@ func (d *Daemon) emit(ev Event) {
 	case d.events <- ev:
 	default:
 	}
+}
+
+// Notify puts an event from outside this package (the TUN gate) on the same
+// stream as the daemon's own. Non-blocking, like every other emit.
+func (d *Daemon) Notify(ev Event) {
+	if ev.At.IsZero() {
+		ev.At = time.Now()
+	}
+	d.emit(ev)
 }
 
 // Events is a stream of noteworthy daemon occurrences for out-of-band

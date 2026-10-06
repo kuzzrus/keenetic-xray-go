@@ -247,6 +247,39 @@ func waitForEvent(t *testing.T, d *Daemon, kind EventKind) {
 	}
 }
 
+// The TUN gate lives outside this package and reports through Notify onto
+// the same stream the bot reads.
+func TestDaemon_Notify(t *testing.T) {
+	d := NewDaemon(inboundTestPaths(t), tunTestConfig())
+	before := time.Now()
+	d.Notify(Event{Kind: EventTunGateClosed, Detail: "туннель не отвечает"})
+	select {
+	case ev := <-d.Events():
+		if ev.Kind != EventTunGateClosed || ev.Detail != "туннель не отвечает" {
+			t.Errorf("event = %+v", ev)
+		}
+		if ev.At.Before(before) {
+			t.Errorf("event At = %v, want it stamped now", ev.At)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Notify put nothing on Events()")
+	}
+
+	// Never blocks, even with nobody reading: a full buffer drops events.
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < 4*eventBuffer; i++ {
+			d.Notify(Event{Kind: EventTunGateOpened})
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Notify blocked on a full events buffer")
+	}
+}
+
 // Crashes that have nothing to do with the inbound -- a config without it,
 // or ones long after the write -- never count.
 func TestNoteTunCrash_Ignores(t *testing.T) {

@@ -169,13 +169,34 @@ this is a same-identity connection-detail change, not a new
 registration.
 
 Let's Encrypt's HTTP-01 challenge always dials port 80, independent of
-`listen_addr` -- `run()` in `main.go` opens a second, plain-HTTP
-listener on `:80` only when `domain` is set, serving
-`autocert.Manager.HTTPHandler(nil)`. That means the VPS's firewall /
-cloud security group needs port 80 reachable from the internet whenever
-a domain is configured (in addition to `listen_addr`, 8443 by default);
-the packaged systemd unit grants `CAP_NET_BIND_SERVICE` via
-`AmbientCapabilities` so the unprivileged service user can bind it.
+`listen_addr`, but the server does not hold that port: `acmeGate`
+(`acmegate.go`) binds `:80` only while the server is itself talking to
+the ACME CA, and closes it after `acmeIdle` (three minutes) without a
+request. autocert asks the CA at moments it alone decides -- the first
+TLS handshake for the domain, then its own renewal timer about 30 days
+before expiry, then retries every half hour after a failure -- and has
+no hook for "about to need the port". All of that is requests from one
+`*acme.Client`, though, so the gate is that client's HTTP transport
+(`Manager.Client`, set by `attachACMEGate`): the first request opens the
+port, and it stays open through the quiet stretches inside one issuance,
+when the CA validates while the client merely polls. With a valid
+certificate in the cache the CA is not contacted and the port is shut.
+While open it serves only ACME tokens (`HTTPHandler` with a 404
+fallback -- the library's default redirects to port 443, where this
+server does not listen); `journalctl -u keenetic-xray-control-server`
+shows every window (`acme: :80 opened …`, `acme: :80 closed`). If the
+port can't be bound (something else holds it, or `CAP_NET_BIND_SERVICE`
+is missing) the request to the CA fails at once and the reason is
+logged -- autocert logs nothing itself, and a renewal failing silently
+would let the certificate lapse.
+
+The VPS's firewall / cloud security group still has to let port 80 in
+from the internet (in addition to `listen_addr`, 8443 by default): the
+port is closed on the host most of the time, but the CA has to reach it
+during a window. The packaged systemd unit grants `CAP_NET_BIND_SERVICE`
+via `AmbientCapabilities` so the unprivileged service user can bind it.
+TLS-ALPN-01 (validation on port 443 instead of 80) is no alternative
+when something else owns 443 on the VPS.
 `autocert_cache_dir` (default `/var/lib/keenetic-xray-control-server/autocert-cache`)
 persists the issued certificate and ACME account across restarts --
 without it, a restart would re-issue, and Let's Encrypt rate-limits how

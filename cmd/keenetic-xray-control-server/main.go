@@ -83,6 +83,15 @@ func run(args []string) error {
 
 	logger := log.New(os.Stderr, "", log.LstdFlags)
 
+	// Let's Encrypt's HTTP-01 check always dials :80, whatever
+	// cfg.ListenAddr is -- but only while we are asking it for a
+	// certificate, so the port is bound just then (see acmeGate), not for
+	// the life of the process.
+	if acmeMgr != nil {
+		gate := attachACMEGate(acmeMgr, ":80", logger.Printf)
+		defer gate.Close()
+	}
+
 	allowedChats := make(map[int64]bool, len(cfg.AllowedChatIDs))
 	for _, id := range cfg.AllowedChatIDs {
 		allowedChats[id] = true
@@ -141,17 +150,7 @@ func run(args []string) error {
 	}).Run(ctx)
 
 	if acmeMgr != nil {
-		// Let's Encrypt's HTTP-01 challenge always dials :80, regardless
-		// of cfg.ListenAddr -- a second, plain-HTTP listener just for
-		// that, with timeouts and shut down with ctx (acmeChallengeServer).
-		// Only logged if it fails outright (most likely cause: nothing
-		// granted CAP_NET_BIND_SERVICE for :80).
-		go func() {
-			if err := serveUntil(ctx, acmeChallengeServer(":80", acmeMgr.HTTPHandler(nil))); err != nil && ctx.Err() == nil {
-				logger.Printf("acme: :80 challenge listener failed (Let's Encrypt can't reach it to issue/renew for %s): %v", cfg.Domain, err)
-			}
-		}()
-		logger.Printf("listening on %s and :80 (domain %s, ACME cert + fingerprint %s fallback, %d router(s) registered)",
+		logger.Printf("listening on %s (domain %s, ACME cert + fingerprint %s fallback, %d router(s) registered; :80 opens only while the certificate is being issued or renewed)",
 			cfg.ListenAddr, cfg.Domain, fingerprint, len(store.Routers()))
 	} else {
 		logger.Printf("listening on %s (fingerprint %s, %d router(s) registered)", cfg.ListenAddr, fingerprint, len(store.Routers()))

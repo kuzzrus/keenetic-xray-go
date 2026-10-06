@@ -174,7 +174,7 @@ func editPublicAddress(in *bufio.Reader, out io.Writer, s *settings, configPath 
 		return false
 	}
 	if s.Domain != "" {
-		fmt.Fprintf(out, "  публичный адрес: %s (домен %s -- сертификат получится сам через Let's Encrypt при следующем запуске сервиса; нужен открытый порт 80)\n", s.PublicURL, s.Domain)
+		fmt.Fprintf(out, "  публичный адрес: %s (домен %s -- сертификат получится сам через Let's Encrypt при следующем запуске сервиса; порт 80 у VPS должен быть открыт для входящих -- сервер занимает его сам, только на время выпуска и продления)\n", s.PublicURL, s.Domain)
 	} else {
 		fmt.Fprintf(out, "  публичный адрес: %s (без домена)\n", orDash(s.PublicURL))
 	}

@@ -15,7 +15,6 @@ package main
 // particular way.
 
 import (
-	"context"
 	"crypto/tls"
 	"net/http"
 	"strings"
@@ -76,9 +75,9 @@ func normalizeDomain(d string) string {
 	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(d), "."))
 }
 
-// acmeChallengeServer is the plain-HTTP :80 listener Let's Encrypt's
-// HTTP-01 challenge dials. It faces the internet just like the TLS
-// listener, so it gets the same bounded timeouts
+// acmeChallengeServer is the plain-HTTP :80 server Let's Encrypt's HTTP-01
+// challenge dials (opened on demand, see acmeGate). It faces the internet
+// just like the TLS listener, so it gets the same bounded timeouts
 // (botcontrol.ListenAndServeTLSDynamic). The bare http.ListenAndServe it
 // replaces had none, so any client could hold a connection open for as
 // long as it liked (2026-09-27 external review, R-1).
@@ -90,22 +89,5 @@ func acmeChallengeServer(addr string, h http.Handler) *http.Server {
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       60 * time.Second,
-	}
-}
-
-// serveUntil runs srv until ctx ends, then shuts it down gracefully.
-// Returns srv's own error only if it stopped by itself (a port it can't
-// bind, most likely).
-func serveUntil(ctx context.Context, srv *http.Server) error {
-	errCh := make(chan error, 1) // buffered: the goroutine must never block on a send nobody reads
-	go func() { errCh <- srv.ListenAndServe() }()
-	select {
-	case err := <-errCh:
-		return err
-	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
-		return nil
 	}
 }

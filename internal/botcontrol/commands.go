@@ -21,6 +21,7 @@ import (
 	"github.com/kuzzrus/keenetic-xray-go/internal/keenetic"
 	"github.com/kuzzrus/keenetic-xray-go/internal/selfupdate"
 	"github.com/kuzzrus/keenetic-xray-go/internal/subscription"
+	"github.com/kuzzrus/keenetic-xray-go/internal/tungate"
 	"github.com/kuzzrus/keenetic-xray-go/internal/version"
 	"github.com/kuzzrus/keenetic-xray-go/internal/xraycore"
 	"github.com/kuzzrus/keenetic-xray-go/internal/xrayctl"
@@ -76,6 +77,11 @@ type RouterHandler struct {
 	// cmdDaemon from the same path helpers the CLI uses.
 	XrayBinary string
 	OptPath    string
+
+	// TunGate is the daemon's TUN gate (internal/tungate), for the status
+	// and doctor lines: whether it is holding the interface closed because
+	// the tunnel stopped answering. nil -> those lines are skipped.
+	TunGate *tungate.Gate
 
 	// ensureCoreFn is the xray-core installer, injectable so tests don't
 	// need a real binary to smoke-test. nil -> xraycore.Ensure.
@@ -497,10 +503,30 @@ func (h *RouterHandler) tunStatus(ctx context.Context) string {
 			b.WriteString(" · tun-inbound в xray: нет ⚠️")
 		}
 	}
+	if line := h.tunGateLine(); line != "" {
+		b.WriteString("\n  " + line)
+	}
 	if c, ok := keenetic.ReadTunCounts(t.DeviceName()); ok {
 		b.WriteString("\n  трафик устройства: " + c.Summary())
 	}
 	return b.String()
+}
+
+// tunGateLine says whether the TUN gate is holding the interface closed.
+// "" when there is no gate, or it is open and has nothing to report.
+func (h *RouterHandler) tunGateLine() string {
+	if h.TunGate == nil {
+		return ""
+	}
+	closed, since, why := h.TunGate.State()
+	if !closed {
+		return "ворота: открыты (туннель отвечает)"
+	}
+	line := fmt.Sprintf("ворота: ЗАКРЫТЫ %s назад ⚠️ — туннель не отвечает, трафик по спискам идёт напрямую", shortDur(time.Since(since)))
+	if why != "" {
+		line += " (" + why + ")"
+	}
+	return line
 }
 
 // doctorTun is doctor's block for the TUN transport.
@@ -510,7 +536,13 @@ func (h *RouterHandler) doctorTun(ctx context.Context, check func(bool, string))
 		check(false, "TUN-транспорт включён, но интерфейс не создан — transport tun on")
 		return
 	}
-	ok, why, err := keenetic.TunTransportIntact(ctx, t.Iface)
+	// While the gate holds the interface down on purpose, being down is not
+	// a fault; everything else still is.
+	intact := keenetic.TunTransportIntact
+	if h.TunGate != nil && h.TunGate.Closed() {
+		intact = keenetic.TunTransportPresent
+	}
+	ok, why, err := intact(ctx, t.Iface)
 	switch {
 	case err != nil:
 		check(false, "TUN-транспорт "+t.Iface+": не прочитан: "+err.Error())
@@ -520,6 +552,13 @@ func (h *RouterHandler) doctorTun(ctx context.Context, check func(bool, string))
 		return
 	}
 	check(true, "TUN-транспорт "+t.Iface+" на месте")
+	if h.TunGate != nil {
+		if closed, _, why := h.TunGate.State(); closed {
+			check(false, "ворота TUN закрыты: "+why+" — трафик по спискам идёт напрямую, пока туннель не ответит")
+		} else {
+			check(true, "ворота TUN открыты (туннель отвечает на проверки)")
+		}
+	}
 	if l, err := keenetic.TunLinkState(ctx, t.Iface); err == nil {
 		check(l.CarrierUp(), "xray держит устройство "+t.DeviceName()+" (иначе трафик по спискам идёт напрямую)")
 	}

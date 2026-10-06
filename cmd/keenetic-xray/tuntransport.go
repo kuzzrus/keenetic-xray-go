@@ -202,7 +202,13 @@ func tunSpec(cfg *config.Config) keenetic.TunTransportSpec {
 // `show interface` read.
 func ensureTunTransport(ctx context.Context, cfg *config.Config, logf func(string, ...any)) {
 	iface := cfg.TunTransport.Iface
-	ok, why, err := keenetic.TunTransportIntact(ctx, iface)
+	// While the gate holds the interface down on purpose, being down is not
+	// drift and must not be "repaired" -- that would reopen a closed gate.
+	check := keenetic.TunTransportIntact
+	if tunGate != nil && tunGate.Closed() {
+		check = keenetic.TunTransportPresent
+	}
+	ok, why, err := check(ctx, iface)
 	if err != nil {
 		logf("tun-transport: could not read %s: %v", iface, err)
 		return

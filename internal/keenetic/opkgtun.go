@@ -338,6 +338,40 @@ func humanBytes(n uint64) string {
 // a mismatch in how this firmware prints them must never turn into a flash
 // write on every tick.
 func TunTransportIntact(ctx context.Context, iface string) (ok bool, why string, err error) {
+	return tunIntact(ctx, iface, true)
+}
+
+// TunTransportPresent is TunTransportIntact without the administrative
+// state: the interface is ours, in the running-config, and has its device.
+// What the reconcile loop asks while the gate (internal/tungate) is holding
+// the interface down on purpose -- being down is then not drift.
+func TunTransportPresent(ctx context.Context, iface string) (ok bool, why string, err error) {
+	return tunIntact(ctx, iface, false)
+}
+
+// SetTunAdmin brings the interface administratively up or down -- the
+// gate's lever (`interface OpkgTunN down` withdraws the routes through it
+// at once, `up` brings them back in about two seconds; xray keeps running
+// throughout, verified on KeeneticOS 5.1). Not saved: it is a runtime
+// state, and a reboot starts open.
+func SetTunAdmin(ctx context.Context, iface string, up bool) error {
+	if !Available() {
+		return errNoNdmc
+	}
+	if !tunIfaceNameOK(iface) {
+		return fmt.Errorf("bad OpkgTun interface name %q", iface)
+	}
+	cmd := "interface " + iface + " down"
+	if up {
+		cmd = "interface " + iface + " up"
+	}
+	if _, err := ndmcRun(ctx, cmd); err != nil {
+		return fmt.Errorf("ndmc %q: %w", cmd, err)
+	}
+	return nil
+}
+
+func tunIntact(ctx context.Context, iface string, adminMatters bool) (ok bool, why string, err error) {
 	if !Available() {
 		return false, "", errNoNdmc
 	}
@@ -357,7 +391,7 @@ func TunTransportIntact(ctx context.Context, iface string) (ok bool, why string,
 		return false, "", err
 	}
 	switch {
-	case link.State == "down":
+	case adminMatters && link.State == "down":
 		return false, "the interface is administratively down", nil
 	case !TunDevicePresent(TunDeviceName(iface)):
 		return false, "the kernel device " + TunDeviceName(iface) + " is missing", nil

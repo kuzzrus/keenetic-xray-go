@@ -176,8 +176,10 @@ What this is not: the addresses a name resolves to are a snapshot --
 services change them, so the companion needs refreshing now and then --
 and they cover only what the name points at. The relay servers a call app
 is handed during the call are in the provider's address ranges, not behind
-the domain; for the few apps that publish them (Telegram) the ready-made
-`<name>-ip` lists carry those ranges.
+the domain; for the apps that have such a list -- Telegram, WhatsApp and
+Discord today (not Zoom or Signal) -- the ready-made `<name>-ip` lists
+carry the provider's ranges (`routes preset add <name> --ip`, or `Домены +
+IP‑диапазоны` in the bot).
 
 Limits, stated plainly: one page is read and no script is run, so a page
 that is an empty shell for a JavaScript app, or a bot-check page, shows

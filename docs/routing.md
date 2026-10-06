@@ -87,12 +87,64 @@ keenetic-xray routes set youtube --iface=Wireguard4   # send this list out a dif
 keenetic-xray routes set youtube --exclusive          # drop, don't leak direct, if the tunnel is down
 keenetic-xray routes disable youtube                  # keep the list, stop routing it
 keenetic-xray routes show youtube                     # config vs what's live on the router
+keenetic-xray routes scan habr.com                    # which other hosts its page needs, and which of them need the tunnel
+keenetic-xray routes scan habr.com --add youtube      # ...and add the recommended ones to that list
 keenetic-xray routes rm youtube
 ```
 
 Bot: `📍 Маршруты` on a router card (add / remove entries, on/off,
 `🎯 Интерфейс`, delete, show), or
 `/routes <router> {list|show|new|add|del|rm|on|off|iface <name> <ProxyN|WireguardN>}`.
+
+## Finding the other domains a site needs (`routes scan`)
+
+A blocked site added by its own name often opens without its pictures
+or its login: the page loads those from other domains -- an image
+store, an auth host, a script CDN -- that are blocked too and are in no
+list. `routes scan <domain>` finds them.
+
+It reads the domain's page **through the tunnel** (the name is resolved
+at the far end, so a DNS block does not matter), collects the hosts the
+page points at, and opens each one **both directly and through the
+tunnel**. The ones that fail directly but work through the tunnel are
+the ones the page needs routed. Where a host was found decides how much
+it is trusted:
+
+- *likely* -- a script/image/stylesheet/frame tag, a preload or
+  `preconnect` hint, a `Link` header, a redirect on the way in;
+- *maybe* -- a Content-Security-Policy allow-list entry (github.com's
+  names ~77 hosts, a page load touches 3), a URL inside an inline script,
+  a form target. Never ticked by default;
+- advertising and analytics hosts are also never ticked by default, even
+  when they do not open directly.
+
+A host that opens directly is left out (routing it would only add
+traffic), unless it answers `403`/`451` directly and something else
+through the tunnel -- a regional refusal. A host an enabled list already
+covers, or one of your own lists on the router, is not probed.
+Subdomains of the scanned domain are not listed: its own entry covers
+them. Only *exact hosts* are ever suggested, never a whole CDN zone
+(`cloudfront.net`, `amazonaws.com`, ...), which would route every site
+served through it.
+
+In the bot, after you add domains to a list (`➕ Записи` / `➕ Новый
+список`) the confirmation carries `🔎 Найти связанные домены`. The result
+screen numbers the hosts; the buttons tick them, and `✅ Добавить
+выбранные` adds the ticked ones with the ordinary `routes_add`. Nothing
+is added without that tap. (`/routes <router> add …` has no such button:
+a slash command has no chat to attach it to.) The CLI form prints the
+same report and, with `--add <list>`, adds the recommended hosts to an
+existing list.
+
+Limits, stated plainly: one page is read and no script is run, so a page
+that is an empty shell for a JavaScript app, or a bot-check page, shows
+little (the scan says so), and hosts a script decides to contact later
+are not seen -- on habr.com's feed a browser touched 13 hosts and the
+scan found 11 of them. At most 3 domains per scan, 30 hosts probed (the
+rest are counted), 35 s in all, 2 MiB of page. Redirects are followed
+only to public names on ports 80/443, at most 5 hops. The page is
+fetched by the router through your own tunnel, so the site sees the
+tunnel's address. A scan changes nothing on its own.
 
 ## Ready-made lists (`routes preset`)
 

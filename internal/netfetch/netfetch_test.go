@@ -249,3 +249,31 @@ func TestSmallHello_OffersOnlyX25519(t *testing.T) {
 		t.Errorf("default offered %v -- expected the post-quantum hybrid this step exists to drop", got)
 	}
 }
+
+// TunnelTransport is the tunnel step alone: it never touches the direct
+// or small-hello steps, and says so when there is no tunnel.
+func TestTunnelTransport(t *testing.T) {
+	calls := withSteps(t, false, false, false, "127.0.0.1:1080")
+	rt, ok := TunnelTransport()
+	if !ok {
+		t.Fatal("no transport with a tunnel running")
+	}
+	req, _ := http.NewRequest(http.MethodGet, "https://example.com/", nil)
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	if string(b) != "via tunnel@127.0.0.1:1080" || !slices.Equal(*calls, []string{"tunnel@127.0.0.1:1080"}) {
+		t.Errorf("body %q, steps %v; want the tunnel step only", b, *calls)
+	}
+
+	withSteps(t, false, false, false, "")
+	if rt, ok := TunnelTransport(); ok || rt != nil {
+		t.Errorf("TunnelTransport() = %v, %v with no tunnel running", rt, ok)
+	}
+	TunnelSOCKS = nil
+	if _, ok := TunnelTransport(); ok {
+		t.Error("TunnelTransport() reported a tunnel with TunnelSOCKS unset")
+	}
+}

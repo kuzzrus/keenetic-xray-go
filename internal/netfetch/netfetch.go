@@ -58,6 +58,22 @@ func Client(timeout time.Duration) *http.Client {
 // that needs settings of its own.
 func Transport() http.RoundTripper { return chain{} }
 
+// TunnelTransport sends every request through the router's own tunnel --
+// no direct attempt first, names resolved on the far side -- and reports
+// false when there is no tunnel running. For callers whose whole point is
+// how a host looks from the tunnel's side (the route-list dependency
+// scan); a download that merely needs to get through uses Client.
+func TunnelTransport() (http.RoundTripper, bool) {
+	if TunnelSOCKS == nil {
+		return nil, false
+	}
+	addr := TunnelSOCKS()
+	if addr == "" {
+		return nil, false
+	}
+	return viaSOCKS(addr), true
+}
+
 // The chain's steps. Vars so tests can stand in for them.
 var (
 	direct     http.RoundTripper = newTransport(false)

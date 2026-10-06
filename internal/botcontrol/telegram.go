@@ -80,6 +80,12 @@ type TelegramBot struct {
 
 	dnsTopMu sync.Mutex
 	dnsTop   map[string][]dnsTestTopRow // per-router: the last 🧭 DNS test ranking, for "✅ Применить весь топ" (too long for callback_data)
+
+	// ScanTimeout is how long the 🔎 flow waits for a routes_scan answer.
+	// 0 -> DefaultScanTimeout.
+	ScanTimeout time.Duration
+	scanMu      sync.Mutex
+	scans       map[string]*scanSession // by the short token a rs* button carries
 }
 
 // pendingMsg is one chat message a later event should edit in place

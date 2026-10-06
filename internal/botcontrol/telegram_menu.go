@@ -584,6 +584,8 @@ func (b *TelegramBot) handleCallback(ctx context.Context, cb tgCallbackQuery) {
 		// the 🧭 DNS flow (dnsm/dnp/dna/dntest/dnoff/dncust)
 	case strings.HasPrefix(data, "adn") && b.handleAddonsCallback(ctx, cb, data):
 		// the 🧩 Дополнения flow (adnm/adn/adni/adnr/adns/adnc)
+	case strings.HasPrefix(data, "rs") && b.handleScanCallback(ctx, cb, data):
+		// the 🔎 find-related-domains flow (rsq/rsx/rst/rsp/rsm/rsa)
 	case strings.HasPrefix(data, "rtm:"):
 		b.openRoutesScreen(ctx, cb, strings.TrimPrefix(data, "rtm:"))
 	case strings.HasPrefix(data, "rtp") && b.handlePresetCallback(ctx, cb, data):

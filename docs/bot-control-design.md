@@ -306,6 +306,22 @@ prefix, never a list built in the web UI. The screen text carries the
 three Keenetic requirements (router is the DNS server, default policy,
 DNS warm-up). `cmd/keenetic-xray/routes.go` is the same logic as a CLI.
 
+After a wizard add, the confirmation offers `🔎 Найти связанные домены`
+(`rsq:<token>`; `rsx:` declines). The agent action `routes_scan` (args:
+1..3 domains) runs `internal/depscan` -- the page read through the tunnel,
+each host it names opened directly and through the tunnel -- and answers
+with depscan's TSV, which the bot parses back into a result screen:
+numbered tick buttons (`rst:<token>:<index>`, five to a row, ten hosts a
+page, `rsp:`), `rsm:` to show the "maybe" hosts, `rsa:` to add the ticked
+ones with the ordinary `routes_add`, `rsx:` to close. A button carries
+only an 8-hex token and an index (callback_data is 64 bytes); the result
+lives in the bot's memory per session (2 h, 40 sessions), so after a
+control-server restart a stale button says so instead of adding nothing.
+The bot waits up to `DefaultScanTimeout` (55 s) -- the agent takes the
+command on its next 5 s poll, a scan may use its whole 35 s budget, and
+the agent's own command limit is 60 s. `/routes <router> add ...` has no
+chat to attach the button to, so only the wizard offers the scan.
+
 `🧩 Ядро xray` (`corem:`) opens a screen with `⬆️ Переустановить текущий
 пин` (`coreup:`), `✅ Стабильное <DefaultTag>` (`corestable:`), and --
 when a prerelease tag is on offer -- `🧪 Пререлиз <tag>` (`corepre:<id>:<tag>`,

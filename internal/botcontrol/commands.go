@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/applog"
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
+	"github.com/kuzzrus/keenetic-xray-go/internal/depscan"
 	"github.com/kuzzrus/keenetic-xray-go/internal/diskspace"
 	"github.com/kuzzrus/keenetic-xray-go/internal/failover"
 	"github.com/kuzzrus/keenetic-xray-go/internal/health"
@@ -86,6 +88,12 @@ type RouterHandler struct {
 	// ensureCoreFn is the xray-core installer, injectable so tests don't
 	// need a real binary to smoke-test. nil -> xraycore.Ensure.
 	ensureCoreFn func(context.Context, xraycore.Options) (string, error)
+
+	// scanFn and scanTunnel are routes_scan's two outside dependencies,
+	// injectable so tests need neither the network nor a running tunnel.
+	// nil -> depscan.Scan and netfetch.TunnelTransport.
+	scanFn     func(context.Context, string, depscan.Options) (*depscan.Result, error)
+	scanTunnel func() (http.RoundTripper, bool)
 
 	// InitScript is the daemon's init.d script, exec'd by the
 	// daemon_restart action. Empty -> that action returns an error.
@@ -324,6 +332,8 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 		return h.routesShow(ctx, cmd.Args)
 	case ActionRoutesManual:
 		return h.routesManual(ctx)
+	case ActionRoutesScan:
+		return h.routesScan(ctx, cmd.Args)
 	case ActionRoutesAdd:
 		return h.routesAdd(ctx, cmd.Args)
 	case ActionRoutesDel:

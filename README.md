@@ -98,6 +98,10 @@ mode stream-up` глобально переопределяет `xhttp` `mode` (
   (или `WireguardN`, `OpkgTunN`), остальное — напрямую. Под капотом `object-group
   fqdn keenetic-xray-*` + `dns-proxy route`. Списки namespace'нуты и
   никогда не трогают заведённые в вебе роутера.
+  К новым доменам бот предлагает `🔎 Найти связанные домены`: читает
+  страницу сайта через туннель, находит, откуда она грузит картинки,
+  скрипты и вход, и показывает, каким из этих доменов нужен туннель
+  (`keenetic-xray routes scan <домен> [--add <список>]`).
 - **Готовые списки** (`keenetic-xray routes preset …`, кнопка `📦 Готовые
   списки`) — курируемые списки по сервисам (`youtube`, `telegram`,
   `github`, … ~10 категорий). Вшиты в бинарь и **раз в сутки сами
@@ -275,7 +279,7 @@ keenetic-xray variant {show|set mini|set full}
 keenetic-xray agent {configure <url> <router-id> <fingerprint> <token>|enable|disable|status}
 keenetic-xray proxy0 {show|set [--lan-ip=192.168.x.1] [--protocol=socks5|http] [--interface=Proxy0] [--health-check=on|off]|off}
 keenetic-xray failover {show|set <key> <value>}
-keenetic-xray routes {list|show [name]|new <name> [entries…]|add <name> <entries…>|del <name> <entries…>|rm <name>|enable <name>|disable <name>|set <name> [--iface=Proxy0|Wireguard4] [--exclusive]|apply}
+keenetic-xray routes {list|show [name]|new <name> [entries…]|add <name> <entries…>|scan <domain>… [--add <name>]|del <name> <entries…>|rm <name>|enable <name>|disable <name>|set <name> [--iface=Proxy0|Wireguard4] [--exclusive]|apply}
 keenetic-xray routes preset {list|show <name>|add <name> [--ip] [--iface=…] [--exclusive]|sync [<name>|--all]|update}
 keenetic-xray dns {show|test|list|preset <id>[,<id>…] [--dot|--doh|--both]|set dot <ip> <sni> …|set doh <url> …|off}
 keenetic-xray transport {show|mode auto|packet-up|stream-up|stream-one|mode-clear|mss <1200..1452|auto|off>|wg {show|on|off}}

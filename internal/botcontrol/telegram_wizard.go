@@ -408,7 +408,13 @@ func (b *TelegramBot) wizardRouteEntries(ctx context.Context, chatID int64, st *
 		action = ActionRoutesDel
 	}
 	out, answered, errText := b.enqueueAndWait(ctx, st.routerID, action, []string{st.listName, strings.Join(entries, " ")})
-	b.sendMessage(ctx, chatID, b.stepResult(st.routerID, answered, errText, "✅ "+strings.TrimSpace(out)))
+	msg := b.stepResult(st.routerID, answered, errText, "✅ "+strings.TrimSpace(out))
+	if !st.del && answered && errText == "" {
+		// Added: offer to find the other domains the new sites' pages load from.
+		b.offerScan(ctx, chatID, st.routerID, st.listName, entries, msg)
+		return
+	}
+	b.sendMessage(ctx, chatID, msg)
 }
 
 // stepResult phrases the outcome of one enqueueAndWait wizard step. The

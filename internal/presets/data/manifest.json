@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated": "2026-10-02",
+  "generated": "2026-10-08",
   "categories": [
     "Мессенджеры",
     "Видео",
@@ -428,8 +428,8 @@
       "title": "GitHub",
       "category": "Разработка",
       "kind": "domains",
-      "count": 64,
-      "rev": "994e5b1429c5",
+      "count": 65,
+      "rev": "46bb50a74cc3",
       "sources": [
         "Geo-Aggregator: github"
       ]

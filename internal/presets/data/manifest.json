@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated": "2026-10-08",
+  "generated": "2026-10-09",
   "categories": [
     "Мессенджеры",
     "Видео",
@@ -392,8 +392,8 @@
       "title": "Facebook",
       "category": "Соцсети",
       "kind": "cidr",
-      "count": 27,
-      "rev": "d34b8703516b",
+      "count": 28,
+      "rev": "27e7c4fe8df5",
       "sources": [
         "lord-alfred/ipranges: facebook"
       ]
@@ -584,8 +584,8 @@
       "title": "Instagram",
       "category": "Соцсети",
       "kind": "cidr",
-      "count": 27,
-      "rev": "d34b8703516b",
+      "count": 28,
+      "rev": "27e7c4fe8df5",
       "sources": [
         "lord-alfred/ipranges: facebook"
       ]
@@ -680,8 +680,8 @@
       "title": "Facebook Messenger",
       "category": "Мессенджеры",
       "kind": "cidr",
-      "count": 27,
-      "rev": "d34b8703516b",
+      "count": 28,
+      "rev": "27e7c4fe8df5",
       "sources": [
         "lord-alfred/ipranges: facebook"
       ]
@@ -1125,8 +1125,8 @@
       "title": "Threads",
       "category": "Соцсети",
       "kind": "cidr",
-      "count": 27,
-      "rev": "d34b8703516b",
+      "count": 28,
+      "rev": "27e7c4fe8df5",
       "sources": [
         "lord-alfred/ipranges: facebook"
       ]
@@ -1257,8 +1257,8 @@
       "title": "WhatsApp",
       "category": "Мессенджеры",
       "kind": "cidr",
-      "count": 27,
-      "rev": "d34b8703516b",
+      "count": 28,
+      "rev": "27e7c4fe8df5",
       "sources": [
         "lord-alfred/ipranges: facebook"
       ]

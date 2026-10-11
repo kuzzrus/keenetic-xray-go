@@ -628,6 +628,71 @@ real `xray-core/v26.9.30` is built by dispatching `xray_version=v26.9.30`
 without `awg_dev` -- `CGO_ENABLED=0` on both arches, unlike the arm64 dev
 build.
 
+## 2026-10-11 — `v26.10.10`: patch re-derived with `--3way`, verified, dev build staged
+
+Upstream `v26.10.10` (2026-10-10, 23 commits / 97 files after `v26.9.30`;
+the release page carries no changelog, so this is read from the commits).
+VLESS / REALITY / XHTTP / TCP / freedom are untouched. What moved under or
+beside the patch:
+
+- **go.mod / go.sum**: new `gopher-lua` + `gopher-luar` (a Lua `script` for
+  `dns` and `routing`, #6823) and `x509roots/fallback` (the TLS client now
+  verifies against a built-in root bundle by default; `tlsSettings.useSystemCA`
+  brings the OS pool back, #7105).
+- **`proxy/wireguard`**: a new `icmp.go` (fake pong, #6855), `tun.go` (idle
+  UDP flows hold less memory, #6856) and `tun_linux.go` (kernelTun IPv6 table
+  index, #6881 -- the `sync` import became `sync/atomic`).
+- The MASQUE client speaks Cloudflare WARP (#6878).
+
+`amneziawg-v26.9.30.patch` does not apply with a plain `git apply` (go.sum
+and the `tun_linux.go` context), but `git apply --3way` does nearly all of
+it, **provided the old tag's blobs are in the clone**:
+
+```
+git clone -c core.autocrlf=false --depth 1 --branch v26.10.10 https://github.com/XTLS/Xray-core
+cd Xray-core
+git fetch --depth 1 origin tag v26.9.30        # the old patch's base blobs
+git apply --3way <this repo>/packaging/xray-core/amneziawg-v26.9.30.patch
+```
+
+`tun_linux.go` merges by itself; the only conflict is `go.sum`, where both
+sides added lines at the same spot (upstream's gopher-lua entries, the
+patch's `go.uber.org/atomic`) -- keep both, `git add go.sum`, then
+`git diff --cached > amneziawg-v26.10.10.patch`. The result is the same 15
+files as `v26.9.30`'s. (`-c core.autocrlf=false` on `git clone` persists
+into the clone, which is what keeps `gofmt -l` quiet on Windows.)
+
+Verified without hardware: plain `git apply` on a pristine checkout (what CI
+runs); `gofmt -l` clean on every touched file; no leftover
+`golang.zx2c4.com/wireguard/{tun,device,conn}` imports; `go build ./...`;
+`linux/arm64` and `linux/mipsle` softfloat builds of `./main`; the loopback
+harness above (5/5); upstream's own `TestWireguard` and `TestMasque*`
+scenario tests and the `infra/conf` Masque / Wireguard tests on the patched
+tree. The workflow's own protoc regeneration is the one CI step not run
+locally.
+
+**Size**, the CI recipe (CGO off, `-trimpath`, `-s -w -buildid=`, UPX 4.2.2
+`-9`, `--lzma` on arm64 only). A local rebuild of `v26.9.30` reproduced the
+published unpacked sizes byte for byte (UPX within 0.1 %), so the two columns
+compare like with like:
+
+| bytes | `v26.9.30` | `v26.10.10` |
+|---|---|---|
+| arm64 unpacked / UPX / xz | 32,112,764 / 7,624,708 / 7,930,128 | 33,226,876 / 7,968,676 / 8,282,516 |
+| mipsle unpacked / UPX / xz | 36,765,851 / 11,097,852 / 7,371,464 | 38,011,035 / 11,545,012 / 7,693,616 |
+
+What a router downloads grows by +0.34 MB (arm64) and +0.45 MB (mipsle),
+the unpacked image by +1.1 / +1.2 MB. By symbol size (arm64) the Lua stack is
+about 0.45 MB (gopher-lua ~0.33, gopher-luar ~0.08, Xray's glue ~0.04), the
+root-CA bundle about 0.13 MB, MASQUE-WARP about 8 KB; the rest is Go
+metadata. No build tag switches either of the first two off. The dev build's
+arm64 is the CGO diagnostic flavor, so *its* provenance sizes do not compare
+-- use this table.
+
+Next, as before: dispatch `xray_version=v26.10.10 awg_dev=true` (publishes
+`xray-core-awg-dev/v26.10.10`, which no release path installs), test it on a
+router, and only then promote.
+
 ## How to resume
 
 Everything the original plan called for is now built (see "What's
@@ -658,7 +723,14 @@ actually built"). What's left is verification and one more tag:
    --tag=v26.9.30` with no base-URL override, restart, confirm an AWG
    profile still passes traffic -- then cut a keenetic-xray release that
    carries the new `PrereleaseTag`.
-4. If re-entering Plan Mode for any of these, re-read this document
+4. **`v26.10.10`**: patch in the repo, dev build staged (see the 2026-10-11
+   section). Left: run it on a router (an AWG profile through the patched
+   core, plus a check that a plain `security=tls` profile still verifies
+   its server now that the TLS client trusts the built-in roots), and only
+   then add the tag to `AWG_CONFIRMED_TAGS` (workflow *and*
+   `xraycore.AWGConfirmedTags`), move `xraycore.PrereleaseTag`, and build
+   the real `xray-core/v26.10.10` without `awg_dev`.
+5. If re-entering Plan Mode for any of these, re-read this document
    plus the current code first — don't assume an old plan-file survived
    (Plan Mode's plan file gets reused for whatever's being planned at the
    time).

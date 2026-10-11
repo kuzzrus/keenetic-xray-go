@@ -129,8 +129,8 @@ func (ca *fakeACME) httpChecks() []string {
 	return append([]string(nil), ca.checks...)
 }
 
-// sign issues a certificate for the domain to pub, valid for validFor from now.
-func (ca *fakeACME) sign(pub crypto.PublicKey, validFor time.Duration) []byte {
+// sign issues a certificate for the domain to pub, valid from notBefore to notAfter.
+func (ca *fakeACME) sign(pub crypto.PublicKey, notBefore, notAfter time.Time) []byte {
 	ca.mu.Lock()
 	ca.seq++
 	serial := big.NewInt(time.Now().UnixNano() + int64(ca.seq))
@@ -139,8 +139,8 @@ func (ca *fakeACME) sign(pub crypto.PublicKey, validFor time.Duration) []byte {
 		SerialNumber: serial,
 		Subject:      pkix.Name{CommonName: ca.domain},
 		DNSNames:     []string{ca.domain},
-		NotBefore:    time.Now().Add(-time.Minute),
-		NotAfter:     time.Now().Add(validFor),
+		NotBefore:    notBefore,
+		NotAfter:     notAfter,
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}, ca.caCert, pub, ca.caKey)
@@ -150,9 +150,14 @@ func (ca *fakeACME) sign(pub crypto.PublicKey, validFor time.Duration) []byte {
 	return der
 }
 
-// seedCache leaves in cache what an earlier run of the server would have:
-// a certificate for the domain from this CA, valid for validFor more.
-func (ca *fakeACME) seedCache(t *testing.T, cache autocert.Cache, validFor time.Duration) {
+// seedCache leaves in cache what an earlier run of the server would have: a
+// certificate for the domain from this CA that has `remaining` left of the
+// CA's usual lifetime, i.e. an aged copy of a normal certificate. It has to
+// be aged, not just short: autocert renews when the lesser of 30 days and a
+// third of the certificate's lifetime is left, so a certificate that was
+// issued for 5 days is not due for another 3, while one issued for 90 days
+// with 5 left is due at once.
+func (ca *fakeACME) seedCache(t *testing.T, cache autocert.Cache, remaining time.Duration) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -162,9 +167,10 @@ func (ca *fakeACME) seedCache(t *testing.T, cache autocert.Cache, validFor time.
 	if err != nil {
 		t.Fatal(err)
 	}
+	notAfter := time.Now().Add(remaining)
 	var buf bytes.Buffer
 	pem.Encode(&buf, &pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
-	pem.Encode(&buf, &pem.Block{Type: "CERTIFICATE", Bytes: ca.sign(&key.PublicKey, validFor)})
+	pem.Encode(&buf, &pem.Block{Type: "CERTIFICATE", Bytes: ca.sign(&key.PublicKey, notAfter.Add(-ca.validity), notAfter)})
 	pem.Encode(&buf, &pem.Block{Type: "CERTIFICATE", Bytes: ca.caCert.Raw})
 	if err := cache.Put(context.Background(), ca.domain, buf.Bytes()); err != nil {
 		t.Fatal(err)
@@ -405,7 +411,7 @@ func (ca *fakeACME) finalize(w http.ResponseWriter, id string, payload []byte) {
 		writeProblem(w, http.StatusBadRequest, "badCSR", err.Error())
 		return
 	}
-	leaf := ca.sign(csr.PublicKey, ca.validity)
+	leaf := ca.sign(csr.PublicKey, time.Now().Add(-time.Minute), time.Now().Add(ca.validity))
 	var chain bytes.Buffer
 	pem.Encode(&chain, &pem.Block{Type: "CERTIFICATE", Bytes: leaf})
 	pem.Encode(&chain, &pem.Block{Type: "CERTIFICATE", Bytes: ca.caCert.Raw})

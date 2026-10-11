@@ -146,7 +146,7 @@ func TestACMEGate_FirstIssuance(t *testing.T) {
 func TestACMEGate_Renewal(t *testing.T) {
 	t.Parallel()
 	rig := newE2ERig(t)
-	rig.ca.seedCache(t, rig.cache, 5*24*time.Hour) // autocert renews 30 days before the end
+	rig.ca.seedCache(t, rig.cache, 5*24*time.Hour) // a 90-day certificate with 5 days left: well inside the renewal window
 
 	old := rig.handshake(t) // served from the cache at once
 	if time.Until(old.NotAfter) > 6*24*time.Hour {
@@ -172,7 +172,7 @@ func TestACMEGate_Renewal(t *testing.T) {
 func TestACMEGate_NothingDueNothingOpened(t *testing.T) {
 	t.Parallel()
 	rig := newE2ERig(t)
-	rig.ca.seedCache(t, rig.cache, 80*24*time.Hour) // renewal is about 50 days away
+	rig.ca.seedCache(t, rig.cache, 80*24*time.Hour) // a 90-day certificate with 80 left: renewal is about 50 days away
 
 	rig.handshake(t)
 	time.Sleep(300 * time.Millisecond) // a renewal wrongly due now would have started by then

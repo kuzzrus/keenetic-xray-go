@@ -173,8 +173,10 @@ Let's Encrypt's HTTP-01 challenge always dials port 80, independent of
 (`acmegate.go`) binds `:80` only while the server is itself talking to
 the ACME CA, and closes it after `acmeIdle` (three minutes) without a
 request. autocert asks the CA at moments it alone decides -- the first
-TLS handshake for the domain, then its own renewal timer about 30 days
-before expiry, then retries every half hour after a failure -- and has
+TLS handshake for the domain, then its own renewal timer (when a third
+of the certificate's lifetime is left, at most 30 days -- 30 days for
+today's 90-day certificates), then retries every half hour after a
+failure -- and has
 no hook for "about to need the port". All of that is requests from one
 `*acme.Client`, though, so the gate is that client's HTTP transport
 (`Manager.Client`, set by `attachACMEGate`): the first request opens the

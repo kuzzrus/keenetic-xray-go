@@ -356,6 +356,9 @@ KEENETIC_XRAY_CS_CONFIG=/etc/keenetic-xray-control-server/config.json \
 
 ## Сборка
 
+Нужен Go 1.26 или новее (строка `go` в `go.mod`; релизы собираются на последнем 1.26.x —
+старые ветки Go выходят из поддержки и перестают получать исправления безопасности).
+
 ```bash
 go build -o keenetic-xray ./cmd/keenetic-xray
 go build -o keenetic-xray-control-server ./cmd/keenetic-xray-control-server

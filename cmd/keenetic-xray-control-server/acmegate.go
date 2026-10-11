@@ -17,7 +17,7 @@ import (
 // client polls for the validation result every second or so (a CA may ask
 // for longer with Retry-After, in seconds), and the authorization clean-up
 // autocert runs afterwards -- and nothing else; against a renewal cycle of
-// about 60 days it is noise.
+// weeks it is noise.
 const acmeIdle = 3 * time.Minute
 
 var errACMEGateClosed = errors.New("acme: the control server is shutting down")

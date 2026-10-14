@@ -44,6 +44,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.x'
+          check-latest: true
 
       - name: Regenerate the Russian IPv4 range list
         run: go run ./cmd/georanges-gen

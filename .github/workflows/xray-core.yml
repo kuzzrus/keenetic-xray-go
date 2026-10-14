@@ -138,6 +138,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: xray-core/go.mod
+          check-latest: true
 
       - name: Apply AmneziaWG patch
         if: ${{ needs.prepare.outputs.apply_patch == 'true' }}

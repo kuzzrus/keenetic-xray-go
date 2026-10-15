@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated": "2026-10-09",
+  "generated": "2026-10-15",
   "categories": [
     "Мессенджеры",
     "Видео",
@@ -860,8 +860,8 @@
       "title": "PlayStation",
       "category": "Игры",
       "kind": "domains",
-      "count": 3,
-      "rev": "85be175086b3",
+      "count": 4,
+      "rev": "5a99069ac7c9",
       "sources": [
         "Geo-Aggregator: playstation"
       ]

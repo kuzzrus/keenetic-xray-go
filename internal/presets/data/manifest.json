@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated": "2026-10-15",
+  "generated": "2026-10-18",
   "categories": [
     "Мессенджеры",
     "Видео",
@@ -788,8 +788,8 @@
       "title": "OpenAI / ChatGPT",
       "category": "Искусственный интеллект",
       "kind": "domains",
-      "count": 23,
-      "rev": "2cf26653826e",
+      "count": 24,
+      "rev": "89b1be7d6639",
       "sources": [
         "Geo-Aggregator: openai"
       ]
@@ -956,8 +956,8 @@
       "title": "Roblox",
       "category": "Игры",
       "kind": "domains",
-      "count": 48,
-      "rev": "faa5cfe6943d",
+      "count": 51,
+      "rev": "8f763b72f1e6",
       "sources": [
         "Geo-Aggregator: roblox"
       ]

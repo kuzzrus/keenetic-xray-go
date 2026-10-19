@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated": "2026-10-18",
+  "generated": "2026-10-19",
   "categories": [
     "Мессенджеры",
     "Видео",
@@ -896,8 +896,8 @@
       "title": "Prime Video",
       "category": "Видео",
       "kind": "domains",
-      "count": 21,
-      "rev": "84130065f285",
+      "count": 22,
+      "rev": "55475f240004",
       "sources": [
         "Geo-Aggregator: primevideo"
       ]

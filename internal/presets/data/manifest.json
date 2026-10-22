@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated": "2026-10-21",
+  "generated": "2026-10-22",
   "categories": [
     "Мессенджеры",
     "Видео",
@@ -1052,8 +1052,8 @@
       "title": "Steam",
       "category": "Игры",
       "kind": "domains",
-      "count": 55,
-      "rev": "b838a73d1491",
+      "count": 56,
+      "rev": "ea759f4a2c29",
       "sources": [
         "Geo-Aggregator: steam"
       ]

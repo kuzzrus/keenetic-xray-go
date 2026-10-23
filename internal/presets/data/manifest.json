@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated": "2026-10-22",
+  "generated": "2026-10-23",
   "categories": [
     "Мессенджеры",
     "Видео",
@@ -1016,8 +1016,8 @@
       "title": "Speedtest (Ookla)",
       "category": "Работа и инструменты",
       "kind": "domains",
-      "count": 13,
-      "rev": "96a698b9e1f1",
+      "count": 20,
+      "rev": "3f6ff311c951",
       "sources": [
         "Geo-Aggregator: speedtest"
       ]

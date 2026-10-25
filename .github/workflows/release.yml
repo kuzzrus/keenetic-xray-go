@@ -18,7 +18,11 @@ jobs:
 
   release:
     needs: test
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest now resolves to Ubuntu 26.04, where apt has no
+    # installation candidate for qemu-user-static, so the QEMU smoke test (and
+    # the UPX / cross-gcc steps next to it) cannot run. 24.04 is also what the
+    # published builds and the sizes in docs/ were produced on (UPX 4.2.2).
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:

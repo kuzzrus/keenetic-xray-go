@@ -1,14 +1,26 @@
 // Package adaptiveroute is the dataplane half of Susanin Phase 2 (see
 // docs/HANDOFF-susanin.md and internal/config.TransparentOptions): an
 // ipset holding IPs this project's own classifier has confirmed are
-// blocked, and an iptables REDIRECT rule in nat/PREROUTING that sends
-// any packet to one of those IPs to xray's local dokodemo-door inbound
-// instead of DIRECT. Set membership is the classifier's job (not built
-// here); this package only owns the ipset CRUD and the REDIRECT rule
-// itself.
+// blocked, and two iptables rules per LAN interface that act on any
+// packet to one of those IPs:
+//
+//   - TCP 80/443: a REDIRECT in nat/PREROUTING to xray's local
+//     dokodemo-door inbound instead of DIRECT;
+//   - QUIC (UDP 443): a REJECT with ICMP port-unreachable in
+//     filter/FORWARD. UDP cannot be REDIRECTed into the dokodemo inbound
+//     (the kernel rewrites the destination before xray's socket sees the
+//     datagram, and for UDP -- unlike TCP's SO_ORIGINAL_DST -- there is no
+//     way to recover it), so a redirected QUIC datagram used to be
+//     forwarded through the tunnel to the router's own address and die
+//     there. An instant ICMP error sends the client straight to TCP
+//     instead, which the REDIRECT above carries. Reject, not drop: a
+//     dropped QUIC makes the client sit out its own timeout first.
+//
+// Set membership is the classifier's job (not built here); this package
+// only owns the ipset CRUD and those rules.
 //
 // Deliberately scoped to only the ipset named by RedirectOptions.SetName
-// -- REDIRECT must never match a blanket "port 443" or anything derived
+// -- the rules must never match a blanket "port 443" or anything derived
 // from this project's own routes/preset object-groups, only IPs the
 // classifier put there itself (see the "Phase 2 concrete design" note in
 // memory / the plan doc for why: traffic our own routes/presets already
@@ -23,6 +35,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -53,6 +66,10 @@ var (
 	}
 	iptablesListNAT = func(ctx context.Context) (string, error) {
 		out, err := exec.CommandContext(ctx, "iptables", "-t", "nat", "-S", "PREROUTING").Output()
+		return string(out), err
+	}
+	iptablesListFORWARD = func(ctx context.Context) (string, error) {
+		out, err := exec.CommandContext(ctx, "iptables", "-S", "FORWARD").Output()
 		return string(out), err
 	}
 	ipsetRun = func(ctx context.Context, args ...string) error {
@@ -126,12 +143,12 @@ func EnsureIPSetTool(ctx context.Context) error {
 // set from hash:ip to hash:net already has one under this exact name,
 // so the plain create below fails deterministically on every such
 // upgrade until something clears it -- confirmed live. On that failure,
-// clear our own REDIRECT rule (an existing rule referencing the set is
-// exactly what stops "ipset destroy" from working -- "in use by a
-// kernel component") and destroy+recreate: membership is disposable,
-// freshly re-added by the classifier on its own TTLs, so losing it here
-// costs nothing. Whatever EnsureRedirect the caller runs right after
-// this re-adds the rule against the now-recreated set.
+// clear our own REDIRECT and QUIC-REJECT rules (an existing rule
+// referencing the set is exactly what stops "ipset destroy" from working
+// -- "in use by a kernel component") and destroy+recreate: membership is
+// disposable, freshly re-added by the classifier on its own TTLs, so
+// losing it here costs nothing. Whatever EnsureRedirect the caller runs
+// right after this re-adds the rules against the now-recreated set.
 //
 // Membership itself is managed by AddIP/RemoveIP (the classifier's
 // job), not here.
@@ -141,6 +158,7 @@ func EnsureIPSet(ctx context.Context, name string) error {
 	}
 	if err := create(); err != nil {
 		clearOurRedirectRules(ctx)
+		clearOurRejectRules(ctx)
 		_ = ipsetRun(ctx, "destroy", name)
 		if err := create(); err != nil {
 			return fmt.Errorf("recreating %s as hash:net (a stale hash:ip set from an older version?): %w", name, err)
@@ -194,17 +212,18 @@ func Members(ctx context.Context, setName string) ([]string, error) {
 	return ips, nil
 }
 
-// redirectComment tags the iptables REDIRECT rules this package manages,
-// same idempotent-find/remove idea as keenetic.mssComment.
+// redirectComment tags the iptables rules this package manages -- the nat
+// REDIRECTs and the filter REJECTs alike -- same idempotent-find/remove
+// idea as keenetic.mssComment.
 const redirectComment = "keenetic-xray-adaptive"
 
-// RedirectOptions describes the REDIRECT rule set EnsureRedirect installs:
-// one rule per (LAN interface, protocol) pair, redirecting any packet
-// whose destination is in SetName to Port on this same host -- where the
-// xray dokodemo-door inbound (internal/config.TransparentOptions, same
-// Port) picks it up and, per that inbound's followRedirect setting,
-// recovers the real destination and forwards to whatever outbound is
-// currently live.
+// RedirectOptions describes the rule set EnsureRedirect installs. For each
+// LAN interface: a REDIRECT of TCP web traffic whose destination is in
+// SetName to Port on this same host -- where the xray dokodemo-door
+// inbound (internal/config.TransparentOptions, same Port) picks it up and,
+// per that inbound's followRedirect setting, recovers the real destination
+// and forwards to whatever outbound is currently live -- plus a REJECT of
+// QUIC to the same destinations (see rejectSpecs).
 type RedirectOptions struct {
 	SetName       string   // the ipset EnsureIPSet already created
 	Port          int      // must match the xray Transparent inbound's port
@@ -225,7 +244,7 @@ func (o RedirectOptions) validate() error {
 }
 
 // redirectPorts are the (protocol, destination port) pairs the REDIRECT
-// rule covers: web traffic only.
+// rule covers: web traffic only, and only TCP.
 //
 // Until 2026-09-16 there was no port match at all -- one rule per
 // protocol, redirecting *everything* addressed to a member of the set.
@@ -241,13 +260,23 @@ func (o RedirectOptions) validate() error {
 // separate bugs came from one of them forgetting a check the others
 // made. A port-scoped REDIRECT bounds the blast radius of *any* wrong
 // entry, whoever added it and whatever check they skipped.
+//
+// UDP 443 (QUIC) was in this list until 2026-10-25 and must not come
+// back: REDIRECT cannot carry UDP into xray's dokodemo-door. For TCP the
+// inbound recovers the real destination from the conntrack entry
+// (SO_ORIGINAL_DST); for UDP it only has the IP_RECVORIGDSTADDR of the
+// datagram it received, which after a REDIRECT is the router's own
+// address and the redirect port -- confirmed with a netns bench and in
+// xray's source. Every redirected QUIC datagram was forwarded through
+// the tunnel to the router itself and silently died, and clients fell
+// back to TCP only after their own QUIC timeout. QUIC is rejected
+// instead, see rejectSpecs.
 var redirectPorts = []struct {
 	proto string
 	port  int
 }{
 	{"tcp", 80},
 	{"tcp", 443},
-	{"udp", 443}, // QUIC
 }
 
 // redirectSpecs renders the match+target half of every rule opts wants --
@@ -272,16 +301,84 @@ func redirectSpecs(o RedirectOptions, withComment bool) [][]string {
 	return specs
 }
 
-// EnsureRedirect installs opts' REDIRECT rules in nat/PREROUTING,
-// removing any stale copy of ours first (e.g. a different port, set, or
-// interface list) -- same clear-then-add idempotency as
+// rejectSpecs renders the QUIC rule opts wants -- everything after
+// `-I FORWARD 1` in the filter table -- one entry per LAN interface: UDP
+// 443 to a member of the set is answered with an ICMP port-unreachable
+// and dropped.
+//
+// Reject, not drop: a client whose QUIC is dropped keeps retrying until
+// its own timeout before it tries TCP, while an ICMP error makes the
+// fallback immediate (browsers and the YouTube/Instagram apps treat it as
+// "QUIC does not work here" and move to TCP, which the REDIRECT above
+// carries). The same design is what Tachyon's disable_quic and KvasPro
+// ship. It has to sit in filter/FORWARD: REJECT is not a valid target in
+// nat/PREROUTING.
+//
+// Scoped exactly like the REDIRECT -- the same set, the same LAN
+// interfaces -- because rejecting QUIC for traffic that actually goes
+// direct would break QUIC that works. Inserted at position 1 so that no
+// earlier ACCEPT (an ESTABLISHED,RELATED one, say) lets a flow through.
+func rejectSpecs(o RedirectOptions, withComment bool) [][]string {
+	var specs [][]string
+	for _, iface := range o.LANInterfaces {
+		spec := []string{
+			"-i", iface, "-p", "udp",
+			"-m", "set", "--match-set", o.SetName, "dst",
+			"--dport", "443",
+		}
+		if withComment {
+			spec = append(spec, "-m", "comment", "--comment", redirectComment)
+		}
+		spec = append(spec, "-j", "REJECT", "--reject-with", "icmp-port-unreachable")
+		specs = append(specs, spec)
+	}
+	return specs
+}
+
+// rejectProblem remembers why the last EnsureRedirect could not install
+// the QUIC REJECT rules ("" when it could, or has not tried yet) -- see
+// QUICRejectProblem.
+var rejectProblem struct {
+	mu  sync.Mutex
+	msg string
+}
+
+func setRejectProblem(msg string) {
+	rejectProblem.mu.Lock()
+	rejectProblem.msg = msg
+	rejectProblem.mu.Unlock()
+}
+
+// QUICRejectProblem returns why the QUIC REJECT rules could not be
+// installed on this router (typically an iptables build without the
+// REJECT target), or "" when they were -- or EnsureRedirect has not run
+// in this process yet. The TCP REDIRECT is unaffected either way: on
+// such a router QUIC to promoted addresses behaves as it did before the
+// rules existed (the client waits out its own timeout), nothing worse.
+// RedirectInPlace consults this so the reconcile loop does not keep
+// rebuilding rules that can never be installed.
+func QUICRejectProblem() string {
+	rejectProblem.mu.Lock()
+	defer rejectProblem.mu.Unlock()
+	return rejectProblem.msg
+}
+
+// EnsureRedirect installs opts' REDIRECT rules in nat/PREROUTING and the
+// QUIC REJECT rules in filter/FORWARD, removing any stale copy of ours
+// first (e.g. a different port, set, or interface list -- or the UDP 443
+// REDIRECT older versions installed) -- same clear-then-add idempotency as
 // keenetic.SetMSSClamp. Falls back to rules without the `comment` match
 // if this iptables build doesn't have that module, same as MSS clamping.
+//
+// Only the REDIRECT is essential: a failure to install it is returned.
+// The REJECT is best-effort (see QUICRejectProblem) -- a router that
+// cannot do it keeps a working TCP redirect.
 func EnsureRedirect(ctx context.Context, opts RedirectOptions) error {
 	if err := opts.validate(); err != nil {
 		return err
 	}
 	clearOurRedirectRules(ctx)
+	clearOurRejectRules(ctx)
 	add := func(withComment bool) error {
 		for _, spec := range redirectSpecs(opts, withComment) {
 			args := append([]string{"-t", "nat", "-A", "PREROUTING"}, spec...)
@@ -291,14 +388,40 @@ func EnsureRedirect(ctx context.Context, opts RedirectOptions) error {
 		}
 		return nil
 	}
-	if add(true) == nil {
+	if add(true) != nil {
+		clearOurRedirectRules(ctx) // clean up any partial add before retrying
+		if err := add(false); err != nil {
+			return fmt.Errorf("adding REDIRECT rules (port %d): %w", opts.Port, err)
+		}
+	}
+	ensureQUICReject(ctx, opts)
+	return nil
+}
+
+// ensureQUICReject installs the QUIC REJECT rules (see rejectSpecs),
+// recording in rejectProblem instead of returning an error: see
+// EnsureRedirect for why a failure here must not fail the whole setup.
+func ensureQUICReject(ctx context.Context, opts RedirectOptions) {
+	add := func(withComment bool) error {
+		for _, spec := range rejectSpecs(opts, withComment) {
+			args := append([]string{"-I", "FORWARD", "1"}, spec...)
+			if err := iptablesRun(ctx, args...); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
-	clearOurRedirectRules(ctx) // clean up any partial add before retrying
-	if err := add(false); err != nil {
-		return fmt.Errorf("adding REDIRECT rules (port %d): %w", opts.Port, err)
+	err := add(true)
+	if err != nil {
+		clearOurRejectRules(ctx) // clean up any partial add before retrying
+		err = add(false)
 	}
-	return nil
+	if err != nil {
+		clearOurRejectRules(ctx)
+		setRejectProblem(err.Error())
+		return
+	}
+	setRejectProblem("")
 }
 
 // RedirectInPlace reports whether every rule opts currently wants is live
@@ -309,6 +432,11 @@ func EnsureRedirect(ctx context.Context, opts RedirectOptions) error {
 // goes through EnsureRedirect directly (always clears first), so this
 // only needs to catch the firmware silently dropping what should still
 // be there, not detect a stale *different* config on its own.
+//
+// The QUIC REJECT counts too, unless this process already found that the
+// router cannot install it (QUICRejectProblem): then it is not drift,
+// and demanding it would make the reconcile loop tear down and rebuild a
+// working REDIRECT every two minutes for nothing.
 func RedirectInPlace(ctx context.Context, opts RedirectOptions) bool {
 	if opts.validate() != nil {
 		return false
@@ -322,18 +450,54 @@ func RedirectInPlace(ctx context.Context, opts RedirectOptions) bool {
 	toPorts := "--to-ports " + strconv.Itoa(opts.Port)
 	for _, iface := range opts.LANInterfaces {
 		for _, p := range redirectPorts {
-			if !anyLineHasAll(lines, "-i "+iface+" ", "-p "+p.proto+" ", matchSet,
+			if !anyLineHasAll(lines, "-A PREROUTING ", "-i "+iface+" ", "-p "+p.proto+" ", matchSet,
 				"--dport "+strconv.Itoa(p.port), "-j REDIRECT", toPorts) {
 				return false
 			}
 		}
 	}
+	// A UDP REDIRECT of ours is a leftover from before QUIC was rejected
+	// (see redirectPorts): it is the black hole, so it counts as drift and
+	// the next EnsureRedirect clears it.
+	for _, line := range lines {
+		if strings.HasPrefix(line, "-A PREROUTING ") && isOurRedirectRule(line) && strings.Contains(line, "-p udp") {
+			return false
+		}
+	}
+	if QUICRejectProblem() != "" {
+		return true
+	}
+	return QUICRejectInPlace(ctx, opts)
+}
+
+// QUICRejectInPlace reports whether the QUIC REJECT rule is live in
+// filter/FORWARD for every LAN interface in opts -- on its own, for the
+// status lines (diag, the bot) that want to show it apart from the
+// REDIRECT.
+func QUICRejectInPlace(ctx context.Context, opts RedirectOptions) bool {
+	if opts.validate() != nil {
+		return false
+	}
+	out, err := iptablesListFORWARD(ctx)
+	if err != nil {
+		return false
+	}
+	lines := strings.Split(out, "\n")
+	matchSet := "--match-set " + opts.SetName + " dst"
+	for _, iface := range opts.LANInterfaces {
+		if !anyLineHasAll(lines, "-A FORWARD ", "-i "+iface+" ", "-p udp ", matchSet,
+			"--dport 443", "-j REJECT") {
+			return false
+		}
+	}
 	return true
 }
 
-func anyLineHasAll(lines []string, want ...string) bool {
+// anyLineHasAll reports whether some `iptables -S` line starts with
+// prefix ("-A PREROUTING ", "-A FORWARD ") and contains every want.
+func anyLineHasAll(lines []string, prefix string, want ...string) bool {
 	for _, line := range lines {
-		if !strings.HasPrefix(line, "-A PREROUTING ") {
+		if !strings.HasPrefix(line, prefix) {
 			continue
 		}
 		ok := true
@@ -364,13 +528,28 @@ func isOurRedirectRule(line string) bool {
 		strings.Contains(line, "-j REDIRECT") && strings.Contains(line, "--to-ports")
 }
 
-// ClearRedirect removes this package's REDIRECT rule(s). A no-op when
-// none exist; iptables itself is already guaranteed present elsewhere in
-// this project (Keenetic's own WAN masquerading needs it), so unlike
-// ipset there's no separate presence guard here -- clearOurRedirectRules
-// already tolerates a listing failure by doing nothing.
+// isOurRejectRule is isOurRedirectRule's counterpart for an `iptables -S
+// FORWARD` line: our comment, or on a build without the comment match the
+// UDP 443 + match-set + REJECT signature -- narrow enough that nothing
+// else in this project (l7sni's NFLOG, the MSS clamp) or the firmware's
+// own chains is likely to produce it.
+func isOurRejectRule(line string) bool {
+	if strings.Contains(line, redirectComment) {
+		return true
+	}
+	return strings.Contains(line, "--match-set") && strings.Contains(line, "-j REJECT") &&
+		strings.Contains(line, "-p udp") && strings.Contains(line, "--dport 443")
+}
+
+// ClearRedirect removes this package's REDIRECT and QUIC REJECT rules. A
+// no-op when none exist; iptables itself is already guaranteed present
+// elsewhere in this project (Keenetic's own WAN masquerading needs it),
+// so unlike ipset there's no separate presence guard here --
+// clearOurRedirectRules already tolerates a listing failure by doing
+// nothing.
 func ClearRedirect(ctx context.Context) error {
 	clearOurRedirectRules(ctx)
+	clearOurRejectRules(ctx)
 	return nil
 }
 
@@ -388,5 +567,32 @@ func clearOurRedirectRules(ctx context.Context) {
 		}
 		spec := strings.Fields(strings.TrimPrefix(line, "-A "))
 		_ = iptablesRun(ctx, append([]string{"-t", "nat", "-D"}, spec...)...)
+	}
+}
+
+// clearOurRejectRules deletes every filter/FORWARD rule that is ours (see
+// isOurRejectRule), reading the live spec back with `-S` like
+// clearOurRedirectRules. A string argument `iptables -S` wrapped in double
+// quotes (it does that for a comment holding anything beyond letters,
+// digits and a few punctuation marks) is unquoted first: execed directly,
+// with no shell in between, the quotes would become part of the value and
+// the delete would silently match nothing -- the bug internal/keenetic's
+// MSS clamp had (FW-01).
+func clearOurRejectRules(ctx context.Context) {
+	out, err := iptablesListFORWARD(ctx)
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.HasPrefix(line, "-A FORWARD ") || !isOurRejectRule(line) {
+			continue
+		}
+		fields := strings.Fields(strings.TrimPrefix(line, "-A "))
+		for i, f := range fields {
+			if len(f) >= 2 && f[0] == '"' && f[len(f)-1] == '"' {
+				fields[i] = f[1 : len(f)-1]
+			}
+		}
+		_ = iptablesRun(ctx, append([]string{"-D"}, fields...)...)
 	}
 }

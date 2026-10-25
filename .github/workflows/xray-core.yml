@@ -16,9 +16,8 @@ on:
   workflow_dispatch:
     inputs:
       xray_version:
-        description: "XTLS/Xray-core tag to build (e.g. v26.9.9). May be an upstream pre-release; the pin (packaging/xray-core/version) decides what's the default."
+        description: "XTLS/Xray-core tag to build (e.g. v26.10.21). May be an upstream pre-release; the pin (packaging/xray-core/version) decides what's the default. No default on purpose: a tag in AWG_CONFIRMED_TAGS is published over the real xray-core/<tag> release, and a stale prefilled tag rebuilt with today's Go is how a good production core gets replaced (see docs/HANDOFF-amneziawg.md, 2026-10-25)."
         required: true
-        default: v26.9.9
       awg_dev:
         description: "Stage the AmneziaWG patch for a tag that is NOT YET in AWG_CONFIRMED_TAGS below, publishing to xray-core-awg-dev/<tag> for manual real-hardware testing before promotion. Needs packaging/xray-core/amneziawg-<tag>.patch to exist for the chosen tag. Tags already in AWG_CONFIRMED_TAGS always get their patch applied and published to the real xray-core/<tag>, regardless of this flag."
         type: boolean

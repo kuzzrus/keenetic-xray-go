@@ -834,9 +834,10 @@ fallback (`docs/routing.md`, "Routing through an OpkgTun interface").
 
 **Promoted the same day.** The dev build went onto the user's router and he
 reported "работает"; of the three checks above he did not itemise which he ran,
-and he later called the TUN speed fine (no numbers -- the README / routing.md
-"~3x slower than SOCKS" figures are gVisor-era and unmeasured on the new
-stack). Hence `v26.10.21` is in `AWG_CONFIRMED_TAGS` (workflow *and*
+and he later reported 250+ Mbit/s through the TUN on the new stack (a speed
+test of his own, not the tuntest harness -- `docs/routing.md`, `reference.md`
+and the wizard / bot screens now say so and keep the gVisor-era "~55-80 Mbit/s,
+~3x slower than SOCKS" for the older cores). Hence `v26.10.21` is in `AWG_CONFIRMED_TAGS` (workflow *and*
 `xraycore.AWGConfirmedTags`) and is `xraycore.PrereleaseTag`;
 `DefaultTag` stays `v26.3.27` -- upstream calls `v26.10.21` an emergency
 interim release and promises the stable one at the end of October, which is
@@ -880,9 +881,10 @@ actually built"). What's left is verification and one more tag:
    2026-10-25 section). What's left is one on-router check of the
    *production* arm64 flavor (CGO off; the dev build the user ran is the CGO
    diagnostic one) -- `ensure-xray-core --tag=v26.10.21` with no base-URL
-   override, restart, an AWG profile and the TUN transport -- and a measured
-   TUN throughput on the new stack, so the "~3x slower" wording in README /
-   `docs/routing.md` can be fixed with numbers. The order that matters when
+   override, restart, an AWG profile and the TUN transport. Not measured on
+   the new stack, if exact numbers are ever wanted: CPU / memory under load,
+   the gate under load, MTU, IPv6 (the docs carry only the owner's 250+
+   Mbit/s). The order that matters when
    promoting a tag: publish the real `xray-core/<tag>` first, then the app
    release right after (the bot offers a real `xray-core/` release at once, and
    an app build that lacks the tag in `AWGConfirmedTags` warns "no AWG in this

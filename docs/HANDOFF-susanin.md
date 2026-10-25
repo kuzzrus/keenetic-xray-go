@@ -508,3 +508,52 @@ known, cataloged service. Block-aggregation's actual value is the
 long tail nothing has cataloged, which is Susanin's whole reason to
 exist in the first place (see the "Susanin is for the unpredictable
 long tail" framing above).
+
+## 2026-10-25 -- QUIC (UDP/443) is rejected, not REDIRECTed
+
+The hardware recon at the top of this file listed "UDP/QUIC REDIRECT
+reliability" and the first live tests only proved a UDP datagram *arrives*
+at a plain listener. It never arrives *usefully* at xray: REDIRECT cannot
+carry UDP into the dokodemo-door inbound. For TCP the inbound recovers the
+real destination from the conntrack entry (`SO_ORIGINAL_DST`); for UDP it
+only has the `IP_RECVORIGDSTADDR` of the datagram it received, and after a
+REDIRECT that is the router's own address and the redirect port (netns
+bench plus xray's `transport/internet/udp/hub_linux.go`). So every
+redirected QUIC datagram was forwarded through the tunnel to the router
+itself and died, and a client fell back to TCP only after its own QUIC
+timeout.
+
+`internal/adaptiveroute` therefore no longer redirects UDP at all. Per LAN
+interface it installs, besides the two TCP REDIRECTs (80, 443), one rule in
+`filter/FORWARD` inserted at position 1:
+
+    -i <lan> -p udp -m set --match-set keenetic_xray_adaptive dst --dport 443
+    -m comment --comment keenetic-xray-adaptive
+    -j REJECT --reject-with icmp-port-unreachable
+
+Reject, not drop: the ICMP error makes the client's fallback to TCP
+immediate (Tachyon's `disable_quic` and KvasPro do the same; see
+`tachyon-study`). It is scoped to the same set and interfaces as the
+REDIRECT -- rejecting QUIC for traffic that really goes direct would break
+QUIC that works. `EnsureRedirect` clears the old UDP REDIRECT of an earlier
+version on its way; `RedirectInPlace` treats a leftover one as drift;
+`ClearRedirect` (adaptive off, the AR-09 fail-open to DIRECT) removes the
+reject too; `EnsureIPSet`'s destroy-and-recreate clears it before the
+destroy (a rule referencing the set blocks `ipset destroy`); the ndm
+`netfilter.d` hook already signals the daemon for `filter` rebuilds.
+
+The reject is best-effort: a router whose iptables lacks the REJECT target
+keeps its TCP REDIRECT, `QUICRejectProblem()` says why, and
+`RedirectInPlace` stops demanding the rule (otherwise reconcile would
+rebuild a working REDIRECT every two minutes for nothing).
+
+Verified on a real Linux kernel (Ubuntu 6.8, iptables-nft) in three network
+namespaces driving the real functions: member UDP/443 is refused in ~0 s,
+UDP/5000 and a non-member are untouched, member TCP/443 is REDIRECTed and a
+non-member goes direct, the old UDP REDIRECT reproduces as a timeout and is
+gone after `EnsureRedirect`, drift is noticed and repaired, `ClearRedirect`
+restores the direct path for both protocols, and the stale hash:ip set
+upgrade still works with both rule kinds present. Not verified on a Keenetic:
+the `-I FORWARD 1` position against NDM's own FORWARD chain and the
+availability of `ipt_REJECT` in its kernel -- check with
+`iptables -S FORWARD | head -3` and a QUIC client on a promoted address.

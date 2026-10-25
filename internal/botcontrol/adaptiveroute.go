@@ -112,6 +112,14 @@ func (h *RouterHandler) adaptiveRouteShow(ctx context.Context) (string, error) {
 	} else {
 		b.WriteString("\nREDIRECT: НЕ активен (нужны 🩺 Doctor/реконсиляция)")
 	}
+	switch problem := adaptiveroute.QUICRejectProblem(); {
+	case adaptiveroute.QUICRejectInPlace(ctx, opts):
+		b.WriteString("\nQUIC (UDP/443): отклоняется — клиент сразу переходит на TCP")
+	case problem != "":
+		fmt.Fprintf(&b, "\nQUIC (UDP/443): правило не поставилось (%s) — к таким адресам QUIC ждёт таймаут клиента", problem)
+	default:
+		b.WriteString("\nQUIC (UDP/443): правила нет (реконсиляция поставит)")
+	}
 	if members, err := adaptiveroute.Members(ctx, adaptiveroute.RedirectSetName); err == nil {
 		fmt.Fprintf(&b, "\nСейчас перенаправлено адресов/подсетей: %d", len(members))
 	}

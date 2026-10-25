@@ -168,6 +168,11 @@ func writeDiag(w io.Writer) {
 				redirect = "активен"
 			}
 			fmt.Fprintf(w, "REDIRECT (%s): %s\n", iface, redirect)
+			quic := "НЕ установлено"
+			if adaptiveroute.QUICRejectInPlace(ctx, opts) {
+				quic = "отклоняется (ICMP port-unreachable)"
+			}
+			fmt.Fprintf(w, "QUIC reject, UDP/443 (%s): %s\n", iface, quic)
 			if members, err := adaptiveroute.Members(ctx, adaptiveroute.RedirectSetName); err == nil {
 				fmt.Fprintf(w, "ipset %s: %d записей\n", adaptiveroute.RedirectSetName, len(members))
 			} else {

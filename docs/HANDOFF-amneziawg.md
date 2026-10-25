@@ -781,8 +781,27 @@ built locally with Go 1.27.0:
 
 That is about 2.36 MB (7.3 % / 6.4 %) less than `v26.9.30` and 3.5-3.6 MB less
 than `v26.10.10` -- the gVisor removal outweighs the Lua stack and the root
-bundle that `v26.10.10` added. UPX / xz figures come from the CI provenance of
-the dev build.
+bundle that `v26.10.10` added.
+
+What CI published for the dev build (run 40207204764: go1.27.3, UPX 4.2.2
+`-9`, `--lzma` on arm64 only; all four checksums verified, commit `1b1647c` =
+the upstream tag). mipsle is CGO-off in both columns and compares like with
+like; the dev build's arm64 is the CGO diagnostic flavour, so it only compares
+with other dev builds:
+
+| bytes | `v26.9.30` | `v26.10.10` (withdrawn) | `v26.10.21` |
+|---|---|---|---|
+| mipsle unpacked | 36,765,851 | 38,011,035 | 34,406,555 |
+| mipsle UPX / xz | 11,097,508 / 7,366,924 | 11,550,484 / 7,698,332 | 10,540,652 / 7,027,484 |
+| arm64 dev (CGO) unpacked | -- | 34,129,320 | 30,647,816 |
+| arm64 dev (CGO) UPX | 8,020,716 | 8,371,068 | 7,638,092 |
+
+A router downloads 0.56 MB less (mipsle, -5.0 %) than for the production
+`v26.9.30`, and 0.73 MB less than for the withdrawn `v26.10.10` dev build
+(arm64 dev to dev, -8.8 %). The production-flavour arm64 figure follows with
+the real build. The locally built mipsle (go1.27.0) and CI's (go1.27.3) have
+the same size but different hashes: another Go patch release, and CI
+regenerates `config.pb.go` with the workflow's own protoc.
 
 **A caution for rebuilding older tags.** `v26.10.17` carries #7176, "XTLS
 Vision: Compatible with Go 1.27.3+": Vision reaches into `tls.Conn` / REALITY's
@@ -792,7 +811,18 @@ REALITY+Vision server once the buffers moved. The workflow resolves
 `v26.9.9` or `v26.9.30` would now build them with a Go that upstream says needs
 the fix those tags lack**. Their published `xray-core/` assets are unaffected
 (built earlier); if a rebuild is ever needed, pin Go 1.27.1/1.27.2 for it and
-test Vision.
+test Vision. For the same reason `xray-core.yml` no longer prefills
+`xray_version` (it used to say `v26.9.9`, a confirmed tag that publishes over
+the real `xray-core/v26.9.9`): the tag is an explicit choice on every dispatch.
+
+**CI runner.** While this was being built `ubuntu-latest` moved to Ubuntu
+26.04, where `apt-get install qemu-user-static` has no candidate. That failed
+the first dev-stage run (at "Smoke test under QEMU", both arches) and every
+PR's `ci.yml` build, and would have stopped the next release at the UPX step.
+The five jobs that need qemu / UPX / a cross gcc are pinned to `ubuntu-24.04`
+(#308) -- the image all earlier builds and the size tables here came from.
+Moving to 26.04 later means `qemu-user` instead of `qemu-user-static` and a
+fresh look at what its UPX does to the sizes.
 
 Next, as before: dispatch `xray_version=v26.10.21 awg_dev=true` (publishes
 `xray-core-awg-dev/v26.10.21`, which no release path installs), test it on a

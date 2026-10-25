@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated": "2026-10-23",
+  "generated": "2026-10-25",
   "categories": [
     "Мессенджеры",
     "Видео",
@@ -332,8 +332,8 @@
       "title": "Dropbox",
       "category": "Работа и инструменты",
       "kind": "domains",
-      "count": 16,
-      "rev": "08810925fc44",
+      "count": 25,
+      "rev": "89c872507624",
       "sources": [
         "Geo-Aggregator: dropbox"
       ]

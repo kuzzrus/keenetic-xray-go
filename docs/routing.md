@@ -377,9 +377,11 @@ HTTPS request took ~300 ms through the tunnel against ~200 ms direct, a STUN
 round trip ~65 ms against ~20 ms. Enable it with `keenetic-xray setup`
 (option 5), the bot, or `transport tun on`.
 
-**Throughput is the price.** Measured on the same router (2 cores, 497 MB)
-with a LAN client downloading one large file for 20 s per path, the same
-client and the same xray each time:
+**Throughput depends on the xray core.** On the cores up to `v26.9.30` --
+gVisor inside xray's `tun` inbound, the default `v26.3.27` included -- it is
+the price of the TUN. Measured with `v26.9.30` on the same router (2 cores,
+497 MB) with a LAN client downloading one large file for 20 s per path, the
+same client and the same xray each time:
 
 | path | 1 stream | 4 streams |
 |---|---|---|
@@ -396,4 +398,17 @@ nothing), but not for bulk downloads: keep those on Proxy0. Other effects of a
 heavy transfer: the gate did **not** trip (its checks still got through at
 100% CPU); xray's resident memory grew from ~54 MB to ~110 MB and stays there
 (Go keeps it), and free memory fell to ~85 MB at the peak on a 497 MB router.
-`transport tun mtu <1280..1500|auto>` changes the MTU of the interface and of xray's inbound together. A larger one means fewer packets for the userspace stack that limits the throughput, and it pays: an A/B/A/B run on the same router, 1280 / 1500 / 1280 / 1500 with one stream and then 1280 / 1500 with four, gave 52.0 / 52.5 / 49.4 / 58.4 Mbit/s and 71.0 / 81.8 Mbit/s -- 1500 ahead in every pair, +9% with one stream and +15% with four (the device counters agree: +7%, +19%, +14%). The clients' segments grew from 1228 to 1448 bytes, so the change really reached xray's stack. Hence the default is 1500; an interface an older version made with `ip mtu 1280` is re-applied by the daemon's reconcile. The CPU load is the same, so what improves is the work per packet, not the ceiling -- the TUN stays ~3x slower than SOCKS. Not measured: IPv6, a faster router.
+`transport tun mtu <1280..1500|auto>` changes the MTU of the interface and of xray's inbound together. A larger one means fewer packets for the userspace stack that limits the throughput, and it pays: an A/B/A/B run on the same router, 1280 / 1500 / 1280 / 1500 with one stream and then 1280 / 1500 with four, gave 52.0 / 52.5 / 49.4 / 58.4 Mbit/s and 71.0 / 81.8 Mbit/s -- 1500 ahead in every pair, +9% with one stream and +15% with four (the device counters agree: +7%, +19%, +14%). The clients' segments grew from 1228 to 1448 bytes, so the change really reached xray's stack. Hence the default is 1500; an interface an older version made with `ip mtu 1280` is re-applied by the daemon's reconcile. The CPU load is the same, so what improves is the work per packet, not the ceiling -- on these cores the TUN stays ~3x slower than SOCKS. Not measured: IPv6, a faster router.
+
+**`v26.10.21` and newer are much faster.** Upstream replaced gVisor in the TUN
+inbound with Xray's own lightweight TCP/IP stack (xray-core #7130 and #7179:
+the device is opened with offload, so TCP segments of up to 64 KiB cross it
+per syscall), and the owner of the test router saw **250+ Mbit/s** through the
+TUN on it with `v26.10.21` -- far above the 55-80 Mbit/s in the table. That
+number comes from a speed test he ran himself, not from the harness behind the
+table, so it is only roughly comparable; everything above this paragraph,
+including "~3x slower than SOCKS" and the MTU run, was measured on gVisor
+cores. Not measured on the new stack: CPU and memory under load, the gate under
+load, the MTU, IPv6. Install the core from the bot (router card, "🧩 Ядро
+xray", "Пререлиз") or with `keenetic-xray internal ensure-xray-core
+--tag=v26.10.21`.

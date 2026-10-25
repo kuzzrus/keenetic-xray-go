@@ -83,6 +83,40 @@ func TestGenerateXrayConfig_WSTLS(t *testing.T) {
 	if wsSettings["path"] != "/ws" {
 		t.Errorf("wsSettings.path = %v, want /ws", wsSettings["path"])
 	}
+	// The Host goes in the independent "host" key; headers.Host is
+	// deprecated upstream (xray-core warns, and will drop it).
+	if wsSettings["host"] != "cdn.example.com" {
+		t.Errorf("wsSettings.host = %v, want cdn.example.com", wsSettings["host"])
+	}
+	if _, has := wsSettings["headers"]; has {
+		t.Errorf("wsSettings.headers = %#v, want it absent (deprecated Host-in-headers form)", wsSettings["headers"])
+	}
+}
+
+// TestGenerateXrayConfig_WSNoHost: a ws profile without a Host emits neither
+// "host" nor "headers" -- xray then falls back to serverName / address.
+func TestGenerateXrayConfig_WSNoHost(t *testing.T) {
+	p := validProfile()
+	p.Network = "ws"
+	p.Security = "tls"
+	p.SNI = "cdn.example.com"
+	p.Path = "/ws"
+
+	data, err := GenerateXrayConfig(XrayConfigOptions{SOCKSPort: 1080, Outbound: p})
+	if err != nil {
+		t.Fatalf("GenerateXrayConfig: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	stream := decoded["outbounds"].([]any)[0].(map[string]any)["streamSettings"].(map[string]any)
+	wsSettings := stream["wsSettings"].(map[string]any)
+	for _, k := range []string{"host", "headers"} {
+		if _, has := wsSettings[k]; has {
+			t.Errorf("wsSettings.%s present without a profile Host: %#v", k, wsSettings)
+		}
+	}
 }
 
 func TestGenerateXrayConfig_XHTTPTLS(t *testing.T) {

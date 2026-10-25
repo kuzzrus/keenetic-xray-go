@@ -501,7 +501,13 @@ func buildStreamSettings(p Profile, xhttpMode string) (map[string]any, error) {
 			wsSettings["path"] = p.Path
 		}
 		if p.Host != "" {
-			wsSettings["headers"] = map[string]any{"Host": p.Host}
+			// The independent "host" key, not headers.Host: xray-core
+			// (v26.3.27 through v26.10.21 alike) moves headers.Host into
+			// it anyway, but prints "This feature "host" in "headers" is
+			// deprecated, will be removed soon" doing so -- and once
+			// removed the Host header of a CDN-fronted ws profile would
+			// silently be lost. Same resulting websocket.Config either way.
+			wsSettings["host"] = p.Host
 		}
 		stream["wsSettings"] = wsSettings
 	case "grpc":

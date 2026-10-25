@@ -693,6 +693,115 @@ Next, as before: dispatch `xray_version=v26.10.10 awg_dev=true` (publishes
 `xray-core-awg-dev/v26.10.10`, which no release path installs), test it on a
 router, and only then promote.
 
+**Superseded on 2026-10-25: upstream withdrew `v26.10.10`** (see the next
+section). The tag no longer exists, `amneziawg-v26.10.10.patch` is deleted, and
+the dev build `xray-core-awg-dev/v26.10.10` must not be installed: its built-in
+root-CA bundle carries the roots upstream pulled.
+
+## 2026-10-25 — `v26.10.21`: patch re-derived again, dev build staged
+
+Upstream `v26.10.21` (2026-10-21, marked **Latest**, 58 commits / 225 files
+after `v26.9.30`) is an emergency release. The private keys of eight Indian
+intermediate certificates turned out to be guessable (XTLS/Xray-core#7212); the
+built-in root bundle that `v26.10.10` introduced (#7105) carried three roots
+that are now distrusted, so upstream **withdrew `v26.10.10` and `v26.10.17`**
+and shipped `v26.10.21` without those roots, built with Go 1.27.3 (whose own
+distrust list drops the certificates even where the OS bundle is stale). Its
+notes say the full stable release follows at the end of the month. The commit
+of the withdrawn `v26.10.10` (`701af607`) stays reachable from `v26.10.21`,
+which is what keeps a `--3way` merge of the old patch possible.
+
+What moved under the patch:
+
+- **gVisor is gone (#7130, #7156, #7179).** The TUN inbound, the WireGuard
+  proxy and the MASQUE proxy now run on Xray's own lightweight TCP/IP stack
+  (`proxy/tun/{stack,tcp_lightweight,packet}.go`); no Go file imports gVisor
+  any more (go.mod keeps it as an indirect requirement). On Linux the TUN
+  device is opened with `IFF_VNET_HDR` + `TUNSETOFFLOAD`, so TCP segments of up
+  to 64 KiB cross the device per syscall. `proxy/wireguard` was rewritten around
+  it: `icmp.go`, `icmp_test.go`, `queue_bench_test.go` and `tun_test.go` are
+  gone, `tun.go` fell from 381 lines to a 35-line interface-name helper,
+  `netstack.go` now sits on `proxy/tun`'s stack, and two test files arrived --
+  `netstack_test.go` imports the wireguard-go `tun` package and needs the same
+  import swap as the rest, so the patch is **16 files, not 15**. The unpacked
+  binary shrinks as a side effect (below).
+- **#7151, "WireGuard outbound: keep the device when its setup fails".**
+  `NewClient` now creates the device once; `up()` retries `IpcSet`/`Up` on the
+  next connection and keeps the config string until both succeed. That is the
+  very leak AWG-05's `dev.Close()` hunk worked around, so the hunk is
+  **dropped**: `NewClient` has no failing return after `device.NewDevice`, and
+  `Handler.Close` closes the device. The AWG UAPI block therefore moved into
+  `NewClient` (as `conf.Jc`, ...), still right after `private_key=` and before
+  the first `public_key=`.
+- `bind.go` (the receive-side `len(b.reserved) == 3` guard), `config.proto`,
+  `config.pb.go` and `infra/conf/wireguard.go` are byte-identical upstream since
+  `v26.10.10` and carry over as they were. The TUN inbound's JSON schema
+  (`infra/conf/tun.go`, `proxy/tun/config.proto`) did not change for Linux.
+
+Derivation (`git clone -c core.autocrlf=false --filter=blob:none
+--no-checkout`, then `git checkout 701af607` once so the old patch's base blobs
+are local, then `git checkout v26.10.21` and `git apply --3way` of the old
+patch): nine files merged by themselves; the six conflicts were go.mod, four
+files whose import blocks lost the gVisor lines the patch used to sit next to
+(`server.go`, `netstack.go`, `masque/server_test.go`, `tun/tun_freebsd.go`) and
+`client.go`, whose AWG hunks lost their context because the `init()` they
+patched no longer exists. Each was resolved by taking the pristine upstream file
+and swapping the three wireguard-go import paths mechanically (`sed` +
+`gofmt -w`); `client.go` also got its AWG block re-inserted into `NewClient`;
+go.mod / go.sum were regenerated from a pristine copy with a real `go mod edit
+-require/-replace` + `go mod tidy` against the same fork commit as before
+(`9f61425`, the AWG-04 fix). The new `netstack_test.go` got the same swap.
+
+Verified without hardware: plain `git apply` on a pristine `v26.10.21` checkout
+(what CI runs) gives a tree identical to the working one (`git write-tree`);
+`gofmt -l` clean on every touched file; no leftover
+`golang.zx2c4.com/wireguard/{tun,device,conn}` imports; `go build ./...`;
+`linux/arm64` and `linux/mipsle` softfloat builds of `./main`; unit tests of
+`proxy/wireguard` and `proxy/masque` and the `infra/conf` Masque / Wireguard
+tests; upstream's own `TestWireguard` + `TestMasque*` scenario tests (20 s); the
+loopback harness (5/5 -- its client side is the new built-in stack, since
+Windows has no kernel TUN). `go vet` reports only two findings that sit in
+untouched upstream code (`proxy/masque/client.go` copies a lock into
+`NewXmuxManager`, `infra/conf/xray.go` unreachable code). The workflow's own
+protoc regeneration is the one CI step not run locally.
+
+What none of that exercises: the **kernel-TUN path** (`createKernelTun` in
+`tun_linux.go`, the one a router uses for the AWG outbound unless `noKernelTun`
+is set -- unchanged since `v26.10.10`), a real AWG server's quirks, and whether
+a Keenetic kernel accepts the new TUN inbound's `TUNSETOFFLOAD`. Those are what
+the router test is for.
+
+**Size**, unpacked, the CI recipe (CGO off, `-trimpath`, `-s -w -buildid=`)
+built locally with Go 1.27.0:
+
+| bytes | `v26.9.30` | `v26.10.10` | `v26.10.21` |
+|---|---|---|---|
+| arm64 unpacked | 32,112,764 | 33,226,876 | 29,753,468 |
+| mipsle unpacked | 36,765,851 | 38,011,035 | 34,406,555 |
+
+That is about 2.36 MB (7.3 % / 6.4 %) less than `v26.9.30` and 3.5-3.6 MB less
+than `v26.10.10` -- the gVisor removal outweighs the Lua stack and the root
+bundle that `v26.10.10` added. UPX / xz figures come from the CI provenance of
+the dev build.
+
+**A caution for rebuilding older tags.** `v26.10.17` carries #7176, "XTLS
+Vision: Compatible with Go 1.27.3+": Vision reaches into `tls.Conn` / REALITY's
+`Conn` through `unsafe` field offsets, and issue #7162 is a SIGSEGV on a
+REALITY+Vision server once the buffers moved. The workflow resolves
+`go-version-file` + `check-latest` to the newest Go 1.27.x, so **re-dispatching
+`v26.9.9` or `v26.9.30` would now build them with a Go that upstream says needs
+the fix those tags lack**. Their published `xray-core/` assets are unaffected
+(built earlier); if a rebuild is ever needed, pin Go 1.27.1/1.27.2 for it and
+test Vision.
+
+Next, as before: dispatch `xray_version=v26.10.21 awg_dev=true` (publishes
+`xray-core-awg-dev/v26.10.21`, which no release path installs), test it on a
+router, and only then promote. The router test has three parts: an AWG profile
+through the patched core (the kernel-TUN path), a plain `security=tls` profile
+(the TLS client now trusts only the built-in roots unless `useSystemCA` is set),
+and -- since the TUN inbound is new -- the TUN transport's throughput and
+fallback (`docs/routing.md`, "Routing through an OpkgTun interface").
+
 ## How to resume
 
 Everything the original plan called for is now built (see "What's
@@ -723,13 +832,16 @@ actually built"). What's left is verification and one more tag:
    --tag=v26.9.30` with no base-URL override, restart, confirm an AWG
    profile still passes traffic -- then cut a keenetic-xray release that
    carries the new `PrereleaseTag`.
-4. **`v26.10.10`**: patch in the repo, dev build staged (see the 2026-10-11
-   section). Left: run it on a router (an AWG profile through the patched
-   core, plus a check that a plain `security=tls` profile still verifies
-   its server now that the TLS client trusts the built-in roots), and only
-   then add the tag to `AWG_CONFIRMED_TAGS` (workflow *and*
-   `xraycore.AWGConfirmedTags`), move `xraycore.PrereleaseTag`, and build
-   the real `xray-core/v26.10.10` without `awg_dev`.
+4. **`v26.10.21`** (`v26.10.10` was withdrawn upstream): patch in the repo,
+   dev build staged (see the 2026-10-25 section). Left: run it on a router
+   (an AWG profile through the patched core, a plain `security=tls` profile
+   to confirm it still verifies its server against the built-in roots, and
+   the TUN transport's speed), and only then add the tag to
+   `AWG_CONFIRMED_TAGS` (workflow *and* `xraycore.AWGConfirmedTags`), move
+   `xraycore.PrereleaseTag`, build the real `xray-core/v26.10.21` without
+   `awg_dev`, and ship the app release right after (the bot offers a real
+   `xray-core/` release at once, and an app build that lacks the tag in
+   `AWGConfirmedTags` warns "no AWG in this core").
 5. If re-entering Plan Mode for any of these, re-read this document
    plus the current code first — don't assume an old plan-file survived
    (Plan Mode's plan file gets reused for whatever's being planned at the

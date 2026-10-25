@@ -1,5 +1,5 @@
 diff --git a/go.mod b/go.mod
-index b9abcee..bfe4808 100644
+index 312aac9..1ec6455 100644
 --- a/go.mod
 +++ b/go.mod
 @@ -3,6 +3,7 @@ module github.com/xtls/xray-core
@@ -8,36 +8,27 @@ index b9abcee..bfe4808 100644
  require (
 +	github.com/amnezia-vpn/amneziawg-go/v3 v3.1.20260828
  	github.com/apernet/quic-go v0.61.1-0.20260806010916-184d081eef3e
- 	github.com/cloudflare/circl v1.6.5
  	github.com/ghodss/yaml v1.0.1-0.20220118164431-d8423dcdf344
+ 	github.com/golang/mock v1.7.0-rc.1
 @@ -29,7 +30,6 @@ require (
- 	golang.org/x/sync v0.23.0
- 	golang.org/x/sys v0.48.0
+ 	golang.org/x/sync v0.24.0
+ 	golang.org/x/sys v0.49.0
  	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
 -	golang.zx2c4.com/wireguard v0.0.0-20250521234502-f333402bd9cb
  	golang.zx2c4.com/wireguard/windows v1.1.1
  	google.golang.org/grpc v1.84.0
  	google.golang.org/protobuf v1.36.12
-@@ -42,7 +42,7 @@ require (
- 
- require (
- 	github.com/andybalholm/brotli v1.0.6 // indirect
--	github.com/google/btree v1.1.2 // indirect
-+	github.com/google/btree v1.1.3 // indirect
- 	github.com/google/gopacket v1.1.19 // indirect
- 	github.com/huin/goupnp v1.2.0 // indirect
- 	github.com/jackpal/go-nat-pmp v1.0.2 // indirect
-@@ -64,3 +64,5 @@ require (
- 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260706201446-f0a921348800 // indirect
+@@ -61,3 +61,5 @@ require (
  	gopkg.in/yaml.v2 v2.4.0 // indirect
+ 	gvisor.dev/gvisor v0.0.0-20260122175437-89a5d21be8f0 // indirect
  )
 +
 +replace github.com/amnezia-vpn/amneziawg-go/v3 => github.com/kuzzrus/amneziawg-go/v3 v3.1.20260829-0.20260922090841-9f614256e326
 diff --git a/go.sum b/go.sum
-index c7f6943..20987b7 100644
+index 289c2ce..838bc62 100644
 --- a/go.sum
 +++ b/go.sum
-@@ -15,8 +15,8 @@ github.com/golang/mock v1.7.0-rc.1 h1:YojYx61/OLFsiv6Rw1Z96LpldJIy31o+UHmwAUMJ6/
+@@ -13,8 +13,8 @@ github.com/golang/mock v1.7.0-rc.1 h1:YojYx61/OLFsiv6Rw1Z96LpldJIy31o+UHmwAUMJ6/
  github.com/golang/mock v1.7.0-rc.1/go.mod h1:s42URUywIqd+OcERslBJvOjepvNymP31m3q8d/GkuRs=
  github.com/golang/protobuf v1.5.4 h1:i7eJL8qZTpSEXOPTxNKhASYpMn+8e5Q6AdndVa1dWek=
  github.com/golang/protobuf v1.5.4/go.mod h1:lnTiLA8Wa4RWRcIUkrtSVa5nRhsEGBg48fD6rSs7xps=
@@ -48,7 +39,7 @@ index c7f6943..20987b7 100644
  github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
  github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
  github.com/google/gopacket v1.1.19 h1:ves8RnFZPGiFnTS0uPQStjwru6uO6h+nlr9j6fL7kF8=
-@@ -43,6 +43,8 @@ github.com/kr/pretty v0.3.1 h1:flRD4NNwYAUpkphVc1HcthR4KEIFJ65n8Mw5qdRn3LE=
+@@ -41,6 +41,8 @@ github.com/kr/pretty v0.3.1 h1:flRD4NNwYAUpkphVc1HcthR4KEIFJ65n8Mw5qdRn3LE=
  github.com/kr/pretty v0.3.1/go.mod h1:hoEshYVHaxMs3cyo3Yncou5ZscifuDolrwPKZanG3xk=
  github.com/kr/text v0.2.0 h1:5Nx0Ya0ZqY2ygV366QzturHI13Jq95ApcVaJBhpS+AY=
  github.com/kr/text v0.2.0/go.mod h1:eLer722TekiGuMkidMxC/pM04lWEeraHUUmBw8l2grE=
@@ -184,11 +175,11 @@ index f489d38..3909fff 100644
  	var err error
  
 diff --git a/proxy/masque/client.go b/proxy/masque/client.go
-index 161542f..691ddf3 100644
+index 4987948..89c2d16 100644
 --- a/proxy/masque/client.go
 +++ b/proxy/masque/client.go
-@@ -10,7 +10,7 @@ import (
- 	"sync/atomic"
+@@ -9,7 +9,7 @@ import (
+ 	"sync"
  	"time"
  
 -	"golang.zx2c4.com/wireguard/tun"
@@ -197,7 +188,7 @@ index 161542f..691ddf3 100644
  	"github.com/xtls/xray-core/common"
  	"github.com/xtls/xray-core/common/buf"
 diff --git a/proxy/masque/server.go b/proxy/masque/server.go
-index f9cc2ff..766aaf9 100644
+index db8660d..c4a8365 100644
 --- a/proxy/masque/server.go
 +++ b/proxy/masque/server.go
 @@ -10,7 +10,7 @@ import (
@@ -210,37 +201,40 @@ index f9cc2ff..766aaf9 100644
  	"github.com/xtls/xray-core/common"
  	"github.com/xtls/xray-core/common/buf"
 diff --git a/proxy/masque/server_test.go b/proxy/masque/server_test.go
-index 9b526f7..48fe7da 100644
+index e10b684..9fdfddd 100644
 --- a/proxy/masque/server_test.go
 +++ b/proxy/masque/server_test.go
-@@ -10,11 +10,11 @@ import (
+@@ -11,6 +11,7 @@ import (
  	"testing"
  	"time"
  
 +	"github.com/amnezia-vpn/amneziawg-go/v3/tun"
  	"github.com/stretchr/testify/require"
+ 	"github.com/xtls/xray-core/common"
  	"github.com/xtls/xray-core/common/buf"
- 	"github.com/xtls/xray-core/common/net"
+@@ -18,7 +19,6 @@ import (
  	"github.com/xtls/xray-core/common/protocol"
+ 	"github.com/xtls/xray-core/features/routing"
+ 	"github.com/xtls/xray-core/transport"
 -	"golang.zx2c4.com/wireguard/tun"
  )
  
  type fakeTunnelConn struct {
 diff --git a/proxy/tun/tun_freebsd.go b/proxy/tun/tun_freebsd.go
-index 0784750..197fe47 100644
+index 4194abc..9752895 100644
 --- a/proxy/tun/tun_freebsd.go
 +++ b/proxy/tun/tun_freebsd.go
-@@ -12,7 +12,7 @@ import (
+@@ -15,7 +15,7 @@ import (
  	"sync"
  	"unsafe"
  
 -	"golang.zx2c4.com/wireguard/tun"
 +	"github.com/amnezia-vpn/amneziawg-go/v3/tun"
- 	"gvisor.dev/gvisor/pkg/buffer"
- 	"gvisor.dev/gvisor/pkg/tcpip"
- 	"gvisor.dev/gvisor/pkg/tcpip/stack"
+ 
+ 	"golang.org/x/net/route"
+ 	"golang.org/x/sys/unix"
 diff --git a/proxy/wireguard/bind.go b/proxy/wireguard/bind.go
-index fda540d..a0af658 100644
+index ab2596d..9344c57 100644
 --- a/proxy/wireguard/bind.go
 +++ b/proxy/wireguard/bind.go
 @@ -10,9 +10,9 @@ import (
@@ -254,7 +248,7 @@ index fda540d..a0af658 100644
  )
  
  type bind struct {
-@@ -66,7 +66,19 @@ func (b *bind) Open(port uint16) (fns []conn.ReceiveFunc, actualPort uint16, err
+@@ -70,7 +70,19 @@ func (b *bind) Open(port uint16) (fns []conn.ReceiveFunc, actualPort uint16, err
  					errors.LogErrorInner(context.Background(), err, "bind recv err")
  					continue
  				}
@@ -276,11 +270,11 @@ index fda540d..a0af658 100644
  					bufs[0][2] = 0
  					bufs[0][3] = 0
 diff --git a/proxy/wireguard/client.go b/proxy/wireguard/client.go
-index c47e3c8..bb9a7ac 100644
+index 506ec4e..06e185e 100644
 --- a/proxy/wireguard/client.go
 +++ b/proxy/wireguard/client.go
-@@ -9,8 +9,9 @@ import (
- 	"sync"
+@@ -10,8 +10,9 @@ import (
+ 	"sync/atomic"
  	"time"
  
 -	"golang.zx2c4.com/wireguard/tun"
@@ -290,7 +284,7 @@ index c47e3c8..bb9a7ac 100644
  	"github.com/xtls/xray-core/common"
  	"github.com/xtls/xray-core/common/buf"
  	"github.com/xtls/xray-core/common/dice"
-@@ -27,7 +28,6 @@ import (
+@@ -28,7 +29,6 @@ import (
  	"github.com/xtls/xray-core/features/stats"
  	"github.com/xtls/xray-core/transport"
  	"github.com/xtls/xray-core/transport/internet"
@@ -298,110 +292,92 @@ index c47e3c8..bb9a7ac 100644
  )
  
  type Handler struct {
-@@ -312,6 +312,85 @@ func (h *Handler) init(ctx context.Context) error {
- 	bind.setDownFunc(dev.Down)
+@@ -179,6 +179,85 @@ func NewClient(ctx context.Context, conf *DeviceConfig) (*Handler, error) {
+ 	bind.reserved = conf.Reserved
  	var cfg strings.Builder
- 	cfg.WriteString("private_key=" + h.conf.SecretKey + "\n")
+ 	cfg.WriteString("private_key=" + conf.SecretKey + "\n")
 +	// AmneziaWG obfuscation parameters -- device-level UAPI keys, so they
 +	// must be written before the first "public_key=" line below. Every
 +	// field is empty for a plain (non-AWG) profile, so none of these
 +	// lines write anything and this is a no-op for existing configs.
-+	if h.conf.Jc != "" {
-+		cfg.WriteString("jc=" + h.conf.Jc + "\n")
++	if conf.Jc != "" {
++		cfg.WriteString("jc=" + conf.Jc + "\n")
 +	}
-+	if h.conf.Jmin != "" {
-+		cfg.WriteString("jmin=" + h.conf.Jmin + "\n")
++	if conf.Jmin != "" {
++		cfg.WriteString("jmin=" + conf.Jmin + "\n")
 +	}
-+	if h.conf.Jmax != "" {
-+		cfg.WriteString("jmax=" + h.conf.Jmax + "\n")
++	if conf.Jmax != "" {
++		cfg.WriteString("jmax=" + conf.Jmax + "\n")
 +	}
-+	if h.conf.S1 != "" {
-+		cfg.WriteString("s1=" + h.conf.S1 + "\n")
++	if conf.S1 != "" {
++		cfg.WriteString("s1=" + conf.S1 + "\n")
 +	}
-+	if h.conf.S2 != "" {
-+		cfg.WriteString("s2=" + h.conf.S2 + "\n")
++	if conf.S2 != "" {
++		cfg.WriteString("s2=" + conf.S2 + "\n")
 +	}
-+	if h.conf.S3 != "" {
-+		cfg.WriteString("s3=" + h.conf.S3 + "\n")
++	if conf.S3 != "" {
++		cfg.WriteString("s3=" + conf.S3 + "\n")
 +	}
-+	if h.conf.S4 != "" {
-+		cfg.WriteString("s4=" + h.conf.S4 + "\n")
++	if conf.S4 != "" {
++		cfg.WriteString("s4=" + conf.S4 + "\n")
 +	}
-+	if h.conf.H1 != "" {
-+		cfg.WriteString("h1=" + h.conf.H1 + "\n")
++	if conf.H1 != "" {
++		cfg.WriteString("h1=" + conf.H1 + "\n")
 +	}
-+	if h.conf.H2 != "" {
-+		cfg.WriteString("h2=" + h.conf.H2 + "\n")
++	if conf.H2 != "" {
++		cfg.WriteString("h2=" + conf.H2 + "\n")
 +	}
-+	if h.conf.H3 != "" {
-+		cfg.WriteString("h3=" + h.conf.H3 + "\n")
++	if conf.H3 != "" {
++		cfg.WriteString("h3=" + conf.H3 + "\n")
 +	}
-+	if h.conf.H4 != "" {
-+		cfg.WriteString("h4=" + h.conf.H4 + "\n")
++	if conf.H4 != "" {
++		cfg.WriteString("h4=" + conf.H4 + "\n")
 +	}
-+	if h.conf.I1 != "" {
-+		cfg.WriteString("i1=" + h.conf.I1 + "\n")
++	if conf.I1 != "" {
++		cfg.WriteString("i1=" + conf.I1 + "\n")
 +	}
-+	if h.conf.I2 != "" {
-+		cfg.WriteString("i2=" + h.conf.I2 + "\n")
++	if conf.I2 != "" {
++		cfg.WriteString("i2=" + conf.I2 + "\n")
 +	}
-+	if h.conf.I3 != "" {
-+		cfg.WriteString("i3=" + h.conf.I3 + "\n")
++	if conf.I3 != "" {
++		cfg.WriteString("i3=" + conf.I3 + "\n")
 +	}
-+	if h.conf.I4 != "" {
-+		cfg.WriteString("i4=" + h.conf.I4 + "\n")
++	if conf.I4 != "" {
++		cfg.WriteString("i4=" + conf.I4 + "\n")
 +	}
-+	if h.conf.I5 != "" {
-+		cfg.WriteString("i5=" + h.conf.I5 + "\n")
++	if conf.I5 != "" {
++		cfg.WriteString("i5=" + conf.I5 + "\n")
 +	}
-+	if h.conf.HeaderProtectionKey != "" {
-+		cfg.WriteString("header_protection_key=" + h.conf.HeaderProtectionKey + "\n")
++	if conf.HeaderProtectionKey != "" {
++		cfg.WriteString("header_protection_key=" + conf.HeaderProtectionKey + "\n")
 +	}
-+	if h.conf.ContentPaddingAddition != "" {
-+		cfg.WriteString("content_padding_addition=" + h.conf.ContentPaddingAddition + "\n")
++	if conf.ContentPaddingAddition != "" {
++		cfg.WriteString("content_padding_addition=" + conf.ContentPaddingAddition + "\n")
 +	}
-+	if h.conf.RekeyAfterTime != "" {
-+		cfg.WriteString("rekey_after_time=" + h.conf.RekeyAfterTime + "\n")
++	if conf.RekeyAfterTime != "" {
++		cfg.WriteString("rekey_after_time=" + conf.RekeyAfterTime + "\n")
 +	}
-+	if h.conf.RekeyTimeout != "" {
-+		cfg.WriteString("rekey_timeout=" + h.conf.RekeyTimeout + "\n")
++	if conf.RekeyTimeout != "" {
++		cfg.WriteString("rekey_timeout=" + conf.RekeyTimeout + "\n")
 +	}
-+	if h.conf.RejectAfterTime != "" {
-+		cfg.WriteString("reject_after_time=" + h.conf.RejectAfterTime + "\n")
++	if conf.RejectAfterTime != "" {
++		cfg.WriteString("reject_after_time=" + conf.RejectAfterTime + "\n")
 +	}
-+	if h.conf.KeepaliveTimeout != "" {
-+		cfg.WriteString("keepalive_timeout=" + h.conf.KeepaliveTimeout + "\n")
++	if conf.KeepaliveTimeout != "" {
++		cfg.WriteString("keepalive_timeout=" + conf.KeepaliveTimeout + "\n")
 +	}
-+	if h.conf.MaxHandshakeAttempts != "" {
-+		cfg.WriteString("max_handshake_attempts=" + h.conf.MaxHandshakeAttempts + "\n")
++	if conf.MaxHandshakeAttempts != "" {
++		cfg.WriteString("max_handshake_attempts=" + conf.MaxHandshakeAttempts + "\n")
 +	}
-+	if h.conf.RandomTrailers != "" {
-+		cfg.WriteString("random_trailers=" + h.conf.RandomTrailers + "\n")
++	if conf.RandomTrailers != "" {
++		cfg.WriteString("random_trailers=" + conf.RandomTrailers + "\n")
 +	}
-+	if h.conf.DisableCookies != "" {
-+		cfg.WriteString("disable_cookies=" + h.conf.DisableCookies + "\n")
++	if conf.DisableCookies != "" {
++		cfg.WriteString("disable_cookies=" + conf.DisableCookies + "\n")
 +	}
- 	for _, peer := range h.conf.Peers {
+ 	for _, peer := range conf.Peers {
  		cfg.WriteString("public_key=" + peer.PublicKey + "\n")
  		if peer.PreSharedKey != "" {
-@@ -327,10 +406,17 @@ func (h *Handler) init(ctx context.Context) error {
- 	}
- 	err := dev.IpcSet(cfg.String())
- 	if err != nil {
-+		// AWG-05: dev is otherwise abandoned here with no reference
-+		// left to it anywhere (h.dev is only set below, on full
-+		// success) -- its background goroutines/queues started by
-+		// device.NewDevice above would leak indefinitely. Same below
-+		// for a dev.Up() failure.
-+		dev.Close()
- 		return err
- 	}
- 	err = dev.Up()
- 	if err != nil {
-+		dev.Close()
- 		return err
- 	}
- 	h.dev = dev
 diff --git a/proxy/wireguard/config.pb.go b/proxy/wireguard/config.pb.go
 index 9b36168..136d41c 100644
 --- a/proxy/wireguard/config.pb.go
@@ -736,21 +712,38 @@ index 7aec161..5cb6280 100644
  }
 \ No newline at end of file
 diff --git a/proxy/wireguard/netstack.go b/proxy/wireguard/netstack.go
-index cc04f15..0f3861d 100644
+index b2b0f4e..5ddc9fe 100644
 --- a/proxy/wireguard/netstack.go
 +++ b/proxy/wireguard/netstack.go
-@@ -21,8 +21,8 @@ import (
- 	"syscall"
+@@ -20,10 +20,10 @@ import (
+ 	"sync"
  	"time"
  
 +	"github.com/amnezia-vpn/amneziawg-go/v3/tun"
+ 	"github.com/xtls/xray-core/common/buf"
  	xnet "github.com/xtls/xray-core/common/net"
+ 	xtun "github.com/xtls/xray-core/proxy/tun"
 -	"golang.zx2c4.com/wireguard/tun"
  
  	"golang.org/x/net/dns/dnsmessage"
- 	"gvisor.dev/gvisor/pkg/buffer"
+ )
+diff --git a/proxy/wireguard/netstack_test.go b/proxy/wireguard/netstack_test.go
+index d64c38d..1995d8d 100644
+--- a/proxy/wireguard/netstack_test.go
++++ b/proxy/wireguard/netstack_test.go
+@@ -13,9 +13,9 @@ import (
+ 	"testing"
+ 	"time"
+ 
++	"github.com/amnezia-vpn/amneziawg-go/v3/tun"
+ 	"github.com/xtls/xray-core/common/net"
+ 	"golang.org/x/net/dns/dnsmessage"
+-	"golang.zx2c4.com/wireguard/tun"
+ )
+ 
+ type closeHandler struct{}
 diff --git a/proxy/wireguard/server.go b/proxy/wireguard/server.go
-index 175948d..85f86e1 100644
+index 0e7ff86..348f342 100644
 --- a/proxy/wireguard/server.go
 +++ b/proxy/wireguard/server.go
 @@ -9,6 +9,8 @@ import (
@@ -762,15 +755,15 @@ index 175948d..85f86e1 100644
  	"github.com/xtls/xray-core/common"
  	"github.com/xtls/xray-core/common/buf"
  	c "github.com/xtls/xray-core/common/ctx"
-@@ -25,8 +27,6 @@ import (
+@@ -26,8 +28,6 @@ import (
  	"github.com/xtls/xray-core/transport/internet"
  	"github.com/xtls/xray-core/transport/internet/stat"
  	"golang.org/x/crypto/curve25519"
 -	"golang.zx2c4.com/wireguard/device"
 -	"golang.zx2c4.com/wireguard/tun"
- 	"gvisor.dev/gvisor/pkg/tcpip/stack"
  )
  
+ type Server struct {
 diff --git a/proxy/wireguard/tun_default.go b/proxy/wireguard/tun_default.go
 index edad554..7e8ed17 100644
 --- a/proxy/wireguard/tun_default.go

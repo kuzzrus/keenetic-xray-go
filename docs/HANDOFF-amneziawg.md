@@ -832,6 +832,20 @@ through the patched core (the kernel-TUN path), a plain `security=tls` profile
 and -- since the TUN inbound is new -- the TUN transport's throughput and
 fallback (`docs/routing.md`, "Routing through an OpkgTun interface").
 
+**Promoted the same day.** The dev build went onto the user's router and he
+reported "работает"; of the three checks above he did not itemise which he ran,
+and he later called the TUN speed fine (no numbers -- the README / routing.md
+"~3x slower than SOCKS" figures are gVisor-era and unmeasured on the new
+stack). Hence `v26.10.21` is in `AWG_CONFIRMED_TAGS` (workflow *and*
+`xraycore.AWGConfirmedTags`) and is `xraycore.PrereleaseTag`;
+`DefaultTag` stays `v26.3.27` -- upstream calls `v26.10.21` an emergency
+interim release and promises the stable one at the end of October, which is
+the natural moment to look at the default. The real `xray-core/v26.10.21` is
+built by dispatching `xray_version=v26.10.21` without `awg_dev`: CGO off on
+both arches, unlike the dev build's arm64 (the CGO diagnostic flavour the user
+actually tested), so the first install of the production arm64 asset is the
+one flavour nobody has run on a router yet.
+
 ## How to resume
 
 Everything the original plan called for is now built (see "What's
@@ -862,16 +876,17 @@ actually built"). What's left is verification and one more tag:
    --tag=v26.9.30` with no base-URL override, restart, confirm an AWG
    profile still passes traffic -- then cut a keenetic-xray release that
    carries the new `PrereleaseTag`.
-4. **`v26.10.21`** (`v26.10.10` was withdrawn upstream): patch in the repo,
-   dev build staged (see the 2026-10-25 section). Left: run it on a router
-   (an AWG profile through the patched core, a plain `security=tls` profile
-   to confirm it still verifies its server against the built-in roots, and
-   the TUN transport's speed), and only then add the tag to
-   `AWG_CONFIRMED_TAGS` (workflow *and* `xraycore.AWGConfirmedTags`), move
-   `xraycore.PrereleaseTag`, build the real `xray-core/v26.10.21` without
-   `awg_dev`, and ship the app release right after (the bot offers a real
-   `xray-core/` release at once, and an app build that lacks the tag in
-   `AWGConfirmedTags` warns "no AWG in this core").
+4. **`v26.10.21`** (`v26.10.10` was withdrawn upstream): promoted (see the
+   2026-10-25 section). What's left is one on-router check of the
+   *production* arm64 flavor (CGO off; the dev build the user ran is the CGO
+   diagnostic one) -- `ensure-xray-core --tag=v26.10.21` with no base-URL
+   override, restart, an AWG profile and the TUN transport -- and a measured
+   TUN throughput on the new stack, so the "~3x slower" wording in README /
+   `docs/routing.md` can be fixed with numbers. The order that matters when
+   promoting a tag: publish the real `xray-core/<tag>` first, then the app
+   release right after (the bot offers a real `xray-core/` release at once, and
+   an app build that lacks the tag in `AWGConfirmedTags` warns "no AWG in this
+   core").
 5. If re-entering Plan Mode for any of these, re-read this document
    plus the current code first — don't assume an old plan-file survived
    (Plan Mode's plan file gets reused for whatever's being planned at the

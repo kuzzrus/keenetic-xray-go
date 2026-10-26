@@ -72,6 +72,9 @@ type TelegramBot struct {
 	presetMenuMu sync.Mutex
 	presetMenus  map[int64]presetMenu // per-chat 📦 Готовые списки state: the preset snapshot the buttons index into
 
+	adaptiveMenuMu sync.Mutex
+	adaptiveMenus  map[int64]adaptiveMenu // per-chat 🎯 list / exclusions state: the snapshots the adx* buttons index into
+
 	flapMu sync.Mutex
 	flap   map[string]*flapWindow // per-router failover-notification rate state
 

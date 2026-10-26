@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/adaptiveroute"
@@ -257,7 +258,9 @@ func l7SNIClassifySession(ctx context.Context, logf func(string, ...any)) (start
 	}()
 
 	logf("l7sni: capturing on %s (NFLOG group %d)", wan, l7sniNflogGroup)
+	exclWatch := &adaptiveroute.ExclusionsWatcher{Path: adaptiveroute.ExclusionsPath(configPath())}
 	snap := l7sniLoadSnapshot()
+	snap.excluded, _ = exclWatch.Get()
 	snapAt := time.Now()
 	for {
 		if ctx.Err() != nil {
@@ -269,6 +272,7 @@ func l7SNIClassifySession(ctx context.Context, logf func(string, ...any)) (start
 		}
 		if time.Since(snapAt) >= l7sniConfigRefreshInterval {
 			snap = l7sniLoadSnapshot()
+			snap.excluded, _ = exclWatch.Get()
 			snapAt = time.Now()
 		}
 		l7SNIHandlePacket(ctx, pkt.Payload, reasm, sharedIPs, snap, logf)
@@ -301,6 +305,49 @@ type l7sniSnapshot struct {
 	enabled bool
 	ttl     time.Duration
 	domains l7sniDomainSet
+
+	// excluded is the operator's never-route list. A routes-list match is
+	// not allowed to override it: the list says this address must not go
+	// through the tunnel, whatever name was seen on it. nil -> none.
+	excluded *adaptiveroute.Exclusions
+}
+
+// l7sniExcludedLogEvery limits the "matched, but excluded" line to once per
+// address per this long -- a busy site on an excluded address would
+// otherwise log it on every connection.
+const l7sniExcludedLogEvery = 10 * time.Minute
+
+var l7sniExcludedLogged = struct {
+	sync.Mutex
+	at map[string]time.Time
+}{at: map[string]time.Time{}}
+
+// l7sniBlockedByExclusion reports whether a routes-list match on dstIP must be
+// dropped because the operator excluded the address, saying so in the log at
+// most once per l7sniExcludedLogEvery.
+func l7sniBlockedByExclusion(snap l7sniSnapshot, host, dstIP string, dport uint, now time.Time, logf func(string, ...any)) bool {
+	if !snap.excluded.Contains(dstIP) {
+		return false
+	}
+	if l7sniShouldLogExcluded(dstIP, now) {
+		logf("l7sni: %s -> %s:%d matched a routes list, but the address is on the adaptive-route exclusion list -- not redirecting",
+			host, dstIP, dport)
+	}
+	return true
+}
+
+// l7sniShouldLogExcluded reports whether the exclusion line for ip is due.
+func l7sniShouldLogExcluded(ip string, now time.Time) bool {
+	l7sniExcludedLogged.Lock()
+	defer l7sniExcludedLogged.Unlock()
+	if last, ok := l7sniExcludedLogged.at[ip]; ok && now.Sub(last) < l7sniExcludedLogEvery {
+		return false
+	}
+	if len(l7sniExcludedLogged.at) >= 256 {
+		l7sniExcludedLogged.at = map[string]time.Time{}
+	}
+	l7sniExcludedLogged.at[ip] = now
+	return true
 }
 
 // l7sniLoadSnapshot reads config once and pre-resolves it. A failed read
@@ -370,6 +417,9 @@ func l7SNIHandlePacket(ctx context.Context, raw []byte, reasm *l7sni.Reassembler
 	}
 
 	dstIP := net.IP(dst[:]).String()
+	if l7sniBlockedByExclusion(snap, host, dstIP, uint(dport), time.Now(), logf) {
+		return
+	}
 	ttl := snap.ttl
 	if shared {
 		// A route-list match is only evidence about host itself -- dst
@@ -394,6 +444,10 @@ func l7SNIHandlePacket(ctx context.Context, raw []byte, reasm *l7sni.Reassembler
 		return
 	}
 	keenetic.DeleteConntrackFlow(actx, "tcp", net.IP(src[:]).String(), dstIP, uint(sport), uint(dport))
+	adaptiveroute.NoteAdded(adaptiveroute.Note{
+		Addr: dstIP, Tier: adaptiveroute.TierL7SNI, Reason: adaptiveroute.ReasonL7SNI, Host: host,
+		Client: net.IP(src[:]).String(), Proto: "tcp", DPort: uint(dport), At: time.Now(),
+	})
 	if shared {
 		logf("l7sni: %s -> %s:%d matched a routes list, but this IP also recently served %q -- "+
 			"redirecting with a short TTL to limit collateral impact on unrelated traffic sharing the address",

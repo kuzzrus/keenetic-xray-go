@@ -109,6 +109,18 @@ const (
 	// widening happens at all, this one is how far it's allowed to go.
 	// Applies live within one classify tick, no restart.
 	ActionAdaptiveRouteSetKnownRangeWidth = "adrt_kwid"
+	// ActionAdaptiveRouteList: no args -> what is in the redirect set right
+	// now and why, as "#" header lines (counts, counters) plus one
+	// tab-separated line per entry. Machine-readable, for the bot's
+	// "что перенаправлено" screen (see formatAdaptiveList).
+	ActionAdaptiveRouteList = "adrt_list"
+	// The operator's never-route list (adaptiveroute.Exclusions), kept in a
+	// file next to config.json. Exclude/Include take effect on the classify
+	// loop and the l7sni capture within a tick; Exclude also takes the
+	// entry out of the redirect set at once.
+	ActionAdaptiveRouteExclude  = "adrt_excl"   // args[0] = an IPv4 address or a.b.c.d/nn
+	ActionAdaptiveRouteInclude  = "adrt_incl"   // args[0] = an entry of the list
+	ActionAdaptiveRouteExcluded = "adrt_exlist" // no args -> "#excl <count> <skipped>", then one entry per line
 	// L7 SNI hostname detection, a companion to adaptive routing above --
 	// feeds the same redirect ipset from a direct NFLOG read of TLS SNI/
 	// HTTP Host instead of conntrack timing. See internal/l7capture and

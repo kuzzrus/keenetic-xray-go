@@ -196,20 +196,63 @@ func Flush(ctx context.Context, setName string) error {
 	return ipsetRun(ctx, "flush", setName)
 }
 
-// Members lists the IPs currently in setName.
-func Members(ctx context.Context, setName string) ([]string, error) {
+// Member is one entry of the redirect set.
+type Member struct {
+	Addr       string        // a bare IPv4 address, or a CIDR network (a widened block)
+	Left       time.Duration // time until the kernel drops it; meaningful only with HasTimeout
+	HasTimeout bool          // false: the entry never expires
+}
+
+// MembersDetailed lists what is currently in setName, with how long each
+// entry has left before the kernel drops it (the `timeout N` in `ipset
+// list -output save` is the remaining time, not the original one).
+func MembersDetailed(ctx context.Context, setName string) ([]Member, error) {
 	out, err := ipsetOutput(ctx, "list", setName, "-output", "save")
 	if err != nil {
 		return nil, err
 	}
 	prefix := "add " + setName + " "
-	var ips []string
+	var members []Member
 	for _, line := range strings.Split(out, "\n") {
-		if ip, ok := strings.CutPrefix(line, prefix); ok {
-			ips = append(ips, strings.TrimSpace(ip))
+		rest, ok := strings.CutPrefix(line, prefix)
+		if !ok {
+			continue
 		}
+		fields := strings.Fields(rest)
+		if len(fields) == 0 {
+			continue
+		}
+		m := Member{Addr: fields[0]}
+		for i := 1; i+1 < len(fields); i++ {
+			if fields[i] == "timeout" {
+				// `timeout 0` is how ipset prints an element that never
+				// expires (the kernel reports a real remaining time of
+				// under a second as 1, precisely so that 0 stays
+				// unambiguous). Seen on a real kernel: an AddIP without
+				// a ttl comes back as "timeout 0".
+				if n, err := strconv.Atoi(fields[i+1]); err == nil && n > 0 {
+					m.Left, m.HasTimeout = time.Duration(n)*time.Second, true
+				}
+				break
+			}
+		}
+		members = append(members, m)
 	}
-	return ips, nil
+	return members, nil
+}
+
+// Members lists the addresses currently in setName (the element only --
+// no timeout; use MembersDetailed for that).
+func Members(ctx context.Context, setName string) ([]string, error) {
+	ms, err := MembersDetailed(ctx, setName)
+	if err != nil {
+		return nil, err
+	}
+	addrs := make([]string, len(ms))
+	for i, m := range ms {
+		addrs[i] = m.Addr
+	}
+	return addrs, nil
 }
 
 // redirectComment tags the iptables rules this package manages -- the nat

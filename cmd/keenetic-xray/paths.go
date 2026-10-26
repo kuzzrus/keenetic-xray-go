@@ -94,6 +94,17 @@ func adaptiveRouteResetMarkerPath() string {
 	return adaptiveRouteStatePath() + ".reset"
 }
 
+// adaptiveRouteSnapshotPath is where the daemon publishes its adaptive-routing
+// counters and per-address notes (internal/adaptiveroute.WriteSnapshot) for
+// the CLI -- `transport adaptive list` runs in another process and cannot see
+// the daemon's memory. Under /tmp on purpose: a RAM disk on the router, since
+// the file is rewritten every few seconds while things are happening and must
+// never cost flash writes. Losing it on a reboot loses nothing the daemon
+// does not rebuild.
+func adaptiveRouteSnapshotPath() string {
+	return envOr("KEENETIC_XRAY_ADAPTIVE_SNAPSHOT", "/tmp/keenetic-xray-adaptive.json")
+}
+
 // knownRangesCachePath is where knownRangesRefreshLoop keeps its daily-
 // refreshed copy of internal/knownranges' source list (lord-alfred/
 // ipranges), so ClrBlockPromote's KnownRangeLookup has something to

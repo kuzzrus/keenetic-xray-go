@@ -173,10 +173,27 @@ func writeDiag(w io.Writer) {
 				quic = "отклоняется (ICMP port-unreachable)"
 			}
 			fmt.Fprintf(w, "QUIC reject, UDP/443 (%s): %s\n", iface, quic)
-			if members, err := adaptiveroute.Members(ctx, adaptiveroute.RedirectSetName); err == nil {
+			if members, err := adaptiveroute.MembersDetailed(ctx, adaptiveroute.RedirectSetName); err == nil {
 				fmt.Fprintf(w, "ipset %s: %d записей\n", adaptiveroute.RedirectSetName, len(members))
+				// The tiers and the hour's counters come from the snapshot
+				// the daemon publishes; this process is not the daemon.
+				snap, _ := adaptiveroute.ReadSnapshot(adaptiveRouteSnapshotPath())
+				var lookup func(string) (adaptiveroute.Note, bool)
+				if snap != nil {
+					lookup = snap.Lookup
+				}
+				t := adaptiveroute.TallyEntries(adaptiveroute.JoinEntries(members, lookup))
+				fmt.Fprintf(w, "по ярусам: проба %d · подтверждено %d · подсетей %d · по имени %d · без пометки %d\n",
+					t.Probation, t.Confirmed, t.Block, t.L7SNI, t.Unknown)
+				if snap != nil {
+					fmt.Fprintf(w, "за час: %s\nза сутки: %s\n(снимок демона от %s)\n",
+						snap.Stats.Hour.SummaryRU(), snap.Stats.Day.SummaryRU(), snap.At.Local().Format("15:04:05"))
+				}
 			} else {
 				fmt.Fprintf(w, "ipset %s: %v\n", adaptiveroute.RedirectSetName, err)
+			}
+			if ex, err := adaptiveroute.LoadExclusions(adaptiveroute.ExclusionsPath(configPath())); err == nil {
+				fmt.Fprintf(w, "исключения (adaptive-exclude.txt): %d, нераспознанных строк: %d\n", ex.Len(), ex.Skipped)
 			}
 		}
 	}

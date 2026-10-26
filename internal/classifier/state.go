@@ -39,16 +39,18 @@ func (s ttlSet) add(addr string, now time.Time, ttl time.Duration) {
 
 func (s ttlSet) remove(addr string) { delete(s, addr) }
 
-// expire drops every entry whose TTL has passed. Reads (has/at) already
-// treat an expired entry as absent on their own, so this is only about
-// not letting idle sets grow forever between real hits -- call it
-// periodically, not on every read.
-func (s ttlSet) expire(now time.Time) {
+// expire drops every entry whose TTL has passed and returns what it dropped.
+// Reads (has/at) already treat an expired entry as absent on their own, so
+// this is only about not letting idle sets grow forever between real hits --
+// call it periodically, not on every read.
+func (s ttlSet) expire(now time.Time) (gone []string) {
 	for addr, exp := range s {
 		if !exp.After(now) {
 			delete(s, addr)
+			gone = append(gone, addr)
 		}
 	}
+	return gone
 }
 
 // State holds the two-tier (test/ok) classification state plus the
@@ -99,21 +101,43 @@ func protoIndex(udp bool) int {
 	return 0
 }
 
+// Lapsed is one entry State.Expire dropped because its TTL ran out with
+// nothing having moved or removed it first. Tier is where it sat: for
+// TierProbation that is the interesting case -- a provisional redirect that
+// got no verdict, neither confirmed nor failed.
+type Lapsed struct {
+	Addr string // an address, or the CIDR of a promoted block
+	UDP  bool
+	Tier Tier
+}
+
 // Expire prunes every expired entry across all 10 sets. Cheap to call
 // periodically (e.g. once per JUDGE pass, which already runs on a
 // short interval) -- reads are always correct without it, this is only
-// about bounding memory for state nothing has touched in a while.
-func (s *State) Expire(now time.Time) {
+// about bounding memory for state nothing has touched in a while. It
+// reports the Test, OK and Blocks entries it dropped (Watch and Cooldown
+// are bookkeeping, never in the redirect set) so the caller can tell a
+// probation that lapsed from one that was judged.
+func (s *State) Expire(now time.Time) []Lapsed {
+	var gone []Lapsed
 	for i := 0; i < 2; i++ {
-		s.Test[i].expire(now)
-		s.OK[i].expire(now)
+		udp := i == 1
+		for _, addr := range s.Test[i].expire(now) {
+			gone = append(gone, Lapsed{Addr: addr, UDP: udp, Tier: TierProbation})
+		}
+		for _, addr := range s.OK[i].expire(now) {
+			gone = append(gone, Lapsed{Addr: addr, UDP: udp, Tier: TierConfirmed})
+		}
+		for _, addr := range s.Blocks[i].expire(now) {
+			gone = append(gone, Lapsed{Addr: addr, UDP: udp, Tier: TierBlock})
+		}
 		s.Watch[i].expire(now)
 		s.Cooldown[i].expire(now)
-		s.Blocks[i].expire(now)
 		for addr := range s.OKSince[i] {
 			if !s.OK[i].has(addr, now) {
 				delete(s.OKSince[i], addr)
 			}
 		}
 	}
+	return gone
 }

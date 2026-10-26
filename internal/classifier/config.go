@@ -126,6 +126,18 @@ type Config struct {
 	// test exercises. Shaped to take georanges.Overlaps directly, same
 	// no-adapter convention as the two lookups above.
 	ExcludedRangeOverlap func(cidr string) bool
+
+	// UserExcluded and UserExcludedOverlap are the operator's own exclusion
+	// list (internal/adaptiveroute's Exclusions, edited from the bot or the
+	// CLI) -- the address-level and block-level halves again, folded into the
+	// same two gates as the Russian-range pair above, so an excluded address
+	// is never classified and an excluded range is never swept into a
+	// widened block. They differ from that pair in one way: the operator can
+	// change them at any moment, so entries admitted before the change have
+	// to be taken back out -- ClrPurgeExcluded does that, and only for these
+	// two. nil -> no operator exclusions.
+	UserExcluded        func(ip string) bool
+	UserExcludedOverlap func(cidr string) bool
 }
 
 // DefaultConfig mirrors config_set_defaults' thresholds (src/config.c)
@@ -229,6 +241,9 @@ func promotableDst(udp bool, dport uint) bool {
 // see ExcludedRangeLookup's doc comment for why this is a separate field
 // rather than folded into isPrivateDst's static list.
 func isExcludedDst(cfg *Config, dst string) bool {
+	if userExcludedDst(cfg, dst) {
+		return true
+	}
 	if cfg.ExcludedRangeLookup == nil {
 		return false
 	}
@@ -241,10 +256,24 @@ func isExcludedDst(cfg *Config, dst string) bool {
 // isExcludedDst; see ExcludedRangeOverlap's doc comment for why one
 // does not imply the other.
 func isExcludedBlock(cfg *Config, cidr string) bool {
+	if userExcludedBlock(cfg, cidr) {
+		return true
+	}
 	if cfg.ExcludedRangeOverlap == nil {
 		return false
 	}
 	return cfg.ExcludedRangeOverlap(cidr)
+}
+
+// userExcludedDst / userExcludedBlock are the operator's list alone -- what
+// ClrPurgeExcluded sweeps for, as opposed to the two gates above, which
+// also include the Russian-range veto.
+func userExcludedDst(cfg *Config, dst string) bool {
+	return cfg.UserExcluded != nil && cfg.UserExcluded(dst)
+}
+
+func userExcludedBlock(cfg *Config, cidr string) bool {
+	return cfg.UserExcludedOverlap != nil && cfg.UserExcludedOverlap(cidr)
 }
 
 // fromLAN reports whether src falls in one of cfg's LAN subnets.

@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/adaptiveroute"
 	"github.com/kuzzrus/keenetic-xray-go/internal/addons"
@@ -120,8 +121,14 @@ func (h *RouterHandler) adaptiveRouteShow(ctx context.Context) (string, error) {
 	default:
 		b.WriteString("\nQUIC (UDP/443): правила нет (реконсиляция поставит)")
 	}
-	if members, err := adaptiveroute.Members(ctx, adaptiveroute.RedirectSetName); err == nil {
-		fmt.Fprintf(&b, "\nСейчас перенаправлено адресов/подсетей: %d", len(members))
+	excluded := 0
+	if path, perr := h.excludedPath(); perr == nil {
+		if ex, lerr := adaptiveroute.LoadExclusions(path); lerr == nil {
+			excluded = ex.Len()
+		}
+	}
+	if entries, err := adaptiveroute.ListEntries(ctx, adaptiveroute.RedirectSetName); err == nil {
+		b.WriteString(adaptiveActivityText(adaptiveroute.TallyEntries(entries), adaptiveroute.Stats(time.Now()), excluded))
 	}
 	return b.String(), nil
 }

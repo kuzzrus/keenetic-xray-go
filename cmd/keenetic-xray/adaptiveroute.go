@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -166,12 +165,14 @@ var adaptiveRouteFailedOpen atomic.Bool
 // self-healing instead of stuck indefinitely on one bad call.
 const adaptiveRouteOpTimeout = 5 * time.Second
 
-// transportAdaptive is `keenetic-xray transport adaptive {show|on|off|flush}`
-// -- Susanin Phase 2's native per-IP adaptive routing (see
-// docs/HANDOFF-susanin.md): a conntrack classifier (internal/classifier)
-// feeding an iptables REDIRECT rule (internal/adaptiveroute) into xray's
-// dokodemo-door inbound, riding whatever vless/naive profile is already
-// the live egress.
+// transportAdaptive is `keenetic-xray transport adaptive {show|on|off|flush|
+// list|excluded|exclude|include}` -- Susanin Phase 2's native per-IP
+// adaptive routing (see docs/HANDOFF-susanin.md): a conntrack classifier
+// (internal/classifier) feeding an iptables REDIRECT rule
+// (internal/adaptiveroute) into xray's dokodemo-door inbound, riding
+// whatever vless/naive profile is already the live egress. list shows what
+// is redirected and why; exclude/include/excluded manage the operator's
+// never-route list (adaptiveroute.Exclusions).
 func transportAdaptive(cfg *config.Config, args []string) error {
 	action := "show"
 	if len(args) > 0 {
@@ -187,8 +188,16 @@ func transportAdaptive(cfg *config.Config, args []string) error {
 		return adaptiveRouteOff(cfg)
 	case "flush":
 		return adaptiveRouteFlush()
+	case "list":
+		return adaptiveRouteList(cfg)
+	case "excluded":
+		return adaptiveRouteExcluded()
+	case "exclude":
+		return adaptiveRouteExclude(args[1:])
+	case "include":
+		return adaptiveRouteInclude(args[1:])
 	default:
-		return fmt.Errorf("usage: keenetic-xray transport adaptive {show|on|off|flush}")
+		return fmt.Errorf("usage: keenetic-xray transport adaptive {show|on|off|flush|list|excluded|exclude <ip|cidr>...|include <ip|cidr>...}")
 	}
 }
 
@@ -449,12 +458,23 @@ func adaptiveRouteClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 	failedOpen := false
 	var inertWarnedAt time.Time
 
+	// The operator's never-route list (adaptive-exclude.txt next to
+	// config.json). Re-read by mtime, so an edit from the bot, SSH or by hand
+	// is live within a tick; prevExcluded is only there to stay quiet about a
+	// list that was empty and still is.
+	exclWatch := &adaptiveroute.ExclusionsWatcher{Path: adaptiveroute.ExclusionsPath(configPath())}
+	prevExcluded := 0
+	snapshotPath := adaptiveRouteSnapshotPath()
+	seedAdaptiveNotes(state, time.Now())
+
 	t := time.NewTicker(classifyInterval)
 	defer t.Stop()
 	save := time.NewTicker(5 * time.Minute)
 	defer save.Stop()
 	health := time.NewTicker(healthCheckInterval)
 	defer health.Stop()
+	summary := time.NewTicker(adaptiveSummaryInterval)
+	defer summary.Stop()
 
 	for {
 		select {
@@ -466,6 +486,11 @@ func adaptiveRouteClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 			continue
 		case <-save.C:
 			_ = classifier.SaveState(statePath, state)
+			continue
+		case <-summary.C:
+			if line, ok := adaptiveSummaryLine(time.Now()); ok {
+				logf("%s", line)
+			}
 			continue
 		case <-t.C:
 		}
@@ -527,6 +552,23 @@ func adaptiveRouteClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 		warnIfExclusionInert(clsCfg, &inertWarnedAt, logf)
 
 		now := time.Now()
+
+		// The never-route list goes first: hand it to the classifier so none
+		// of this tick's detectors can pick an excluded address, and when it
+		// changed, take back what it now covers before anything else runs.
+		excl, exclChanged := exclWatch.Get()
+		if excl.Len() > 0 {
+			clsCfg.UserExcluded, clsCfg.UserExcludedOverlap = excl.Contains, excl.Overlaps
+		} else {
+			clsCfg.UserExcluded, clsCfg.UserExcludedOverlap = nil, nil
+		}
+		if exclChanged && (excl.Len() > 0 || prevExcluded > 0) {
+			applyExclusionChange(ctx, clsCfg, state, excl, now, logf)
+		}
+		if exclChanged {
+			prevExcluded = excl.Len()
+		}
+
 		flows, err := classifier.ScanConntrack("")
 		if err != nil {
 			logf("adaptive-route: conntrack scan failed: %v", err)
@@ -538,9 +580,10 @@ func adaptiveRouteClassifyLoop(ctx context.Context, logf func(string, ...any)) {
 		actions = append(actions, classifier.ClrSoft(clsCfg, state, cache, flows, now)...)
 		actions = append(actions, classifier.ClrJudge(clsCfg, state, flows, now)...)
 		actions = append(actions, classifier.ClrBlockPromote(clsCfg, state, now)...)
-		state.Expire(now)
+		recordLapsed(state, state.Expire(now), now)
 
 		applyAdaptiveRouteActions(ctx, actions, logf)
+		_, _ = adaptiveroute.SnapshotIfDirty(snapshotPath, now, adaptiveSnapshotInterval)
 	}
 }
 
@@ -636,23 +679,30 @@ func adaptiveRouteHealthCheck(ctx context.Context, healthFails *int, failedOpen 
 // started or stopped being redirected) so `keenetic-xray logs`/📜 Логи
 // has something real to grep during hardware verification; the matching
 // conntrack -D is just plumbing underneath an Add/Remove, not its own
-// event.
+// event. noteAdaptiveAction builds the line and keeps the counters and the
+// per-address notes the bot's status and list read.
+//
+// An AddIP that fails is logged as such and not counted: the address never
+// entered the redirect set, so calling it "redirecting" would put a false
+// line in the very log the operator reads to find out what is redirected.
 func applyAdaptiveRouteActions(ctx context.Context, actions []classifier.Action, logf func(string, ...any)) {
+	now := time.Now()
 	for _, a := range actions {
 		actx, cancel := context.WithTimeout(ctx, adaptiveRouteOpTimeout)
 		switch a.Kind {
 		case classifier.ActionAddIP:
-			_ = adaptiveroute.AddIP(actx, adaptiveRouteIPSet, a.IP, a.TTL)
-			if strings.Contains(a.IP, "/") {
-				logf("adaptive-route: redirecting subnet %s (block-promoted)", a.IP)
-			} else {
-				logf("adaptive-route: redirecting %s", a.IP)
+			if err := adaptiveroute.AddIP(actx, adaptiveRouteIPSet, a.IP, a.TTL); err != nil {
+				logf("adaptive-route: adding %s to the redirect set failed: %v", a.IP, err)
+				break
 			}
+			logf("%s", noteAdaptiveAction(a, now))
 		case classifier.ActionRemoveIP:
 			_ = adaptiveroute.RemoveIP(actx, adaptiveRouteIPSet, a.IP)
-			logf("adaptive-route: no longer redirecting %s", a.IP)
+			logf("%s", noteAdaptiveAction(a, now))
 		case classifier.ActionDeleteConntrack:
 			keenetic.DeleteConntrackFlow(actx, a.Flow.Proto, a.Flow.Src, a.Flow.Dst, a.Flow.SPort, a.Flow.DPort)
+		case classifier.ActionDeleteConntrackDst:
+			keenetic.DeleteConntrackToward(actx, a.IP)
 		}
 		cancel()
 	}

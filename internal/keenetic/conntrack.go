@@ -1,9 +1,11 @@
 package keenetic
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -131,6 +133,85 @@ func DeleteConntrackFlow(ctx context.Context, proto, src, dst string, sport, dpo
 	}
 	_ = conntrackRun(ctx, "-D", "-p", proto, "-s", src, "-d", dst,
 		"--sport", strconv.FormatUint(uint64(sport), 10), "--dport", strconv.FormatUint(uint64(dport), 10))
+}
+
+// conntrackProcPath is the kernel's flow table, which DeleteConntrackToward
+// reads to find the flows heading into a subnet.
+var conntrackProcPath = "/proc/net/nf_conntrack"
+
+// maxTowardDeletes caps the per-flow deletes DeleteConntrackToward does for a
+// subnet: each is a process spawn, and a subnet that busy is not one an
+// operator just excluded for a handful of stuck connections.
+const maxTowardDeletes = 500
+
+// DeleteConntrackToward tears down every tracked connection heading to
+// target, an IPv4 address or network -- used when the operator excludes
+// something from adaptive routing: connections already caught in the redirect
+// would otherwise live on through the tunnel until the client closes them,
+// and the next attempt only goes direct once they are gone. Best-effort like
+// its siblings: a no-op without the conntrack tool, and "no such entry" is
+// not an error.
+//
+// An address is one `conntrack -D -d`. A network cannot be targeted that way
+// (see objectGroupAddrs), so the flow table is read and each flow heading into
+// it is deleted by its own 5-tuple.
+func DeleteConntrackToward(ctx context.Context, target string) {
+	if !conntrackPresent() {
+		return
+	}
+	if !strings.Contains(target, "/") {
+		if ip := net.ParseIP(target); ip != nil && ip.To4() != nil {
+			_ = conntrackRun(ctx, "-D", "-d", ip.To4().String())
+		}
+		return
+	}
+	_, n, err := net.ParseCIDR(target)
+	if err != nil || n.IP.To4() == nil {
+		return
+	}
+	if ones, bits := n.Mask.Size(); ones == bits {
+		_ = conntrackRun(ctx, "-D", "-d", n.IP.To4().String())
+		return
+	}
+	f, err := os.Open(conntrackProcPath)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	for deleted := 0; sc.Scan() && deleted < maxTowardDeletes && ctx.Err() == nil; {
+		proto, src, dst, sport, dport, ok := conntrackOriginalTuple(sc.Text())
+		if !ok {
+			continue
+		}
+		if ip := net.ParseIP(dst); ip == nil || !n.Contains(ip) {
+			continue
+		}
+		_ = conntrackRun(ctx, "-D", "-p", proto, "-s", src, "-d", dst, "--sport", sport, "--dport", dport)
+		deleted++
+	}
+}
+
+// conntrackOriginalTuple reads the original-direction tcp/udp 5-tuple out of
+// one /proc/net/nf_conntrack line (the first src=/dst=/sport=/dport= of the
+// line; a reply tuple repeats them later).
+func conntrackOriginalTuple(line string) (proto, src, dst, sport, dport string, ok bool) {
+	for _, tok := range strings.Fields(line) {
+		switch {
+		case (tok == "tcp" || tok == "udp") && proto == "":
+			proto = tok
+		case strings.HasPrefix(tok, "src=") && src == "":
+			src = tok[4:]
+		case strings.HasPrefix(tok, "dst=") && dst == "":
+			dst = tok[4:]
+		case strings.HasPrefix(tok, "sport=") && sport == "":
+			sport = tok[6:]
+		case strings.HasPrefix(tok, "dport=") && dport == "":
+			dport = tok[6:]
+		}
+	}
+	ok = proto != "" && src != "" && dst != "" && sport != "" && dport != ""
+	return
 }
 
 // objectGroupAddrs reads the addresses Keenetic currently has resolved

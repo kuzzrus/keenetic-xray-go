@@ -557,3 +557,90 @@ upgrade still works with both rule kinds present. Not verified on a Keenetic:
 the `-I FORWARD 1` position against NDM's own FORWARD chain and the
 availability of `ipt_REJECT` in its kernel -- check with
 `iptables -S FORWARD | head -3` and a QUIC client on a promoted address.
+
+## 2026-10-26 -- what is redirected and why, and a never-route list
+
+The first real `ipset list` + log dump from a router (29 addresses, 36
+"redirecting" lines) could not answer the one question that decides whether
+the detector needs tuning, and nothing could correct a false positive short
+of `flush`. Counting it by hand: 9 of those addresses were confirmed, 20 had
+simply lapsed -- a probation that got no verdict, which the log never said.
+This round makes that visible and gives the operator a lever. It changes no
+detection threshold.
+
+**Reasons.** Every `classifier.Action` now carries a `Tier` (probation /
+confirmed / block) and a `Reason` (`silent-syn`, `closed-no-reply`,
+`quic-no-reply`, `tcp-stall`, `late-stall`, `judged-good`, `judged-failed`,
+`ok-failed`, `ok-refresh`, `block-widen`, `excluded`); a probation's AddIP
+also carries the flow that tripped it, so the log can name the LAN client.
+The first words of the log lines are unchanged:
+
+    adaptive-route: redirecting 1.2.3.4 [probation 60s: silent-syn, client 192.168.1.50 tcp/443]
+    adaptive-route: redirecting 1.2.3.4 [confirmed 6h: judged-good]
+    adaptive-route: no longer redirecting 1.2.3.4 [judged-failed]
+    adaptive-route: last hour: 14 probations -> 3 confirmed, 9 lapsed without a verdict, 2 failed; ...
+
+`State.Expire` now returns what lapsed, which is how a probation that nobody
+judged is counted. A failed `ipset add` is logged as a failure instead of a
+"redirecting" line.
+
+**Counters and notes** live in memory only (`internal/adaptiveroute/stats.go`):
+ten-minute buckets for the hour and day windows, plus a per-address note
+(tier, trigger, client, hostname for l7sni) bounded at 512. After a restart
+the entries in the loaded classifier state get a "restored" note so the list
+does not call everything unmarked. Nothing here writes to flash. The daemon
+also publishes a copy to `/tmp/keenetic-xray-adaptive.json` (RAM disk, at most
+every 15 s and only after a change) because `transport adaptive list` is a
+different process and cannot see the daemon's memory.
+
+**Never-route list.** `adaptive-exclude.txt` next to `config.json`, one IPv4
+address or a.b.c.d/nn network per line, `#` comments, at most 512 entries,
+nothing wider than /8. A file of its own on purpose: the bot handler keeps a
+private copy of the config and saves the whole struct, so a list kept in
+`config.json` would be wiped by the next unrelated bot setting. The classify
+loop re-reads it by mtime. It is enforced in five places:
+
+- ClrFast / ClrSoft never classify an excluded address (`Config.UserExcluded`,
+  folded into the same gate as the Russian-range veto);
+- ClrBlockPromote never widens into a block that overlaps one
+  (`UserExcludedOverlap`; a known-range match falls back to the naive block
+  first, exactly as for the Russian-range veto);
+- `ClrPurgeExcluded` takes back what was admitted before the list changed --
+  probation, confirmed, watch, cooldown and promoted blocks -- and the loop
+  runs it on a change and once at start, so a list edited while the daemon was
+  down is enforced;
+- `adaptiveroute.SweepExcluded` removes ipset members the classifier never
+  tracked (l7sni additions, leftovers of a restart);
+- l7sni drops a routes-list match on an excluded address (and says so, at
+  most once per address per ten minutes).
+
+Established connections are torn down so the next attempt really goes direct:
+`keenetic.DeleteConntrackToward` is one `conntrack -D -d <ip>` for an address;
+`conntrack -D` cannot target a subnet, so for a network it reads
+`/proc/net/nf_conntrack` and deletes each flow heading into it by its
+5-tuple (capped at 500). The Russian-range veto is deliberately not swept.
+
+**Surfaces.** Bot: 🎯 Адаптивная маршрутизация gains 📋 Что перенаправлено
+(paged list, counters for the hour/day, a card per entry with
+«Исключить адрес» and, for a bare address, «Исключить всю /24») and 🚫
+Исключения (paged, ↩️ returns an entry); the 📊 Показать status line now splits
+the redirected set by tier and shows the counters. CLI: `transport adaptive
+list | excluded | exclude <ip|cidr>... | include <ip|cidr>...`. Router
+actions: `adrt_list`, `adrt_excl`, `adrt_incl`, `adrt_exlist`.
+
+**Verified** on a real Linux kernel (Ubuntu 6.8, real `ipset`): the member
+parser against real `ipset list -output save` output -- which found that an
+element without a timeout is printed as `timeout 0` (the kernel reports a real
+remaining time under a second as 1 so that 0 stays unambiguous), so `0` means
+permanent, not "0 seconds left" --, the sweep of a subnet around an excluded
+address and of addresses inside an excluded network, the whole
+exclusion-change path against the production set name (classifier state,
+ipset, notes, counters), and `go test -race ./...`. Not verified on a
+Keenetic: the bot screens against a live daemon, the snapshot file under the
+router's `/tmp`, `conntrack -D` from this code path.
+
+**Not done, deliberately.** An hourly/daily Telegram digest, active
+direct-versus-proxy verification of a probation (it conflicts with the 500 ms
+reaction goal and needs its own design), and any threshold tuning: the lapsed
+count exists to say which of the three is worth doing, and only real traffic
+can answer that.

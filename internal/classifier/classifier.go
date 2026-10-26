@@ -20,6 +20,11 @@ const (
 	// changed routing decision -- an already-established flow doesn't
 	// retroactively move when the ipset changes underneath it.
 	ActionDeleteConntrack
+	// ActionDeleteConntrackDst: delete every conntrack entry heading to IP
+	// (an address, or a CIDR for a promoted block). The operator excluded
+	// it, so connections already caught in the redirect must not linger --
+	// the next attempt has to go direct.
+	ActionDeleteConntrackDst
 )
 
 // Action is one external effect a classification pass wants applied.
@@ -32,20 +37,57 @@ type Action struct {
 	Kind ActionKind
 	IP   string        // ActionAddIP / ActionRemoveIP
 	TTL  time.Duration // ActionAddIP only
-	Flow Flow          // ActionDeleteConntrack only -- identifies exactly which conntrack entry to tear down
+	// Flow identifies exactly which conntrack entry to tear down for an
+	// ActionDeleteConntrack. On the ActionAddIP of a probation it is the
+	// flow that tripped the promotion -- informational, for the log and the
+	// list screen (which LAN client, which port); nothing acts on it there.
+	Flow Flow
+	// Tier and Reason say where an ActionAddIP puts the address and why
+	// (Reason also on ActionRemoveIP). For logs and the list screen only --
+	// the dataplane treats every tier alike.
+	Tier   Tier
+	Reason string
 }
+
+// Tier is which stage of the pipeline an ActionAddIP puts an address in.
+type Tier string
+
+const (
+	// TierProbation: provisional. Redirected for cfg.TestTTL while ClrJudge
+	// decides whether it actually helped; with no verdict it just lapses.
+	TierProbation Tier = "probation"
+	// TierConfirmed: judged good. Redirected for cfg.OKTTL.
+	TierConfirmed Tier = "confirmed"
+	// TierBlock: a whole network widened by ClrBlockPromote.
+	TierBlock Tier = "block"
+)
+
+// Why an Action happened, in the words the log and the list screen use.
+const (
+	ReasonSilentSYN     = "silent-syn"      // ClrFast: a SYN retried, nothing came back
+	ReasonClosedNoReply = "closed-no-reply" // ClrFast: TCP closed with next to no reply
+	ReasonQUICNoReply   = "quic-no-reply"   // ClrFast: QUIC packets, no reply
+	ReasonTCPStall      = "tcp-stall"       // ClrSoft: an established flow sent data and got ~nothing
+	ReasonLateStall     = "late-stall"      // ClrSoft: replies stopped mid-flow, seen twice
+	ReasonJudgedGood    = "judged-good"     // ClrJudge: the probation worked through the tunnel
+	ReasonJudgedFailed  = "judged-failed"   // ClrJudge: the probation did not help
+	ReasonOKFailed      = "ok-failed"       // ClrJudge: a confirmed address stopped working
+	ReasonOKRefresh     = "ok-refresh"      // ClrJudge: healthy near expiry, TTL extended
+	ReasonBlockWiden    = "block-widen"     // ClrBlockPromote
+	ReasonExcluded      = "excluded"        // ClrPurgeExcluded: the operator excluded it
+)
 
 // promoteTest is upstream's promote_test (src/classifier.c): move dst
 // into the "test" tier (provisionally routed; ClrJudge decides later
 // whether it actually helped) and tear down the triggering flow's own
 // conntrack entry so a fresh connection goes through the now-redirected
-// path.
-func promoteTest(cfg *Config, state *State, f Flow, now time.Time) []Action {
+// path. reason is which detector fired (one of the Reason* constants).
+func promoteTest(cfg *Config, state *State, f Flow, now time.Time, reason string) []Action {
 	i := protoIndex(f.L4Proto == 17)
 	state.Test[i].add(f.Dst, now, cfg.TestTTL)
 	state.Watch[i].remove(f.Dst)
 	return []Action{
-		{Kind: ActionAddIP, IP: f.Dst, TTL: cfg.TestTTL},
+		{Kind: ActionAddIP, IP: f.Dst, TTL: cfg.TestTTL, Flow: f, Tier: TierProbation, Reason: reason},
 		{Kind: ActionDeleteConntrack, Flow: f},
 	}
 }
@@ -72,12 +114,12 @@ func ClrFast(cfg *Config, state *State, flows []Flow, now time.Time) []Action {
 		switch {
 		case f.L4Proto == 6 && f.TCPState == "SYN_SENT" &&
 			f.OP >= uint64(cfg.FastSynMinOp) && f.RP == 0:
-			actions = append(actions, promoteTest(cfg, state, f, now)...)
+			actions = append(actions, promoteTest(cfg, state, f, now, ReasonSilentSYN)...)
 		case f.L4Proto == 6 && f.TCPState == "CLOSE" &&
 			f.OP >= 1 && f.RP <= 2 && f.RB < 256:
-			actions = append(actions, promoteTest(cfg, state, f, now)...)
+			actions = append(actions, promoteTest(cfg, state, f, now, ReasonClosedNoReply)...)
 		case f.L4Proto == 17 && f.DPort == 443 && f.OP >= 3 && f.RP == 0:
-			actions = append(actions, promoteTest(cfg, state, f, now)...)
+			actions = append(actions, promoteTest(cfg, state, f, now, ReasonQUICNoReply)...)
 		}
 	}
 	return actions
@@ -165,7 +207,7 @@ func ClrSoft(cfg *Config, state *State, cache *RateCache, flows []Flow, now time
 		case f.L4Proto == 6 && f.TCPState == "ESTABLISHED":
 			if f.OP >= 5 && f.OB >= 1000 && f.RP <= 2 && f.RB < 256 {
 				if candidateOK(state, udp, f.Dst, now) {
-					actions = append(actions, promoteTest(cfg, state, f, now)...)
+					actions = append(actions, promoteTest(cfg, state, f, now, ReasonTCPStall)...)
 				}
 				continue
 			}
@@ -238,7 +280,7 @@ func watchOrConfirmLateStall(cfg *Config, state *State, udp bool, f Flow, now ti
 		return nil
 	}
 	state.Watch[i].remove(f.Dst)
-	return promoteTest(cfg, state, f, now)
+	return promoteTest(cfg, state, f, now, ReasonLateStall)
 }
 
 // ClrJudge mirrors upstream's clr_judge (src/classifier.c): for a
@@ -396,13 +438,13 @@ func judgeTest(cfg *Config, state *State, udp bool, f Flow, now time.Time) []Act
 		state.Test[i].remove(f.Dst)
 		state.Watch[i].remove(f.Dst)
 		state.Cooldown[i].remove(f.Dst)
-		return []Action{{Kind: ActionAddIP, IP: f.Dst, TTL: cfg.OKTTL}}
+		return []Action{{Kind: ActionAddIP, IP: f.Dst, TTL: cfg.OKTTL, Tier: TierConfirmed, Reason: ReasonJudgedGood}}
 	case failed:
 		state.Test[i].remove(f.Dst)
 		state.Watch[i].remove(f.Dst)
 		state.Cooldown[i].add(f.Dst, now, cfg.CooldownTTL)
 		return []Action{
-			{Kind: ActionRemoveIP, IP: f.Dst},
+			{Kind: ActionRemoveIP, IP: f.Dst, Reason: ReasonJudgedFailed},
 			{Kind: ActionDeleteConntrack, Flow: f},
 		}
 	}
@@ -458,7 +500,7 @@ func judgeOK(cfg *Config, state *State, udp bool, f Flow, now time.Time) []Actio
 		state.Watch[i].remove(f.Dst)
 		state.Cooldown[i].add(f.Dst, now, cfg.CooldownOKTTL)
 		return []Action{
-			{Kind: ActionRemoveIP, IP: f.Dst},
+			{Kind: ActionRemoveIP, IP: f.Dst, Reason: ReasonOKFailed},
 			{Kind: ActionDeleteConntrack, Flow: f},
 		}
 	case healthy && !failed:
@@ -476,7 +518,7 @@ func judgeOK(cfg *Config, state *State, udp bool, f Flow, now time.Time) []Actio
 				return nil
 			}
 			state.OK[i].add(f.Dst, now, cfg.OKTTL)
-			return []Action{{Kind: ActionAddIP, IP: f.Dst, TTL: cfg.OKTTL}}
+			return []Action{{Kind: ActionAddIP, IP: f.Dst, TTL: cfg.OKTTL, Tier: TierConfirmed, Reason: ReasonOKRefresh}}
 		}
 	}
 	return nil
@@ -592,7 +634,70 @@ func ClrBlockPromote(cfg *Config, state *State, now time.Time) []Action {
 				continue
 			}
 			state.Blocks[i].add(promoted, now, cfg.BlockTTL)
-			actions = append(actions, Action{Kind: ActionAddIP, IP: promoted, TTL: cfg.BlockTTL})
+			actions = append(actions, Action{Kind: ActionAddIP, IP: promoted, TTL: cfg.BlockTTL, Tier: TierBlock, Reason: ReasonBlockWiden})
+		}
+	}
+	return actions
+}
+
+// ClrPurgeExcluded is the "take it back" half of the operator's exclusion
+// list (Config.UserExcluded / UserExcludedOverlap). The gates in ClrFast,
+// ClrSoft and ClrBlockPromote only stop new entries; this removes what the
+// list now covers from the classification state -- an address excluded while
+// it was on probation, confirmed, on watch or in cooldown, and a promoted
+// block that overlaps an excluded range -- and for every one that was live in
+// the redirect set asks for it to be removed and for the connections already
+// caught in it to be torn down, so the next attempt goes direct.
+//
+// Not a per-tick pass: the caller runs it when the list changed (and once at
+// start, to enforce a list that was edited while the daemon was down). Only
+// the operator's list is swept -- the Russian-range veto is a classification
+// gate and never took entries back, which this does not change.
+func ClrPurgeExcluded(cfg *Config, state *State, now time.Time) []Action {
+	if cfg.UserExcluded == nil && cfg.UserExcludedOverlap == nil {
+		return nil
+	}
+	var actions []Action
+	done := map[string]bool{}
+	take := func(entry string) {
+		if done[entry] {
+			return
+		}
+		done[entry] = true
+		actions = append(actions,
+			Action{Kind: ActionRemoveIP, IP: entry, Reason: ReasonExcluded},
+			Action{Kind: ActionDeleteConntrackDst, IP: entry, Reason: ReasonExcluded})
+	}
+	for i := 0; i < 2; i++ {
+		// Watch and Cooldown entries were never in the ipset: drop them so
+		// the address is not half-remembered, but there is nothing to remove.
+		for _, set := range []ttlSet{state.Watch[i], state.Cooldown[i]} {
+			for addr := range set {
+				if userExcludedDst(cfg, addr) {
+					delete(set, addr)
+				}
+			}
+		}
+		for _, set := range []ttlSet{state.Test[i], state.OK[i]} {
+			for addr := range set {
+				if !userExcludedDst(cfg, addr) {
+					continue
+				}
+				if set.has(addr, now) {
+					take(addr)
+				}
+				delete(set, addr)
+				delete(state.OKSince[i], addr)
+			}
+		}
+		for block := range state.Blocks[i] {
+			if !userExcludedBlock(cfg, block) {
+				continue
+			}
+			if state.Blocks[i].has(block, now) {
+				take(block)
+			}
+			delete(state.Blocks[i], block)
 		}
 	}
 	return actions

@@ -290,6 +290,14 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 		return h.adaptiveRouteSetBlockThreshold(cmd.Args)
 	case ActionAdaptiveRouteSetKnownRangeWidth:
 		return h.adaptiveRouteSetKnownRangeWidth(cmd.Args)
+	case ActionAdaptiveRouteList:
+		return h.adaptiveRouteList(ctx)
+	case ActionAdaptiveRouteExclude:
+		return h.adaptiveRouteExclude(ctx, cmd.Args)
+	case ActionAdaptiveRouteInclude:
+		return h.adaptiveRouteInclude(cmd.Args)
+	case ActionAdaptiveRouteExcluded:
+		return h.adaptiveRouteExcluded()
 	case ActionL7SNIOn:
 		return h.l7sniOn(ctx)
 	case ActionL7SNIOff:

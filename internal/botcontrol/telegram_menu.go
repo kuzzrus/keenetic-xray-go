@@ -232,6 +232,8 @@ func adaptiveRouteScreenText(id string) string {
 		"конфликтующий дата-плейн; включение это теперь проверяет само.\n\n" +
 		"Памятка для SSH:\n" +
 		"`transport adaptive show|on|off|flush` — статус/вкл/выкл/очистить список адресов\n" +
+		"`transport adaptive list` — что сейчас перенаправлено и почему (то же, что 📋 ниже)\n" +
+		"`transport adaptive excluded|exclude <ip|сеть>|include <ip|сеть>` — список исключений\n" +
 		"`keenetic-xray logs 200 | grep adaptive-route` — лог классификатора\n" +
 		"`tail -f /opt/var/log/keenetic-xray/daemon.log` — живой лог на лету, что куда редиректится прямо сейчас\n" +
 		"`/opt/etc/init.d/S99keenetic-xray restart` — полный рестарт демона\n\n" +
@@ -242,6 +244,12 @@ func adaptiveRouteScreenText(id string) string {
 		"адресов, и сохранённое состояние классификатора, и сама перезапускает демон (иначе " +
 		"классификатор в памяти всё ещё будет думать, что старое подтверждено, и не станет спешить " +
 		"переподтверждать заново) — коротко мигнёт соединение, это ожидаемо.\n\n" +
+		"📋 Что перенаправлено — что в туннеле сейчас и почему: пробы (адрес на минуту пущен в туннель, смотрим, " +
+		"поможет ли), подтверждённые и забранные подсети, с устройством из LAN, которое их вызвало. Сверху счётчики " +
+		"за час и сутки: сколько проб подтвердилось, сколько истекло без вердикта, сколько не помогло.\n" +
+		"🚫 Исключения — адреса и сети, которые не должны уходить в туннель никогда. Исключить можно из карточки " +
+		"адреса: он сразу пропадёт из перенаправления, а классификатор и l7sni его больше не вернут. " +
+		"↩️ возвращает запись.\n\n" +
 		"TTL подтверждённых адресов (сколько держать адрес перенаправленным без переповторной проверки) — кнопки ниже.\n\n" +
 		"Порог укрупнения блока — если несколько подтверждённых адресов оказались в одной /24, " +
 		"классификатор забирает в туннель всю сеть целиком, а не только их (нужно для CDN с " +
@@ -272,6 +280,7 @@ func adaptiveRouteScreenKB(id string) inlineKeyboard {
 		{{Text: "Потолок: /24", CallbackData: "adwid:" + id + ":24"}, {Text: "/20", CallbackData: "adwid:" + id + ":20"},
 			{Text: "/18 (по умолч.)", CallbackData: "adwid:" + id + ":18"}, {Text: "/16", CallbackData: "adwid:" + id + ":16"}},
 		{{Text: "🔍 L7 SNI вкл", CallbackData: "act:l7sni_on:" + id}, {Text: "🔍 L7 SNI выкл", CallbackData: "act:l7sni_off:" + id}},
+		{{Text: "📋 Что перенаправлено", CallbackData: "adxO:" + id}, {Text: "🚫 Исключения", CallbackData: "adxX:" + id}},
 		{{Text: "🧹 Очистить список", CallbackData: "act:adrt_flush:" + id}},
 		{{Text: "📊 Показать", CallbackData: "act:adrt_show:" + id}, {Text: "⬅️ Назад", CallbackData: "ptm:" + id}},
 	}}
@@ -518,6 +527,8 @@ func (b *TelegramBot) handleCallback(ctx context.Context, cb tgCallbackQuery) {
 			return
 		}
 		b.editCB(ctx, cb, adaptiveRouteScreenText(id), adaptiveRouteScreenKB(id))
+	case strings.HasPrefix(data, "adx") && b.handleAdaptiveCallback(ctx, cb, data):
+		// the 🎯 lists: что перенаправлено / исключения (adxO/adxL/adxI/adxE/adxX/adxP/adxR)
 	case strings.HasPrefix(data, "diagf:"):
 		go b.sendDiagFile(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "diagf:"))
 	case strings.HasPrefix(data, "ptwiz:"):

@@ -309,7 +309,7 @@ func adaptiveRouteExcluded() error {
 // on its next tick and drops the same entries from the classifier's memory.
 func adaptiveRouteExclude(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: keenetic-xray transport adaptive exclude <ip|a.b.c.d/nn>...")
+		return fmt.Errorf("usage: keenetic-xray transport adaptive exclude <ip|a.b.c.d/nn> [<ip|a.b.c.d/nn> ...]")
 	}
 	canon := make([]string, len(args))
 	for i, a := range args {
@@ -355,7 +355,7 @@ func adaptiveRouteExclude(args []string) error {
 // it looks blocked.
 func adaptiveRouteInclude(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: keenetic-xray transport adaptive include <ip|a.b.c.d/nn>...")
+		return fmt.Errorf("usage: keenetic-xray transport adaptive include <ip|a.b.c.d/nn> [<ip|a.b.c.d/nn> ...]")
 	}
 	path := adaptiveroute.ExclusionsPath(configPath())
 	for _, a := range args {

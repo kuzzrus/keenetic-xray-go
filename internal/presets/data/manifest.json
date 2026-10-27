@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated": "2026-10-25",
+  "generated": "2026-10-27",
   "categories": [
     "Мессенджеры",
     "Видео",
@@ -128,8 +128,8 @@
       "title": "Microsoft Azure",
       "category": "CDN и инфраструктура",
       "kind": "domains",
-      "count": 88,
-      "rev": "6bc67cec14c6",
+      "count": 91,
+      "rev": "9325d6551113",
       "sources": [
         "Geo-Aggregator: azure"
       ]
@@ -476,8 +476,8 @@
       "title": "Google Gemini",
       "category": "Искусственный интеллект",
       "kind": "domains",
-      "count": 46,
-      "rev": "da74ff02befe",
+      "count": 49,
+      "rev": "536597a1d22f",
       "sources": [
         "Geo-Aggregator: google-gemini"
       ]

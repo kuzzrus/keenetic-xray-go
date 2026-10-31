@@ -411,4 +411,4 @@ including "~3x slower than SOCKS" and the MTU run, was measured on gVisor
 cores. Not measured on the new stack: CPU and memory under load, the gate under
 load, the MTU, IPv6. Install the core from the bot (router card, "🧩 Ядро
 xray", "Пререлиз") or with `keenetic-xray internal ensure-xray-core
---tag=v26.10.21`.
+--tag=v26.10.31`.

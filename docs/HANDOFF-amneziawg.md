@@ -907,12 +907,23 @@ patched `config.pb.go` (the workflow regenerates that file with its own protoc
 anyway). So the first execution of this build is CI's QEMU smoke test and then a
 router. Run those locally first if anything looks off on the router.
 
-Next, as before: dispatch `xray_version=v26.10.31 awg_dev=true` (publishes
-`xray-core-awg-dev/v26.10.31`, which no release path installs), test it on a
-router (an AWG profile = the kernel-TUN path, a plain `security=tls` profile, the
-TUN transport), and only then promote -- `AWG_CONFIRMED_TAGS` (workflow *and*
-`xraycore.AWGConfirmedTags`) and `PrereleaseTag`, and look at `DefaultTag`
-(`v26.3.27`), which the `v26.10.21` notes said to revisit at the stable release.
+**Dev build** (`xray_version=v26.10.31 awg_dev=true`, run 41217116969 from the PR
+branch; publishes `xray-core-awg-dev/v26.10.31`, which no release path installs):
+go1.27.3, UPX 4.2.2 `-9` (`--lzma` on arm64 only), provenance commit `a4a3dff` =
+the upstream tag, all four checksums equal GitHub's asset digests, "Apply
+AmneziaWG patch" and "Smoke test under QEMU" green on both arches. mipsle is
+CGO-off (the production flavour): unpacked 34,537,627 / UPX 10,577,740 / xz
+7,053,540. arm64 is the CGO diagnostic flavour (dev builds only compare with dev
+builds): unpacked 30,713,672 / UPX 7,657,872. Against `v26.10.21` that is
++131 KB unpacked / +37 KB UPX (+0.4 %) on mipsle and +66 KB / +20 KB on arm64.
+
+Next: test the dev build on a router (an AWG profile = the kernel-TUN path, a
+plain `security=tls` profile, the TUN transport), and only then promote --
+`AWG_CONFIRMED_TAGS` (workflow *and* `xraycore.AWGConfirmedTags`) and
+`PrereleaseTag`, then the real `xray-core/v26.10.31` and the app release right
+after. `DefaultTag` (`v26.3.27`) is the separate, bigger question the
+`v26.10.21` notes left for the stable release: a bump reaches every router on
+its next `ensure-xray-core`, a seven-month jump for anyone on the default.
 
 ## How to resume
 

@@ -585,6 +585,25 @@ startup error, not a default. A `routers` object is still accepted as a
 one-time bootstrap -- its entries are copied into the runtime registry
 at startup and then the registry is authoritative.
 
+### Kernel flaw CVE-2026-98432 and MPTCP
+
+The control server listens on a public address of a VPS, so it inherits
+the host kernel's bugs. In October 2026 a use-after-free in the Linux
+kernel's IPv4 TCP connection handling (a race while handling SYN packets
+that carry IPv4 options) was disclosed together with a remote-root proof
+of concept that needs a *multipath-TCP* listener on the target. Go >= 1.24
+opens MPTCP listeners by default, so every Go server on a modern kernel
+qualified -- this one included, until `go.mod` gained `godebug
+multipathtcp=0` (`TestListenersDoNotUseMPTCP` keeps it there; it covers the
+router agent's binary too). That closes the demonstrated path, **not the
+bug**: plain TCP listeners are hit by the same race, so update the VPS
+kernel (`apt full-upgrade` and a reboot, or the distro's equivalent). A
+server installed from an older release can be covered without updating it
+by adding `Environment=GODEBUG=multipathtcp=0` to its unit (`systemctl edit
+keenetic-xray-control-server`) and restarting; the same switch works for
+any other Go service on the host (xray-core before v26.10.31 included --
+that release turned MPTCP off in the core itself).
+
 ### Without the installer
 
 ```sh

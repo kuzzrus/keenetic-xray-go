@@ -847,6 +847,84 @@ both arches, unlike the dev build's arm64 (the CGO diagnostic flavour the user
 actually tested), so the first install of the production arm64 asset is the
 one flavour nobody has run on a router yet.
 
+## 2026-10-31 — `v26.10.31`: patch carried over (go.mod only), dev build staged
+
+Upstream `v26.10.31` (2026-10-31, marked **Latest**, 29 commits / 157 files after
+`v26.10.21`) is another emergency release, and this time the reason is not in
+Xray. Go >= 1.24 opens **MPTCP listeners by default** on Linux
+(`GODEBUG=multipathtcp=2`), and a remote-root proof of concept for a Linux kernel
+IPv4 TCP use-after-free (CVE-2026-98432, golang/go#82717) targets exactly such a
+listener -- so any Go server on a modern kernel qualified. The release turns MPTCP
+off by default in the core's own listener (#7291, `DefaultListener`; the core's
+`tcpMptcp` socket option works again as an explicit opt-in). It replaces
+`v26.10.29` (2026-10-29), whose tag upstream withdrew; it is also the end-of-month
+stable release that the `v26.10.21` notes promised. The kernel bug itself is
+not MPTCP-specific -- plain TCP listeners are hit by the same race -- so the real
+fix is a patched kernel, on the VPS. Our own binaries were covered separately
+(`godebug multipathtcp=0` in `go.mod`, see `docs/bot-control-design.md`).
+The router kernels our two builds target (3.4 on mipsel, 3.10 on aarch64) predate
+MPTCP (mainline 5.6), so a router's xray never opened such a socket; this core
+update is not a router-side security fix.
+
+What moved under the patch -- very little:
+
+- **go.mod / go.sum only.** `github.com/bufbuild/protocompile` joined the
+  requirements (upstream generates protobuf code with its own `infra/vprotogen`
+  now, driven by a new `tool (...)` block at the end of `go.mod`;
+  `*.pb.go` headers read `protoc (unknown)`), and `go-proxyproto` went 0.15 -> 0.16.
+  The patch's go.mod hunks lost their context; the other 14 files apply unchanged
+  and their hunks are byte-identical to `amneziawg-v26.10.21.patch`.
+- Nothing in `proxy/wireguard`, `proxy/masque`, `proxy/tun` or the WireGuard
+  half of `infra/conf` changed upstream in these 29 commits. What did change is
+  elsewhere: Windows / Darwin socket-option fixes, Freedom `blockDelay` for
+  `DispatchLink` inbounds and a migration warning for `fragment` / `noises`,
+  Linux IPv6 `process` routing, geodata download limits and streaming gzip, the
+  DNS-outbound buffer, WebSocket normal-close as EOF, XDRIVE storage backends,
+  the QUIC sniffer, XHTTP server `h2Params` / `OPTIONS` uplinks, and HTTP-inbound
+  `100 Continue` forwarding. #7284 moves inbound module initialisation to the end
+  of config loading -- not yet seen against our generated configs.
+
+Derivation: the old patch minus its go.mod / go.sum hunks was applied to a pristine
+`v26.10.31` clone (`git clone -c core.autocrlf=false`); `go mod edit
+-require=...@v3.1.20260828 -droprequire=golang.zx2c4.com/wireguard
+-replace=...kuzzrus/amneziawg-go/v3@v3.1.20260829-0.20260922090841-9f614256e326`
+(the same fork commit as before, `9f61425`) and a real `go mod tidy` regenerated
+both files; `git diff` of the result is the new patch. With the `index` lines
+dropped, `diff` against the old patch shows only go.mod / go.sum hunks (new
+context and offsets).
+
+Verified without hardware: plain `git apply` of the new patch on a pristine
+`v26.10.31` checkout (what CI runs); `gofmt -l` clean on every touched file; no
+leftover `golang.zx2c4.com/wireguard/{tun,device,conn}` imports; `go build ./...`
+for windows/amd64, `linux/arm64` and `linux/mipsle` softfloat (Go 1.27.3); `go
+vet` of `proxy/wireguard`, `proxy/masque` and `infra/conf` reports the same two
+findings on the pristine tag and on the patched tree (the `NewXmuxManager` lock
+copy in `proxy/masque/client.go`, unreachable code in `infra/conf/xray.go`).
+**Not run in this round:** upstream's `TestWireguard` / `TestMasque*`, the
+`proxy/*` and `infra/conf` unit tests, the loopback harness (`awgloop`), `xray run
+-test` of the project-generated configs, and `infra/vprotogen -mode check` for the
+patched `config.pb.go` (the workflow regenerates that file with its own protoc
+anyway). So the first execution of this build is CI's QEMU smoke test and then a
+router. Run those locally first if anything looks off on the router.
+
+**Dev build** (`xray_version=v26.10.31 awg_dev=true`, run 41217116969 from the PR
+branch; publishes `xray-core-awg-dev/v26.10.31`, which no release path installs):
+go1.27.3, UPX 4.2.2 `-9` (`--lzma` on arm64 only), provenance commit `a4a3dff` =
+the upstream tag, all four checksums equal GitHub's asset digests, "Apply
+AmneziaWG patch" and "Smoke test under QEMU" green on both arches. mipsle is
+CGO-off (the production flavour): unpacked 34,537,627 / UPX 10,577,740 / xz
+7,053,540. arm64 is the CGO diagnostic flavour (dev builds only compare with dev
+builds): unpacked 30,713,672 / UPX 7,657,872. Against `v26.10.21` that is
++131 KB unpacked / +37 KB UPX (+0.4 %) on mipsle and +66 KB / +20 KB on arm64.
+
+Next: test the dev build on a router (an AWG profile = the kernel-TUN path, a
+plain `security=tls` profile, the TUN transport), and only then promote --
+`AWG_CONFIRMED_TAGS` (workflow *and* `xraycore.AWGConfirmedTags`) and
+`PrereleaseTag`, then the real `xray-core/v26.10.31` and the app release right
+after. `DefaultTag` (`v26.3.27`) is the separate, bigger question the
+`v26.10.21` notes left for the stable release: a bump reaches every router on
+its next `ensure-xray-core`, a seven-month jump for anyone on the default.
+
 ## How to resume
 
 Everything the original plan called for is now built (see "What's

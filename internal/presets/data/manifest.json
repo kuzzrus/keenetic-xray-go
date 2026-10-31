@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated": "2026-10-27",
+  "generated": "2026-10-31",
   "categories": [
     "Мессенджеры",
     "Видео",
@@ -1149,8 +1149,8 @@
       "title": "TikTok",
       "category": "Видео",
       "kind": "domains",
-      "count": 37,
-      "rev": "60a16fdc57e0",
+      "count": 40,
+      "rev": "29c42242e3ba",
       "sources": [
         "Geo-Aggregator: tiktok"
       ]

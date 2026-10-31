@@ -925,6 +925,22 @@ after. `DefaultTag` (`v26.3.27`) is the separate, bigger question the
 `v26.10.21` notes left for the stable release: a bump reaches every router on
 its next `ensure-xray-core`, a seven-month jump for anyone on the default.
 
+**Promoted the same day, on a go-ahead rather than on a report.** The user put
+the dev build on one router (install and daemon restart fine; `ip -6 rule` then
+listed only the router's own fwmark rules, none of the `pref 32764/32765`,
+table 10230+ pair that xray's kernel-TUN mode adds, and `disable_ipv6` and
+`rp_filter` were both already `0` -- but nothing says an AWG profile was active
+at that moment, so the kernel-TUN question stays open). He did not report the
+AWG / plain-TLS / TUN checks; he said to go ahead and that he would update
+another router from the bot and check there -- so those checks now run against
+the real production build, which is the arm64 flavour (CGO off) nobody has run
+yet. `v26.10.31` is therefore in `AWG_CONFIRMED_TAGS` (workflow *and*
+`xraycore.AWGConfirmedTags`) and is `xraycore.PrereleaseTag`; `DefaultTag` stays
+`v26.3.27` (a bump would roll to every router on the default, and nobody asked
+for it). The real `xray-core/v26.10.31` is built by dispatching
+`xray_version=v26.10.31` without `awg_dev`, and the app release follows right
+after it (the bot offers a published `xray-core/` release at once).
+
 ## How to resume
 
 Everything the original plan called for is now built (see "What's
@@ -967,7 +983,15 @@ actually built"). What's left is verification and one more tag:
    release right after (the bot offers a real `xray-core/` release at once, and
    an app build that lacks the tag in `AWGConfirmedTags` warns "no AWG in this
    core").
-5. If re-entering Plan Mode for any of these, re-read this document
+5. **`v26.10.31`** (the emergency MPTCP release, see the 2026-10-31 section):
+   promoted on the user's go-ahead before any per-check report. What's left is
+   his check, through the bot on a second router, of the *production* build:
+   an AWG profile (and, while it is active, `ip -6 rule` plus the daemon log
+   line "Using kernel TUN" / "Using built-in TCP/IP stack" -- the open
+   kernel-TUN side-effect question), a plain `security=tls` profile, and the
+   TUN transport. Not run locally for this tag: upstream's tests, the
+   `awgloop` harness, `xray run -test` of the generated configs.
+6. If re-entering Plan Mode for any of these, re-read this document
    plus the current code first — don't assume an old plan-file survived
    (Plan Mode's plan file gets reused for whatever's being planned at the
    time).

@@ -32,7 +32,7 @@ env:
   # awg_dev is set to. Promoting another tag later (e.g. once a
   # v26.3.27 patch is hardware-confirmed) is a one-line append here.
   # Space-separated, matched whole-token in the "resolve" step below.
-  AWG_CONFIRMED_TAGS: "v26.9.9 v26.9.30 v26.10.21"
+  AWG_CONFIRMED_TAGS: "v26.9.9 v26.9.30 v26.10.21 v26.10.31"
 
 permissions:
   contents: write

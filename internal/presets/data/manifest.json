@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated": "2026-10-31",
+  "generated": "2026-11-01",
   "categories": [
     "Мессенджеры",
     "Видео",
@@ -1197,8 +1197,8 @@
       "title": "Ubisoft",
       "category": "Игры",
       "kind": "domains",
-      "count": 32,
-      "rev": "398c751cf481",
+      "count": 31,
+      "rev": "21a3474d0116",
       "sources": [
         "Geo-Aggregator: ubisoft"
       ]
@@ -1245,8 +1245,8 @@
       "title": "WhatsApp",
       "category": "Мессенджеры",
       "kind": "domains",
-      "count": 13,
-      "rev": "020da820bf61",
+      "count": 11,
+      "rev": "003934566db1",
       "sources": [
         "Geo-Aggregator: whatsapp"
       ]
@@ -1317,8 +1317,8 @@
       "title": "Xbox",
       "category": "Игры",
       "kind": "domains",
-      "count": 43,
-      "rev": "24cce1bfe922",
+      "count": 40,
+      "rev": "eb6b92983f77",
       "sources": [
         "Geo-Aggregator: xbox"
       ]

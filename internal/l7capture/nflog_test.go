@@ -4,6 +4,7 @@ package l7capture
 
 import (
 	"bytes"
+	"syscall"
 	"testing"
 )
 
@@ -106,4 +107,45 @@ func TestParsePackets_IgnoresNonPacketMessages(t *testing.T) {
 	if !bytes.Equal(got[0].Payload, []byte{0x01, 0x02}) {
 		t.Errorf("Payload = % x, want the packet message's own payload", got[0].Payload)
 	}
+}
+
+// TestCapture_CloseIsIdempotent: the capture session closes the socket on
+// its way out and a watcher goroutine closes it to interrupt a Read, so a
+// Capture is routinely closed twice. A second close(2) of the same number
+// would land on whatever the kernel handed that descriptor to in between --
+// here a fresh socket, in the daemon the next session's NFLOG socket.
+func TestCapture_CloseIsIdempotent(t *testing.T) {
+	fd, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_DGRAM|syscall.SOCK_CLOEXEC, 0)
+	if err != nil {
+		t.Skipf("no socket to test with: %v", err)
+	}
+	c := &Capture{fd: fd}
+	if err := c.Close(); err != nil {
+		t.Fatalf("first Close: %v", err)
+	}
+
+	// the kernel hands out the lowest free number, so this reuses fd
+	reused, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_DGRAM|syscall.SOCK_CLOEXEC, 0)
+	if err != nil {
+		t.Skipf("no second socket: %v", err)
+	}
+	defer syscall.Close(reused)
+	if reused != fd {
+		t.Skipf("descriptor %d was not reused (got %d); nothing to prove here", fd, reused)
+	}
+
+	if err := c.Close(); err != nil {
+		t.Errorf("second Close = %v, want the first call's result (nil)", err)
+	}
+	if _, err := fcntlGetFD(reused); err != nil {
+		t.Fatalf("the second Close closed descriptor %d, which now belongs to someone else: %v", reused, err)
+	}
+}
+
+func fcntlGetFD(fd int) (int, error) {
+	r, _, errno := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_GETFD, 0)
+	if errno != 0 {
+		return 0, errno
+	}
+	return int(r), nil
 }

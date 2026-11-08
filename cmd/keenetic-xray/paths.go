@@ -258,3 +258,11 @@ func envOr(key, fallback string) string {
 	}
 	return fallback
 }
+
+// l7sniStatsPath is where the daemon publishes what the L7 capture has
+// counted (names seen, QUIC Initials decrypted, ECH extensions, ...), for
+// `transport l7sni stats` and the bot. /tmp is RAM on a Keenetic, so the
+// periodic rewrite costs no flash.
+func l7sniStatsPath() string {
+	return envOr("KEENETIC_XRAY_L7SNI_STATS", "/tmp/keenetic-xray-l7sni.json")
+}

@@ -97,11 +97,16 @@ const l7RuleComment = "keenetic-xray-l7sni"
 
 // RuleOptions describes the NFLOG-triggering rules EnsureRules installs:
 // one rule per (WANInterface, port) pair, logging only the first few
-// packets of a *new* TCP connection to that port -- see ruleSpecs' own
-// doc comment for exactly why that specific shape.
+// packets of a *new* connection to that port -- see ruleSpecs' own doc
+// comment for exactly why that specific shape.
 type RuleOptions struct {
 	WANInterface string
 	Group        uint16 // the NFLOG group internal/l7capture.Open listens on
+
+	// QUIC adds the UDP/443 rule that captures QUIC Initial datagrams. Off
+	// by default: it is a different (and costlier) kind of capture than the
+	// two TCP rules, and its first use is to look, not to act.
+	QUIC bool
 }
 
 func (o RuleOptions) validate() error {
@@ -123,71 +128,93 @@ func (o RuleOptions) validate() error {
 // into pieces of one or two bytes; the SNI of such a connection was
 // invisible. HydraRoute lowered it for the same reason. The price is that
 // empty ACKs carrying TCP options (a timestamp makes them 52 bytes) now
-// pass the filter too, inside the connbytes window; l7SNIHandlePacket
-// drops them on the first length check, and the window keeps it to a few
-// packets per new connection.
+// pass the filter too, inside the connbytes window; the packet handler
+// (cmd/keenetic-xray/l7sni_handler.go) returns on an empty payload before
+// doing anything else, and the window keeps it to a few packets per new
+// connection.
 const tcpMinLength = "41:"
 
-// ruleSpecs renders the match+target half of every rule opts wants --
-// everything after `-A FORWARD` -- one entry for port 443 (TLS) and one
-// for port 80 (plaintext HTTP). QUIC (UDP/443) is deliberately not
-// covered here -- see the l7sni-build-plan memory file for why.
-//
-// The connbytes+length filter is the whole reason this is cheap enough
-// to run on embedded router hardware, reproduced exactly from
-// HydraRoute Neo's own l7_firewall_emit_rules: `--tcp-flags SYN,ACK ACK`
-// matches established-connection data packets, not the SYN itself (a
-// ClientHello/request line is sent as data right after the handshake,
-// never inside the SYN); `--connbytes-dir original --connbytes-mode
-// packets --connbytes 2:N` means NFLOG only fires while this
-// connection's own client-to-server packet count is between 2 and N --
-// i.e. only during a *new* connection's first few packets, not for the
-// rest of that connection's life. `-m length --length 41:` drops
-// anything that carries no payload at all (see tcpMinLength).
-func ruleSpecs(o RuleOptions) [][]string {
-	type portSpec struct {
-		port         int
-		connbytesMax int
-	}
-	ports := []portSpec{
-		{443, 8},
-		{80, 4},
-	}
-	var specs [][]string
-	for _, p := range ports {
-		specs = append(specs, []string{
-			"-o", o.WANInterface,
-			"-p", "tcp", "--dport", strconv.Itoa(p.port),
-			"--tcp-flags", "SYN,ACK", "ACK",
-			"-m", "connbytes", "--connbytes-dir", "original", "--connbytes-mode", "packets",
-			"--connbytes", fmt.Sprintf("2:%d", p.connbytesMax),
-			"-m", "length", "--length", tcpMinLength,
-			"-j", "NFLOG", "--nflog-group", strconv.Itoa(int(o.Group)),
-		})
-	}
-	return specs
+// quicMinLength and quicWindow are the QUIC rule's `-m length` bound and
+// connbytes window. A client must pad every datagram that carries an Initial
+// packet to at least 1200 bytes (RFC 9000 section 14.1), so a length filter
+// alone picks the Initials out of UDP/443 without looking at a payload; the
+// window keeps it to the first four datagrams of a flow (HydraRoute Neo
+// notes that KeeneticOS counts connbytes one lower than the packet number,
+// hence 0:3 for datagrams one to four) -- the first flight, its repeats, and
+// the second datagram of a ClientHello that does not fit in one.
+const (
+	quicMinLength = "1200:"
+	quicWindow    = "0:3"
+)
+
+// ruleSpec is one NFLOG-triggering rule as data. It renders both the
+// iptables arguments that install the rule (args) and the substrings that
+// recognise it in `iptables -S` output (signature) from the same fields, so
+// a property that is added to the one cannot be forgotten in the other --
+// which is how a changed length bound once stayed invisible to the drift
+// check.
+type ruleSpec struct {
+	iface  string
+	proto  string // "tcp" or "udp"
+	dport  int
+	window string // connbytes packet-count window, "2:8"
+	minLen string // length lower bound, "41:"
+	group  uint16
 }
 
-// specSignature is the set of substrings an `iptables -S FORWARD` line
-// must contain to be the rule spec renders: interface, protocol, port,
-// connbytes window, length bound and our NFLOG group. Not a full-line
-// comparison on purpose -- the line `-S` prints reorders the match
-// arguments, spells the length range out (`41:65535`) and may or may not
-// carry the comment match -- but it does cover every argument that has
-// ever been changed in place (the length bound moved from 60 to 41), so a
-// rule an older build installed is recognised as stale instead of passing
-// for the current one.
-func specSignature(spec []string, group uint16) []string {
-	var sig []string
-	for i := 0; i+1 < len(spec); i++ {
-		switch spec[i] {
-		case "-o", "-p":
-			sig = append(sig, spec[i]+" "+spec[i+1]+" ")
-		case "--dport", "--length", "--connbytes":
-			sig = append(sig, spec[i]+" "+spec[i+1])
-		}
+// args is everything after `-A FORWARD`.
+func (s ruleSpec) args() []string {
+	a := []string{"-o", s.iface, "-p", s.proto, "--dport", strconv.Itoa(s.dport)}
+	if s.proto == "tcp" {
+		// established-connection data packets, not the SYN itself (a
+		// ClientHello/request line is sent as data right after the
+		// handshake, never inside the SYN)
+		a = append(a, "--tcp-flags", "SYN,ACK", "ACK")
 	}
-	return append(sig, "--nflog-group "+strconv.Itoa(int(group)))
+	return append(a,
+		"-m", "connbytes", "--connbytes-dir", "original", "--connbytes-mode", "packets",
+		"--connbytes", s.window,
+		"-m", "length", "--length", s.minLen,
+		"-j", "NFLOG", "--nflog-group", strconv.Itoa(int(s.group)),
+	)
+}
+
+// signature is the set of substrings an `iptables -S FORWARD` line must
+// contain to be this rule: interface, protocol, port, connbytes window,
+// length bound and our NFLOG group. Not a full-line comparison on purpose --
+// the line `-S` prints reorders the match arguments, spells the length range
+// out (`41:65535`) and may or may not carry the comment match.
+func (s ruleSpec) signature() []string {
+	return []string{
+		"-o " + s.iface + " ",
+		"-p " + s.proto + " ",
+		"--dport " + strconv.Itoa(s.dport),
+		"--connbytes " + s.window,
+		"--length " + s.minLen,
+		"--nflog-group " + strconv.Itoa(int(s.group)),
+	}
+}
+
+// ruleSpecs lists every rule opts wants: one for port 443 (TLS) and one for
+// port 80 (plaintext HTTP), plus UDP/443 (QUIC) when opts.QUIC is set.
+//
+// The connbytes+length filter is the whole reason this is cheap enough
+// to run on embedded router hardware, reproduced from HydraRoute Neo's own
+// l7_firewall_emit_rules: `--connbytes-dir original --connbytes-mode
+// packets --connbytes 2:N` means NFLOG only fires while this connection's
+// own client-to-server packet count is between 2 and N -- i.e. only during
+// a *new* connection's first few packets, not for the rest of that
+// connection's life. `-m length --length 41:` drops anything that carries
+// no payload at all (see tcpMinLength).
+func ruleSpecs(o RuleOptions) []ruleSpec {
+	specs := []ruleSpec{
+		{iface: o.WANInterface, proto: "tcp", dport: 443, window: "2:8", minLen: tcpMinLength, group: o.Group},
+		{iface: o.WANInterface, proto: "tcp", dport: 80, window: "2:4", minLen: tcpMinLength, group: o.Group},
+	}
+	if o.QUIC {
+		specs = append(specs, ruleSpec{iface: o.WANInterface, proto: "udp", dport: 443, window: quicWindow, minLen: quicMinLength, group: o.Group})
+	}
+	return specs
 }
 
 // EnsureRules installs opts' NFLOG rules in filter/FORWARD, removing any
@@ -203,7 +230,7 @@ func EnsureRules(ctx context.Context, opts RuleOptions) error {
 	clearOurRules(ctx)
 	add := func(withComment bool) error {
 		for _, spec := range ruleSpecs(opts) {
-			args := append([]string{"-A", "FORWARD"}, spec...)
+			args := append([]string{"-A", "FORWARD"}, spec.args()...)
 			if withComment {
 				args = append(args, "-m", "comment", "--comment", l7RuleComment)
 			}
@@ -226,7 +253,7 @@ func EnsureRules(ctx context.Context, opts RuleOptions) error {
 // RulesInPlace reports whether exactly the rules opts wants are live
 // right now -- the reconcile loop's own drift check, same idea as
 // internal/adaptiveroute's own RedirectInPlace. Matches by signature
-// (see specSignature), not full-line equality, so it doesn't care whether
+// (see ruleSpec.signature), not full-line equality, so it doesn't care whether
 // the comment match is present.
 //
 // "Exactly": a rule of ours that no wanted spec accounts for -- one an
@@ -246,7 +273,7 @@ func RulesInPlace(ctx context.Context, opts RuleOptions) bool {
 	lines := strings.Split(out, "\n")
 	specs := ruleSpecs(opts)
 	for _, spec := range specs {
-		if !anyForwardLineHasAll(lines, specSignature(spec, opts.Group)...) {
+		if !anyForwardLineHasAll(lines, spec.signature()...) {
 			return false
 		}
 	}

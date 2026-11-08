@@ -10,11 +10,11 @@ import (
 
 // l7sniDomainSet is every enabled route list's domain entries, already
 // classified and flattened into one set. Built once whenever config is
-// (re)read, not per packet: l7SNIHandlePacket's own hot path used to
-// call config.ClassifyRouteEntry on every entry of every list for every
+// (re)read, not per packet: the packet handler's hot path used to call
+// config.ClassifyRouteEntry on every entry of every list for every
 // captured packet, which on a real router means re-parsing a few hundred
 // entries per HTTPS connection -- see l7sniConfigRefreshInterval's doc
-// comment (l7sni_linux.go) for the measurement that prompted this.
+// comment (l7sni_handler.go) for the measurement that prompted this.
 type l7sniDomainSet map[string]struct{}
 
 // l7sniDomainsFrom flattens cfg's enabled route lists into a
@@ -84,12 +84,12 @@ func (s l7sniDomainSet) matches(host string) bool {
 // l7sniEnabled reports whether L7 SNI matching should be active for cfg
 // (L7-01, part 1/3) -- pulled out as its own pure function, cross-
 // platform like l7sniMatchesRoutes above, so it's unit-testable without
-// the real capture loop l7sni_linux.go's own l7sniLoadSnapshot lives in
-// (Linux-only, and gated behind keenetic.Available() besides).
+// the real capture loop in l7sni_linux.go (Linux-only, and gated behind
+// keenetic.Available() besides) that reads it through l7sniLoadSnapshot.
 //
 // Both L7SNI.Enabled and AdaptiveRoute.Enabled must be on: a match's
 // only real effect is adaptiveroute.AddIP into the adaptive-routing
-// ipset (see l7SNIHandlePacket), which is exactly what
+// ipset (see l7sniHandler.redirectMatch), which is exactly what
 // AdaptiveRoute.Enabled governs. Without this, turning AdaptiveRoute
 // off (leaving L7SNI on, its own separate toggle) kept capturing and
 // matching every packet, and every match still tore down the
@@ -97,6 +97,23 @@ func (s l7sniDomainSet) matches(host string) bool {
 // never actually route anywhere.
 func l7sniEnabled(cfg *config.Config) bool {
 	return cfg.L7SNI.Enabled && cfg.AdaptiveRoute.Enabled
+}
+
+// l7sniQUICModeFor is the QUIC mode the capture actually runs with: off
+// unless L7 detection itself is on; the configured "observe"/"act"
+// otherwise, except that "act" with adaptive routing off is read as
+// "observe" -- a match has nowhere to be redirected to, the same reason
+// l7sniEnabled wants both switches for TLS and HTTP. Observing needs
+// neither adaptive routing nor any route list: it only counts.
+func l7sniQUICModeFor(cfg *config.Config) string {
+	if !cfg.L7SNI.Enabled {
+		return config.L7SNIQUICOff
+	}
+	mode := cfg.L7SNI.QUICMode()
+	if mode == config.L7SNIQUICAct && !cfg.AdaptiveRoute.Enabled {
+		return config.L7SNIQUICObserve
+	}
+	return mode
 }
 
 // l7sniMatchesRoutes reports whether host matches any enabled route
@@ -119,7 +136,17 @@ func l7sniMatchesRoutes(cfg *config.Config, host string) bool {
 // address (CDN IPs get reassigned).
 const l7sniSharedIPMaxAge = 10 * time.Minute
 
-// l7sniSharedIPRedirectTTL is the redirect TTL l7SNIHandlePacket uses
+// l7sniSharedIPMaxEntries caps the tracker's table. Every distinct
+// destination a LAN client opens a TLS, HTTP or QUIC connection to adds an
+// entry and only age removes one, so without a cap a scanner, or a
+// peer-to-peer client touching hundreds of thousands of addresses within
+// l7sniSharedIPMaxAge, would grow it by tens of megabytes on a router with
+// little to spare. 16384 is several times what a busy household reaches in
+// that window; past it the tracker makes room (note) and carries on, since
+// what it feeds is a best-effort mitigation, not a ledger.
+const l7sniSharedIPMaxEntries = 16384
+
+// l7sniSharedIPRedirectTTL is the redirect TTL l7sniHandler uses
 // instead of the operator's own (typically hours-long) AdaptiveRoute
 // TTL when l7sniSharedIPTracker.note reports the matched destination IP
 // looks shared: a route-list match is only evidence about the specific
@@ -138,7 +165,7 @@ type l7sniHostSighting struct {
 }
 
 // l7sniSharedIPTracker records the most recent SNI/Host hostname seen
-// per destination IP address, letting l7SNIHandlePacket notice -- at the
+// per destination IP address, letting l7sniHandler notice -- at the
 // moment it's about to redirect a whole IP into the tunnel over a single
 // matched hostname -- that the same IP has recently also carried a
 // *different* hostname. That's a strong, cheap-to-observe signal the
@@ -183,6 +210,17 @@ func (t *l7sniSharedIPTracker) note(dst [4]byte, host string, now time.Time) (pr
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	prev, ok := t.seen[dst]
+	if !ok && len(t.seen) >= l7sniSharedIPMaxEntries {
+		// Full. Whatever is already stale goes first; when the table is
+		// full of live sightings (a flood of distinct addresses) it is
+		// forgotten wholesale -- the next connections re-teach it, and in
+		// the meantime a shared address is treated as unshared, which is
+		// what happened for every address before this tracker existed.
+		t.dropStale(now)
+		if len(t.seen) >= l7sniSharedIPMaxEntries {
+			t.seen = make(map[[4]byte]l7sniHostSighting)
+		}
+	}
 	t.seen[dst] = l7sniHostSighting{host: host, at: now}
 	if ok && prev.host != host && now.Sub(prev.at) <= l7sniSharedIPMaxAge {
 		return prev.host, true
@@ -197,6 +235,12 @@ func (t *l7sniSharedIPTracker) note(dst [4]byte, host string, now time.Time) (pr
 func (t *l7sniSharedIPTracker) expire(now time.Time) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.dropStale(now)
+}
+
+// dropStale removes every sighting older than l7sniSharedIPMaxAge; t.mu
+// must be held.
+func (t *l7sniSharedIPTracker) dropStale(now time.Time) {
 	for dst, sighting := range t.seen {
 		if now.Sub(sighting.at) > l7sniSharedIPMaxAge {
 			delete(t.seen, dst)

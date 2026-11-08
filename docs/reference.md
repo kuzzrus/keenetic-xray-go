@@ -125,6 +125,24 @@ mode stream-up` глобально переопределяет `xhttp` `mode` (
 mangle с меткой `keenetic-xray-mss` (пресеты 1400 / 1280 / off). Действует,
 только пока `Proxy0` включён; `iptables` доустанавливается через `opkg`.
 
+**Имя по первым пакетам (`l7sni`).** `keenetic-xray transport l7sni on`
+включает перехват начала новых соединений через NFLOG — TLS SNI и HTTP
+Host. Если имя входит в один из ваших списков маршрутов, IP назначения
+кладётся в набор адаптивной маршрутизации и соединение сразу идёт через
+туннель — в том числе когда приложение резолвило имя через DoH/DoT или
+ходит на зашитый IP и роутерный DNS его не видел. Нужна включённая
+адаптивная маршрутизация (`transport adaptive on`); включение и
+выключение требуют перезапуска демона.
+
+QUIC (UDP/443) включается отдельно и в два шага: `transport l7sni quic
+observe` разбирает Initial-пакеты и **только считает** — сколько
+расшифровано, у скольких ClientHello есть расширение ECH, какие имена
+видны; `quic act` дополнительно переправляет совпавшие имена, как для TLS
+(браузер, у которого QUIC к такому адресу отбит, возвращается на TCP).
+`transport l7sni stats` показывает счётчики. Режим QUIC применяется без
+перезапуска. Имя за ECH в пакете не видно — таких соединений перехват не
+ловит; доля ECH в `stats` показывает, сколько их.
+
 **Самолечение.** Прошивка при перестройке файрвола иногда сносит наши
 правила и настройки интерфейсов. Демон возвращает их два способа: хук
 `/opt/etc/ndm/netfilter.d/50-keenetic-xray.sh` (в `.ipk`), который `ndm`
@@ -285,7 +303,7 @@ keenetic-xray failover {show|set <key> <value>}
 keenetic-xray routes {list|show [name]|new <name> [entries…]|add <name> <entries…>|scan <domain>… [--add <name>]|del <name> <entries…>|rm <name>|enable <name>|disable <name>|set <name> [--iface=Proxy0|Wireguard4] [--exclusive]|apply}
 keenetic-xray routes preset {list|show <name>|add <name> [--ip] [--iface=…] [--exclusive]|sync [<name>|--all]|update}
 keenetic-xray dns {show|test|list|preset <id>[,<id>…] [--dot|--doh|--both]|set dot <ip> <sni> …|set doh <url> …|off}
-keenetic-xray transport {show|mode auto|packet-up|stream-up|stream-one|mode-clear|mss <1200..1452|auto|off>|wg {show|on|off}}
+keenetic-xray transport {show|mode auto|packet-up|stream-up|stream-one|mode-clear|mss <1200..1452|auto|off>|wg {show|on|off}|tun {show|on|off|mtu}|adaptive {show|on|off|flush|list|excluded|exclude <ip|cidr>…|include <ip|cidr>…}|l7sni {show|on|off|quic {off|observe|act}|stats}}
 keenetic-xray rci {show|probe [url]|enable [url]|disable|token [<токен>|clear]}
 ```
 

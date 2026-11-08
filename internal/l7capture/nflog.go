@@ -16,13 +16,16 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
 
 // Capture is one open NFLOG group subscription. Not safe for concurrent
 // use from multiple goroutines -- one capture loop per Capture, same as
-// HydraRoute Neo's own single-threaded design.
+// HydraRoute Neo's own single-threaded design. The exceptions are Close,
+// which is how another goroutine interrupts a Read, and BatchStats.
 //
 // Built on the standard library's syscall package rather than a netlink
 // library: syscall already has everything this needs (raw AF_NETLINK
@@ -52,6 +55,14 @@ type Capture struct {
 	portID  uint32
 	recvBuf []byte
 	pending []Packet // L7-02: packets already parsed out of recvBuf but not yet returned by Read
+
+	// recvs and msgs count the recv() calls that carried packets and the
+	// packets they carried, for BatchStats. Atomic: the stats publisher reads
+	// them from another goroutine.
+	recvs, msgs atomic.Uint64
+
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // handshakeTimeout bounds Open's blocking config-command reads (see
@@ -215,6 +226,10 @@ func (c *Capture) Read() (Packet, error) {
 			return Packet{}, fmt.Errorf("l7capture: read: %w", err)
 		}
 		c.pending = parsePackets(c.recvBuf[:n])
+		if len(c.pending) > 0 {
+			c.recvs.Add(1)
+			c.msgs.Add(uint64(len(c.pending)))
+		}
 	}
 }
 
@@ -259,6 +274,24 @@ func parsePackets(buf []byte) []Packet {
 // "a previous, uncleanly-stopped instance [leaving] a stale PF binding"
 // -- see its own doc comment -- so a plain close leans on a path this
 // package already has to get right regardless.
+//
+// Safe to call more than once, and from several goroutines: the descriptor
+// is released exactly once. The capture session closes it on its way out
+// and a watcher goroutine closes it to interrupt a Read, so two Closes are
+// the normal case, and a second raw close(2) could land on whatever the
+// kernel handed the same descriptor number to in between.
 func (c *Capture) Close() error {
-	return syscall.Close(c.fd)
+	c.closeOnce.Do(func() { c.closeErr = syscall.Close(c.fd) })
+	return c.closeErr
+}
+
+// BatchStats reports how many recv() calls have carried NFLOG packets and
+// how many packets they carried in all. Their ratio says whether the kernel
+// batches at all: about 1 means every packet arrives on its own, so the
+// flush timer and threshold of defaultNFLOGConfig never get to hold one back
+// (the xt_NFLOG rule's own threshold, 1 by default, wins over the group's);
+// well above 1 means packets queue up, either because the kernel batches or
+// because this process falls behind.
+func (c *Capture) BatchStats() (recvs, msgs uint64) {
+	return c.recvs.Load(), c.msgs.Load()
 }

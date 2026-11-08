@@ -3,8 +3,12 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
@@ -12,18 +16,20 @@ import (
 	"github.com/kuzzrus/keenetic-xray-go/internal/l7capture"
 )
 
-// transportL7SNI is `keenetic-xray transport l7sni {show|on|off}` --
-// toggles L7 hostname detection (see config.L7SNIConfig's own doc
-// comment). Unlike AdaptiveRoute.Enabled, this genuinely needs a full
-// daemon restart to take effect either way: l7SNIClassifyLoop
-// (cmd/keenetic-xray/l7sni_linux.go) checks cfg.L7SNI.Enabled once at
-// its own startup, then blocks on Capture.Read() for the rest of the
-// process's life -- unlike adaptiveRouteClassifyLoop's own tick-based
-// loop, there's no per-tick config re-read that could notice a change
-// live, so applyDaemonChange's usual "try a SIGHUP live-reload first"
-// path would be actively misleading here (a successful SIGHUP reloads
-// the failover daemon's own config, not this feature) -- go straight to
-// offering a real restart instead.
+const l7sniUsage = "usage: keenetic-xray transport l7sni {show|on|off|quic {off|observe|act}|stats}"
+
+// transportL7SNI is `keenetic-xray transport l7sni {show|on|off|quic <mode>|
+// stats}` -- toggles L7 hostname detection (see config.L7SNIConfig's own doc
+// comment). on/off genuinely need a full daemon restart to take effect:
+// l7SNIClassifyLoop (cmd/keenetic-xray/l7sni_linux.go) checks
+// cfg.L7SNI.Enabled once at its own startup, then blocks on Capture.Read()
+// for the rest of the process's life -- unlike adaptiveRouteClassifyLoop's
+// own tick-based loop, there's no per-tick config re-read that could notice a
+// change live, so applyDaemonChange's usual "try a SIGHUP live-reload first"
+// path would be actively misleading here (a successful SIGHUP reloads the
+// failover daemon's own config, not this feature) -- go straight to offering
+// a real restart instead. The QUIC mode is the exception: the capture loop
+// does re-read it every few seconds.
 func transportL7SNI(cfg *config.Config, args []string) error {
 	action := "show"
 	if len(args) > 0 {
@@ -31,12 +37,12 @@ func transportL7SNI(cfg *config.Config, args []string) error {
 	}
 	switch action {
 	case "show":
-		if cfg.L7SNI.Enabled {
-			fmt.Println("l7sni: вкл")
-		} else {
-			fmt.Println("l7sni: выкл")
-		}
+		printL7SNIState(os.Stdout, cfg)
 		return nil
+	case "stats":
+		return printL7SNIStats(os.Stdout, time.Now())
+	case "quic":
+		return transportL7SNIQUIC(cfg, args[1:])
 	case "on":
 		if !keenetic.Available() {
 			return fmt.Errorf("ndmc не найден — l7sni работает только на роутере Keenetic")
@@ -60,12 +66,133 @@ func transportL7SNI(cfg *config.Config, args []string) error {
 			cancel()
 		}
 	default:
-		return fmt.Errorf("usage: keenetic-xray transport l7sni {show|on|off}")
+		return errors.New(l7sniUsage)
 	}
 	if err := cfg.Save(configPath()); err != nil {
 		return err
 	}
 	fmt.Println("l7sni: сохранено — нужен перезапуск демона, чтобы применилось")
 	offerDaemonRestart(bufio.NewReader(os.Stdin))
+	return nil
+}
+
+// transportL7SNIQUIC is `transport l7sni quic {off|observe|act}`. Nothing
+// here needs a daemon restart: the capture loop re-reads the mode every
+// couple of seconds, and the one thing it cannot do itself -- the NFLOG rule
+// for UDP/443 -- is placed (or removed) right here through the same
+// reconcileL7SNI the daemon runs every few minutes.
+func transportL7SNIQUIC(cfg *config.Config, args []string) error {
+	if len(args) != 1 {
+		return errors.New(l7sniUsage)
+	}
+	mode := strings.ToLower(strings.TrimSpace(args[0]))
+	switch mode {
+	case config.L7SNIQUICOff:
+		cfg.L7SNI.QUIC = "" // off is the default; keep the config file free of it
+	case config.L7SNIQUICObserve, config.L7SNIQUICAct:
+		cfg.L7SNI.QUIC = mode
+	default:
+		return errors.New(l7sniUsage)
+	}
+	if err := cfg.Save(configPath()); err != nil {
+		return err
+	}
+	fmt.Println(l7sniQUICLine(cfg))
+	for _, hint := range l7sniQUICHints(cfg) {
+		fmt.Println("  " + hint)
+	}
+
+	if cfg.L7SNI.Enabled && keenetic.Available() {
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		reconcileL7SNI(ctx, cfg, func(format string, a ...any) { fmt.Printf(format+"\n", a...) })
+		fmt.Println("правило перехвата UDP/443 приведено в соответствие, демон подхватит режим сам (до нескольких секунд), перезапуск не нужен")
+	}
+	return nil
+}
+
+// printL7SNIState is `transport l7sni show`.
+func printL7SNIState(w io.Writer, cfg *config.Config) {
+	if cfg.L7SNI.Enabled {
+		fmt.Fprintln(w, "l7sni: вкл")
+	} else {
+		fmt.Fprintln(w, "l7sni: выкл")
+	}
+	fmt.Fprintln(w, l7sniQUICLine(cfg))
+	for _, hint := range l7sniQUICHints(cfg) {
+		fmt.Fprintln(w, "  "+hint)
+	}
+}
+
+// l7sniQUICWord is the short name of a QUIC mode.
+func l7sniQUICWord(mode string) string {
+	switch mode {
+	case config.L7SNIQUICObserve:
+		return "наблюдение"
+	case config.L7SNIQUICAct:
+		return "действие"
+	default:
+		return "выкл"
+	}
+}
+
+// l7sniQUICLine says what the QUIC mode is and what it amounts to. The
+// configured mode and the one the capture runs with can differ -- l7sni
+// itself off silences it, and "act" with adaptive routing off only observes
+// (l7sniQUICModeFor) -- and the line says so rather than leaving the
+// operator to wonder why nothing happens.
+func l7sniQUICLine(cfg *config.Config) string {
+	set, eff := cfg.L7SNI.QUICMode(), l7sniQUICModeFor(cfg)
+	line := "QUIC (UDP/443): " + l7sniQUICWord(set)
+	switch {
+	case set == config.L7SNIQUICOff:
+		return line
+	case !cfg.L7SNI.Enabled:
+		return line + " — но l7sni выключен, поэтому не работает"
+	case set != eff:
+		return line + " — адаптивная маршрутизация выключена, поэтому работает как «" + l7sniQUICWord(eff) + "»"
+	}
+	switch eff {
+	case config.L7SNIQUICObserve:
+		return line + " — разбираем начало соединений и считаем имена, ничего не переправляем"
+	default:
+		return line + " — имя из списка маршрутов переправляется так же, как для TLS"
+	}
+}
+
+// l7sniQUICHints lists what would make the chosen mode more useful, one line
+// each; nothing for a mode that is off.
+func l7sniQUICHints(cfg *config.Config) []string {
+	var out []string
+	switch cfg.L7SNI.QUICMode() {
+	case config.L7SNIQUICObserve:
+		out = append(out, "что насчиталось: keenetic-xray transport l7sni stats")
+	case config.L7SNIQUICAct:
+		if len(l7sniDomainsFrom(cfg)) == 0 {
+			out = append(out, "в списках маршрутов (Proxy0) нет ни одного домена — переправлять нечего")
+		}
+		out = append(out, "браузеры сами уходят на TCP, когда QUIC к адресу отбит; приложение без запасного пути на TCP останется без QUIC к этому адресу")
+		out = append(out, "что насчиталось: keenetic-xray transport l7sni stats")
+	default:
+		return nil
+	}
+	if !cfg.L7SNI.Enabled {
+		out = append(out, "включить определение имён: keenetic-xray transport l7sni on")
+	}
+	return out
+}
+
+// printL7SNIStats is `transport l7sni stats`: what the daemon's capture has
+// counted since it started, read from the file it publishes.
+func printL7SNIStats(w io.Writer, now time.Time) error {
+	f, err := readL7SNIStats(l7sniStatsPath())
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			fmt.Fprintln(w, "l7sni: статистики пока нет — l7sni выключен, демон только что запущен или ещё ничего не перехватил (файл обновляется раз в ~10 с)")
+			return nil
+		}
+		return fmt.Errorf("не удалось прочитать статистику l7sni: %w", err)
+	}
+	renderL7SNIStats(w, f, now)
 	return nil
 }

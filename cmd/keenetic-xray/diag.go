@@ -198,6 +198,10 @@ func writeDiag(w io.Writer) {
 		}
 	}
 
+	if cfgErr == nil && cfg.L7SNI.Enabled {
+		writeDiagL7SNI(w, cfg, time.Now())
+	}
+
 	fmt.Fprintln(w, "\n---- watchdog ----")
 	fmt.Fprintln(w, watchdogStatusText())
 
@@ -213,6 +217,20 @@ func writeDiag(w io.Writer) {
 		fmt.Fprintf(w, "%s: %v\n", daemonLogPath(), err)
 	}
 	fmt.Fprintln(w, "\n==== end ====")
+}
+
+// writeDiagL7SNI is the l7sni section: which QUIC mode the config asks for
+// and what the daemon's capture has counted so far (the same text as
+// `transport l7sni stats`, read from the file the daemon publishes).
+func writeDiagL7SNI(w io.Writer, cfg *config.Config, now time.Time) {
+	fmt.Fprintln(w, "\n---- l7sni ----")
+	fmt.Fprintln(w, l7sniQUICLine(cfg))
+	f, err := readL7SNIStats(l7sniStatsPath())
+	if err != nil {
+		fmt.Fprintf(w, "статистика: %v\n", err)
+		return
+	}
+	renderL7SNIStats(w, f, now)
 }
 
 // diagPortListening reports whether something accepts TCP on

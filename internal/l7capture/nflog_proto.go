@@ -45,6 +45,8 @@ const (
 	nfulaCfgCmd      = 1
 	nfulaCfgMode     = 2
 	nfulaCfgNLBufSiz = 3
+	nfulaCfgTimeout  = 4 // flush timer, in 1/100 s
+	nfulaCfgQThresh  = 5 // flush after this many queued packets
 
 	nfulnlCopyPacket = 2
 
@@ -128,17 +130,19 @@ func buildConfigCmd(seq, pid uint32, group uint16, family, cmd uint8) []byte {
 }
 
 // buildConfigMode builds a complete NFULNL_MSG_CONFIG message carrying
-// NFULA_CFG_MODE (copyRange + NFULNL_COPY_PACKET) and
-// NFULA_CFG_NLBUFSIZ -- mirroring HydraRoute's own nflog_cfg_mode.
-// copyRange and nlbufsiz are netfilter attribute *values*, so
-// big-endian (see putNfgenmsg's doc comment) -- unlike the attribute
-// headers' own length/type fields, written by putAttrHeader in native
-// order.
-func buildConfigMode(seq, pid uint32, group uint16, copyRange, nlbufsiz uint32) []byte {
+// NFULA_CFG_MODE (copyRange + NFULNL_COPY_PACKET), NFULA_CFG_NLBUFSIZ,
+// NFULA_CFG_TIMEOUT and NFULA_CFG_QTHRESH -- mirroring HydraRoute's own
+// nflog_cfg_mode, plus the batching the kernel would otherwise default
+// (nfnetlink_log.c: 100 packets or 1 s, whichever comes first).
+// copyRange, nlbufsiz, timeoutCS (centiseconds) and qthresh (packets) are
+// netfilter attribute *values*, so big-endian (see putNfgenmsg's doc
+// comment) -- unlike the attribute headers' own length/type fields,
+// written by putAttrHeader in native order.
+func buildConfigMode(seq, pid uint32, group uint16, copyRange, nlbufsiz, timeoutCS, qthresh uint32) []byte {
 	const modeDataLen = 6 // copy_range(4) + copy_mode(1) + pad(1)
 	modeAttrLen := nlaAlign(nlaHdrLen + modeDataLen)
-	bufsizAttrLen := nlaAlign(nlaHdrLen + 4)
-	total := nlHdrLen + nfgenLen + modeAttrLen + bufsizAttrLen
+	u32AttrLen := nlaAlign(nlaHdrLen + 4)
+	total := nlHdrLen + nfgenLen + modeAttrLen + 3*u32AttrLen
 	buf := make([]byte, total)
 
 	putNlHeader(buf, uint32(total), (nflogSubsys<<8)|nfulnlMsgConfig, nlmFRequest|nlmFAck, seq, pid)
@@ -150,9 +154,19 @@ func buildConfigMode(seq, pid uint32, group uint16, copyRange, nlbufsiz uint32) 
 	attrs[nlaHdrLen+4] = nfulnlCopyPacket
 	// attrs[nlaHdrLen+5] is the struct's pad byte -- already zero.
 
-	attrs2 := attrs[modeAttrLen:]
-	putAttrHeader(attrs2, nfulaCfgNLBufSiz, 4)
-	binary.BigEndian.PutUint32(attrs2[nlaHdrLen:nlaHdrLen+4], nlbufsiz)
+	rest := attrs[modeAttrLen:]
+	for _, a := range []struct {
+		typ uint16
+		val uint32
+	}{
+		{nfulaCfgNLBufSiz, nlbufsiz},
+		{nfulaCfgTimeout, timeoutCS},
+		{nfulaCfgQThresh, qthresh},
+	} {
+		putAttrHeader(rest, a.typ, 4)
+		binary.BigEndian.PutUint32(rest[nlaHdrLen:nlaHdrLen+4], a.val)
+		rest = rest[u32AttrLen:]
+	}
 
 	return buf
 }

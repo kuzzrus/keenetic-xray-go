@@ -38,8 +38,42 @@ func TestBuildConfigCmd_Length(t *testing.T) {
 	}
 }
 
+// TestBuildConfigMode_ExactBytes checks a literal byte sequence, not a
+// round trip through this package's own parser, for
+// buildConfigMode(seq=3, pid=200, group=9, copyRange=2048, nlbufsiz=16384,
+// timeout=2 cs, qthresh=8) -- the values nflog.go actually sends. Layout
+// per linux/netfilter/nfnetlink_log.h: NFULA_CFG_MODE (2) carrying
+// struct nfulnl_msg_config_mode {be32 copy_range; u8 copy_mode; u8 pad},
+// NFULA_CFG_NLBUFSIZ (3), NFULA_CFG_TIMEOUT (4) and NFULA_CFG_QTHRESH (5),
+// each a be32; attribute headers native-endian (little-endian on the
+// arm64 and mipsle targets, same as the machine running this test).
+func TestBuildConfigMode_ExactBytes(t *testing.T) {
+	got := buildConfigMode(3, 200, 9, 2048, 16384, 2, 8)
+	want := []byte{
+		0x38, 0x00, 0x00, 0x00, // nlmsg_len = 56
+		0x01, 0x04, // nlmsg_type = (4<<8)|1
+		0x05, 0x00, // flags = REQUEST|ACK
+		0x03, 0x00, 0x00, 0x00, // seq = 3
+		0xC8, 0x00, 0x00, 0x00, // pid = 200
+		0x00, 0x00, 0x00, 0x09, // nfgenmsg: family 0, version 0, res_id = 9 (BE)
+		0x0A, 0x00, 0x02, 0x00, // nlattr len=10, type=NFULA_CFG_MODE
+		0x00, 0x00, 0x08, 0x00, // copy_range = 2048 (BE)
+		0x02, 0x00, // copy_mode = NFULNL_COPY_PACKET, pad
+		0x00, 0x00, // attribute padding to 4 bytes
+		0x08, 0x00, 0x03, 0x00, // nlattr len=8, type=NFULA_CFG_NLBUFSIZ
+		0x00, 0x00, 0x40, 0x00, // 16384 (BE)
+		0x08, 0x00, 0x04, 0x00, // nlattr len=8, type=NFULA_CFG_TIMEOUT
+		0x00, 0x00, 0x00, 0x02, // 2 centiseconds (BE)
+		0x08, 0x00, 0x05, 0x00, // nlattr len=8, type=NFULA_CFG_QTHRESH
+		0x00, 0x00, 0x00, 0x08, // 8 packets (BE)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("buildConfigMode bytes =\n% x\nwant\n% x", got, want)
+	}
+}
+
 func TestBuildConfigMode_FieldPlacement(t *testing.T) {
-	buf := buildConfigMode(3, 200, 9, 0, 131072)
+	buf := buildConfigMode(3, 200, 9, 0, 131072, 0, 0)
 
 	gotType := binary.NativeEndian.Uint16(buf[4:6])
 	if want := uint16((nflogSubsys << 8) | nfulnlMsgConfig); gotType != want {

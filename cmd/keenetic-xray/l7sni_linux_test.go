@@ -4,12 +4,71 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
+	"github.com/kuzzrus/keenetic-xray-go/internal/l7sni"
 )
+
+// rawTCPv4 builds an IPv4 packet carrying one TCP segment with the given
+// options and payload. Checksums stay zero: ParseIPv4 does not verify them.
+func rawTCPv4(src, dst [4]byte, sport, dport uint16, seq uint32, opts, payload []byte) []byte {
+	tcpLen := 20 + len(opts)
+	total := 20 + tcpLen + len(payload)
+	b := make([]byte, total)
+	b[0] = 0x45 // IPv4, 20-byte header
+	binary.BigEndian.PutUint16(b[2:4], uint16(total))
+	b[8], b[9] = 64, 6
+	copy(b[12:16], src[:])
+	copy(b[16:20], dst[:])
+	tcp := b[20:]
+	binary.BigEndian.PutUint16(tcp[0:2], sport)
+	binary.BigEndian.PutUint16(tcp[2:4], dport)
+	binary.BigEndian.PutUint32(tcp[4:8], seq)
+	tcp[12] = byte(tcpLen/4) << 4
+	tcp[13] = 0x10 // ACK
+	copy(tcp[20:], opts)
+	copy(b[20+tcpLen:], payload)
+	return b
+}
+
+// TestL7SNIHandlePacket_EmptyACKDoesNotKeepReassemblyAlive: the NFLOG
+// filter's 41-byte bound lets a client's empty ACK carrying a TCP timestamp
+// (52 bytes) through, and one arriving at exactly the sequence number a
+// half-built ClientHello is waiting for used to refresh that flow's expiry.
+// Such an ACK has to be dropped without being treated as activity, so the
+// flow still times out.
+func TestL7SNIHandlePacket_EmptyACKDoesNotKeepReassemblyAlive(t *testing.T) {
+	src, dst := [4]byte{192, 168, 1, 5}, [4]byte{93, 184, 216, 34}
+	key := l7sni.FlowKey{Src: src, Dst: dst, SPort: 54321, DPort: 443}
+	const startSeq = uint32(1000)
+
+	// the first 11 bytes of a TLS record that promises 512 more
+	first := []byte{0x16, 0x03, 0x01, 0x02, 0x00, 0x01, 0x00, 0x01, 0xfc, 0x03, 0x03}
+	reasm := l7sni.NewReassembler(50*time.Millisecond, 16384)
+	reasm.Start(key, startSeq, first, l7sni.TLSRecordLen(first))
+	if !reasm.Lookup(key) {
+		t.Fatal("setup: the reassembly did not start")
+	}
+
+	time.Sleep(150 * time.Millisecond) // well past maxAge
+
+	timestampOpts := []byte{0x01, 0x01, 0x08, 0x0a, 0, 0, 0, 1, 0, 0, 0, 2} // NOP NOP TS(val=1, ecr=2)
+	ack := rawTCPv4(src, dst, 54321, 443, startSeq+uint32(len(first)), timestampOpts, nil)
+	if len(ack) != 52 {
+		t.Fatalf("setup: the ACK is %d bytes, want the 52 a timestamp ACK has", len(ack))
+	}
+	snap := l7sniSnapshot{enabled: true, ttl: time.Hour, domains: l7sniDomainSet{"example.com": {}}}
+	l7SNIHandlePacket(context.Background(), ack, reasm, newL7SNISharedIPTracker(), snap, func(string, ...any) {})
+
+	reasm.Expire(time.Now())
+	if reasm.Lookup(key) {
+		t.Error("the flow survived Expire: the empty ACK counted as activity and kept a half-built ClientHello alive")
+	}
+}
 
 // TestL7SNIClassifySession_DisabledReturnsNotStarted confirms the
 // contract l7SNIClassifyLoop's own retry logic depends on (L7-02): a

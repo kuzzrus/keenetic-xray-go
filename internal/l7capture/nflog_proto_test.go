@@ -38,8 +38,73 @@ func TestBuildConfigCmd_Length(t *testing.T) {
 	}
 }
 
+// TestBuildConfigMode_ExactBytes checks a literal byte sequence, not a
+// round trip through this package's own parser, for
+// buildConfigMode(seq=3, pid=200, group=9, defaultNFLOGConfig) -- the
+// message Open actually sends (copy range 2048, nlbufsiz 16384, timeout
+// 2 cs, qthresh 8). Passing the package's own default rather than literals
+// is the point: change a number there and this fails until the expected
+// bytes are updated on purpose, and a swapped pair of fields (say the
+// timer and the threshold) cannot ship green. Layout per
+// linux/netfilter/nfnetlink_log.h: NFULA_CFG_MODE (2) carrying
+// struct nfulnl_msg_config_mode {be32 copy_range; u8 copy_mode; u8 pad},
+// NFULA_CFG_NLBUFSIZ (3), NFULA_CFG_TIMEOUT (4) and NFULA_CFG_QTHRESH (5),
+// each a be32; attribute headers native-endian (little-endian on the
+// arm64 and mipsle targets, same as the machine running this test).
+func TestBuildConfigMode_ExactBytes(t *testing.T) {
+	got := buildConfigMode(3, 200, 9, defaultNFLOGConfig)
+	want := []byte{
+		0x38, 0x00, 0x00, 0x00, // nlmsg_len = 56
+		0x01, 0x04, // nlmsg_type = (4<<8)|1
+		0x05, 0x00, // flags = REQUEST|ACK
+		0x03, 0x00, 0x00, 0x00, // seq = 3
+		0xC8, 0x00, 0x00, 0x00, // pid = 200
+		0x00, 0x00, 0x00, 0x09, // nfgenmsg: family 0, version 0, res_id = 9 (BE)
+		0x0A, 0x00, 0x02, 0x00, // nlattr len=10, type=NFULA_CFG_MODE
+		0x00, 0x00, 0x08, 0x00, // copy_range = 2048 (BE)
+		0x02, 0x00, // copy_mode = NFULNL_COPY_PACKET, pad
+		0x00, 0x00, // attribute padding to 4 bytes
+		0x08, 0x00, 0x03, 0x00, // nlattr len=8, type=NFULA_CFG_NLBUFSIZ
+		0x00, 0x00, 0x40, 0x00, // 16384 (BE)
+		0x08, 0x00, 0x04, 0x00, // nlattr len=8, type=NFULA_CFG_TIMEOUT
+		0x00, 0x00, 0x00, 0x02, // 2 centiseconds (BE)
+		0x08, 0x00, 0x05, 0x00, // nlattr len=8, type=NFULA_CFG_QTHRESH
+		0x00, 0x00, 0x00, 0x08, // 8 packets (BE)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("buildConfigMode bytes =\n% x\nwant\n% x", got, want)
+	}
+}
+
+// TestBuildConfigMode_EachFieldInItsOwnAttribute gives every field a
+// distinct value and reads each attribute back by type, so a field routed
+// into the wrong attribute is caught whatever the production values are.
+func TestBuildConfigMode_EachFieldInItsOwnAttribute(t *testing.T) {
+	buf := buildConfigMode(1, 2, 3, nflogConfig{CopyRange: 1111, NLBufSize: 22222, TimeoutCS: 33, QThresh: 44})
+	attrs := buf[nlHdrLen+nfgenLen:]
+	got := map[uint16]uint32{}
+	for len(attrs) >= nlaHdrLen {
+		l := int(binary.NativeEndian.Uint16(attrs[0:2]))
+		typ := binary.NativeEndian.Uint16(attrs[2:4])
+		if l < nlaHdrLen+4 || nlaAlign(l) > len(attrs) {
+			t.Fatalf("attribute type %d has length %d with %d bytes left", typ, l, len(attrs))
+		}
+		got[typ] = binary.BigEndian.Uint32(attrs[nlaHdrLen : nlaHdrLen+4]) // for MODE this is copy_range
+		attrs = attrs[nlaAlign(l):]
+	}
+	want := map[uint16]uint32{nfulaCfgMode: 1111, nfulaCfgNLBufSiz: 22222, nfulaCfgTimeout: 33, nfulaCfgQThresh: 44}
+	for typ, w := range want {
+		if got[typ] != w {
+			t.Errorf("attribute %d = %d, want %d", typ, got[typ], w)
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("message carries attributes %v, want exactly %v", got, want)
+	}
+}
+
 func TestBuildConfigMode_FieldPlacement(t *testing.T) {
-	buf := buildConfigMode(3, 200, 9, 0, 131072)
+	buf := buildConfigMode(3, 200, 9, nflogConfig{NLBufSize: 131072})
 
 	gotType := binary.NativeEndian.Uint16(buf[4:6])
 	if want := uint16((nflogSubsys << 8) | nfulnlMsgConfig); gotType != want {

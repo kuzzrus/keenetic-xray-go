@@ -137,3 +137,44 @@ func TestReassembler_ReplacesPriorIncompleteFlow(t *testing.T) {
 		t.Fatalf("Feed against the replaced attempt: complete=%v, want true with the second record's bytes", complete)
 	}
 }
+
+// TestReassembler_EmptySegmentDoesNotRefreshLastSeen: a bare ACK (the NFLOG
+// filter now lets the 52-byte timestamp ones through) must not count as
+// activity on a half-built ClientHello, or such a flow outlives maxAge and
+// holds its buffer for as long as ACKs keep arriving. A real segment still
+// does.
+func TestReassembler_EmptySegmentDoesNotRefreshLastSeen(t *testing.T) {
+	rec := buildTLSClientHello("example.com", false)
+	r := NewReassembler(time.Minute, 4096)
+	key := testKey()
+	const startSeq = uint32(1000)
+	r.Start(key, startSeq, rec[:20], len(rec))
+
+	old := time.Now().Add(-10 * time.Second)
+	setLastSeen := func(ts time.Time) {
+		r.mu.Lock()
+		r.flows[key].lastSeen = ts
+		r.mu.Unlock()
+	}
+	lastSeen := func() time.Time {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		return r.flows[key].lastSeen
+	}
+	setLastSeen(old)
+
+	if _, done := r.Feed(key, startSeq+20, nil); done {
+		t.Fatal("Feed with an empty segment completed the record")
+	}
+	if got := lastSeen(); !got.Equal(old) {
+		t.Errorf("an empty segment moved lastSeen from %v to %v", old, got)
+	}
+	if !r.Lookup(key) {
+		t.Fatal("an empty segment dropped the flow")
+	}
+
+	r.Feed(key, startSeq+20, rec[20:30])
+	if got := lastSeen(); !got.After(old) {
+		t.Errorf("a real segment left lastSeen at %v, want it refreshed", got)
+	}
+}

@@ -114,6 +114,20 @@ func (o RuleOptions) validate() error {
 	return nil
 }
 
+// tcpMinLength is the lower bound of the TCP rules' `-m length` match, in
+// bytes of IPv4 total length: 41 = a 20-byte IPv4 header + a 20-byte TCP
+// header + one byte of payload, i.e. "carries any data at all". It used to
+// be 60 (HydraRoute Neo's older value), which also threw away a segment
+// with under 8 bytes of payload -- exactly what a client-side DPI bypass
+// (zapret, GoodbyeDPI, ByeDPI, ...) produces when it cuts the ClientHello
+// into pieces of one or two bytes; the SNI of such a connection was
+// invisible. HydraRoute lowered it for the same reason. The price is that
+// empty ACKs carrying TCP options (a timestamp makes them 52 bytes) now
+// pass the filter too, inside the connbytes window; l7SNIHandlePacket
+// drops them on the first length check, and the window keeps it to a few
+// packets per new connection.
+const tcpMinLength = "41:"
+
 // ruleSpecs renders the match+target half of every rule opts wants --
 // everything after `-A FORWARD` -- one entry for port 443 (TLS) and one
 // for port 80 (plaintext HTTP). QUIC (UDP/443) is deliberately not
@@ -128,9 +142,8 @@ func (o RuleOptions) validate() error {
 // packets --connbytes 2:N` means NFLOG only fires while this
 // connection's own client-to-server packet count is between 2 and N --
 // i.e. only during a *new* connection's first few packets, not for the
-// rest of that connection's life. `-m length --length 60:` drops
-// anything too small to plausibly carry a TLS record header or HTTP
-// request line at all (a bare ACK, for instance).
+// rest of that connection's life. `-m length --length 41:` drops
+// anything that carries no payload at all (see tcpMinLength).
 func ruleSpecs(o RuleOptions) [][]string {
 	type portSpec struct {
 		port         int
@@ -148,11 +161,33 @@ func ruleSpecs(o RuleOptions) [][]string {
 			"--tcp-flags", "SYN,ACK", "ACK",
 			"-m", "connbytes", "--connbytes-dir", "original", "--connbytes-mode", "packets",
 			"--connbytes", fmt.Sprintf("2:%d", p.connbytesMax),
-			"-m", "length", "--length", "60:",
+			"-m", "length", "--length", tcpMinLength,
 			"-j", "NFLOG", "--nflog-group", strconv.Itoa(int(o.Group)),
 		})
 	}
 	return specs
+}
+
+// specSignature is the set of substrings an `iptables -S FORWARD` line
+// must contain to be the rule spec renders: interface, protocol, port,
+// connbytes window, length bound and our NFLOG group. Not a full-line
+// comparison on purpose -- the line `-S` prints reorders the match
+// arguments, spells the length range out (`41:65535`) and may or may not
+// carry the comment match -- but it does cover every argument that has
+// ever been changed in place (the length bound moved from 60 to 41), so a
+// rule an older build installed is recognised as stale instead of passing
+// for the current one.
+func specSignature(spec []string, group uint16) []string {
+	var sig []string
+	for i := 0; i+1 < len(spec); i++ {
+		switch spec[i] {
+		case "-o", "-p":
+			sig = append(sig, spec[i]+" "+spec[i+1]+" ")
+		case "--dport", "--length", "--connbytes":
+			sig = append(sig, spec[i]+" "+spec[i+1])
+		}
+	}
+	return append(sig, "--nflog-group "+strconv.Itoa(int(group)))
 }
 
 // EnsureRules installs opts' NFLOG rules in filter/FORWARD, removing any
@@ -188,11 +223,18 @@ func EnsureRules(ctx context.Context, opts RuleOptions) error {
 	return nil
 }
 
-// RulesInPlace reports whether every rule opts currently wants is live
+// RulesInPlace reports whether exactly the rules opts wants are live
 // right now -- the reconcile loop's own drift check, same idea as
 // internal/adaptiveroute's own RedirectInPlace. Matches by signature
-// (interface + port + connbytes range + nflog-group), not full-line
-// equality, so it doesn't care whether the comment match is present.
+// (see specSignature), not full-line equality, so it doesn't care whether
+// the comment match is present.
+//
+// "Exactly": a rule of ours that no wanted spec accounts for -- one an
+// older build installed with a different length bound, a duplicate, or one
+// for a mode that has since been switched off -- makes this false, so the
+// next reconcile runs EnsureRules (clear ours, add the wanted set) instead
+// of leaving the old filter in place forever because everything the new
+// code asks for happens to be there too.
 func RulesInPlace(ctx context.Context, opts RuleOptions) bool {
 	if opts.validate() != nil {
 		return false
@@ -202,20 +244,34 @@ func RulesInPlace(ctx context.Context, opts RuleOptions) bool {
 		return false
 	}
 	lines := strings.Split(out, "\n")
-	group := "--nflog-group " + strconv.Itoa(int(opts.Group))
-	for _, spec := range ruleSpecs(opts) {
-		dport := ""
-		for i, tok := range spec {
-			if tok == "--dport" && i+1 < len(spec) {
-				dport = "--dport " + spec[i+1]
-				break
-			}
-		}
-		if !anyForwardLineHasAll(lines, "-o "+opts.WANInterface+" ", dport, group) {
+	specs := ruleSpecs(opts)
+	for _, spec := range specs {
+		if !anyForwardLineHasAll(lines, specSignature(spec, opts.Group)...) {
 			return false
 		}
 	}
-	return true
+	return ownRuleCount(lines, opts.Group) == len(specs)
+}
+
+// ownRuleCount counts the filter/FORWARD lines that feed our NFLOG group.
+// Counted by group rather than by isOurRule: another tool's NFLOG rule
+// with connbytes in the same chain must not read as ours here, or this
+// would call the chain drifted forever and reinstall on every reconcile.
+func ownRuleCount(lines []string, group uint16) int {
+	want := "-j NFLOG --nflog-group " + strconv.Itoa(int(group))
+	n := 0
+	for _, line := range lines {
+		if !strings.HasPrefix(line, "-A FORWARD ") {
+			continue
+		}
+		if i := strings.Index(line, want); i >= 0 {
+			rest := line[i+len(want):]
+			if rest == "" || rest[0] == ' ' {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 func anyForwardLineHasAll(lines []string, want ...string) bool {

@@ -78,6 +78,11 @@ func (r *Reassembler) Start(key FlowKey, seq uint32, data []byte, want int) {
 // once enough contiguous bytes have arrived; the flow is removed from
 // the table either way once this call completes it.
 func (r *Reassembler) Feed(key FlowKey, seq uint32, data []byte) (full []byte, complete bool) {
+	if len(data) == 0 {
+		// An empty segment (a bare ACK) carries nothing and must not keep a
+		// half-built ClientHello alive past maxAge by refreshing lastSeen.
+		return nil, false
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	fl, ok := r.flows[key]

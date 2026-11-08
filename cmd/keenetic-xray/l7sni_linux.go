@@ -387,6 +387,13 @@ func l7SNIHandlePacket(ctx context.Context, raw []byte, reasm *l7sni.Reassembler
 	if !ok || proto != 6 { // TCP only -- QUIC (UDP) is out of scope, see internal/l7sni's doc comment
 		return
 	}
+	if len(payload) == 0 {
+		// An empty ACK: nothing to parse, and it must not touch the
+		// reassembler either. The NFLOG filter's 41-byte bound lets the ones
+		// carrying a TCP timestamp (52 bytes) through, so this is the early
+		// drop that bound relies on.
+		return
+	}
 
 	var host string
 	switch dport {

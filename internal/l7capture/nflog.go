@@ -20,17 +20,6 @@ import (
 	"time"
 )
 
-// nflogCopyRange/nflogBufSize are the per-packet copy size and the
-// kernel-side netlink buffer size hint this package asks for -- large
-// enough to comfortably hold a TLS ClientHello (even a large post-
-// quantum one) or an HTTP request line plus Host header, without
-// copying more of each packet than internal/l7sni's parsers ever look
-// at.
-const (
-	nflogCopyRange = 2048
-	nflogBufSize   = 131072
-)
-
 // Capture is one open NFLOG group subscription. Not safe for concurrent
 // use from multiple goroutines -- one capture loop per Capture, same as
 // HydraRoute Neo's own single-threaded design.
@@ -126,7 +115,7 @@ func Open(nflogGroup uint16) (*Capture, error) {
 		syscall.Close(fd)
 		return nil, fmt.Errorf("l7capture: bind group %d: %w", nflogGroup, err)
 	}
-	if err := c.sendAndAck(buildConfigMode(c.nextSeq(), c.portID, nflogGroup, nflogCopyRange, nflogBufSize)); err != nil {
+	if err := c.sendAndAck(buildConfigMode(c.nextSeq(), c.portID, nflogGroup, defaultNFLOGConfig)); err != nil {
 		syscall.Close(fd)
 		return nil, fmt.Errorf("l7capture: set mode on group %d: %w", nflogGroup, err)
 	}

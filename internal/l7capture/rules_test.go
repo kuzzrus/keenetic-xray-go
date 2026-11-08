@@ -46,7 +46,11 @@ func (f *fakeIptables) apply(args []string) error {
 	case "-D":
 		want := "-A " + strings.Join(args[1:], " ")
 		for i, l := range f.lines {
-			if l == want {
+			// Real `iptables -S` wraps a --comment value in double quotes
+			// as shell quoting; the -D that clearOurRules sends has them
+			// stripped (see unquote), and iptables matches on the stored
+			// value, not on the quoting.
+			if strings.ReplaceAll(l, `"`, "") == want {
 				f.lines = append(f.lines[:i], f.lines[i+1:]...)
 				return nil
 			}
@@ -82,6 +86,24 @@ func TestEnsureRules_InstallsBothPorts(t *testing.T) {
 	}
 	if !has443 || !has80 {
 		t.Errorf("expected rules for both :443 and :80, got: %v", f.lines)
+	}
+}
+
+// TestEnsureRules_LengthBoundIsFortyOne pins the TCP length bound: a
+// ClientHello a client-side DPI bypass cuts into one- or two-byte pieces
+// has to get through the filter (see tcpMinLength).
+func TestEnsureRules_LengthBoundIsFortyOne(t *testing.T) {
+	f := installFakeIptables(t)
+	if err := EnsureRules(context.Background(), testOpts()); err != nil {
+		t.Fatalf("EnsureRules: %v", err)
+	}
+	for _, l := range f.lines {
+		if !strings.Contains(l, "--length 41:") {
+			t.Errorf("rule does not use the 41-byte lower bound: %s", l)
+		}
+		if strings.Contains(l, "--length 60:") {
+			t.Errorf("rule still carries the old 60-byte bound: %s", l)
+		}
 	}
 }
 
@@ -130,6 +152,79 @@ func TestRulesInPlace(t *testing.T) {
 	f.lines = nil
 	if RulesInPlace(context.Background(), testOpts()) {
 		t.Error("RulesInPlace after the rule vanished: want false")
+	}
+}
+
+// realForwardLines renders the filter/FORWARD lines `iptables -S` prints
+// for the rules an install of the given length bound leaves behind -- the
+// real output spells the open-ended range out (`60:65535`), keeps the
+// comment in double quotes and orders the matches its own way, none of
+// which the fake chain above reproduces.
+func realForwardLines(wan, lengthRange string) []string {
+	var out []string
+	for _, p := range []struct{ port, window string }{{"443", "2:8"}, {"80", "2:4"}} {
+		out = append(out, "-A FORWARD -o "+wan+" -p tcp -m tcp --dport "+p.port+
+			" --tcp-flags SYN,ACK ACK -m connbytes --connbytes "+p.window+
+			" --connbytes-dir original --connbytes-mode packets -m length --length "+lengthRange+
+			" -m comment --comment \""+l7RuleComment+"\" -j NFLOG --nflog-group 4210")
+	}
+	return out
+}
+
+// TestRulesInPlace_RealIptablesOutput feeds RulesInPlace what a router
+// really prints, not what the fake chain stores.
+func TestRulesInPlace_RealIptablesOutput(t *testing.T) {
+	f := installFakeIptables(t)
+	f.lines = realForwardLines("eth1", "41:65535")
+	if !RulesInPlace(context.Background(), testOpts()) {
+		t.Errorf("RulesInPlace = false for the current rules as `iptables -S` prints them: %v", f.lines)
+	}
+}
+
+// TestRulesInPlace_OldLengthBoundIsStale: a router updated from a build
+// that installed `--length 60:` has every rule the new code wants -- same
+// interface, port, window and group -- except for the length bound, and
+// used to read as "in place" forever, so the old filter was never
+// replaced. It must now read as drift, and EnsureRules must fix it.
+func TestRulesInPlace_OldLengthBoundIsStale(t *testing.T) {
+	f := installFakeIptables(t)
+	f.lines = realForwardLines("eth1", "60:65535")
+	if RulesInPlace(context.Background(), testOpts()) {
+		t.Fatal("RulesInPlace = true for rules with the old --length 60: bound, want false")
+	}
+	if err := EnsureRules(context.Background(), testOpts()); err != nil {
+		t.Fatalf("EnsureRules: %v", err)
+	}
+	for _, l := range f.lines {
+		if strings.Contains(l, "--length 60:") {
+			t.Errorf("old bound survived EnsureRules: %s", l)
+		}
+	}
+	if !RulesInPlace(context.Background(), testOpts()) {
+		t.Errorf("RulesInPlace = false after EnsureRules replaced the old rules: %v", f.lines)
+	}
+}
+
+// TestRulesInPlace_ExtraRuleOfOursIsStale: a duplicate (or a leftover for
+// something no longer wanted) is drift as well -- only EnsureRules
+// removes it.
+func TestRulesInPlace_ExtraRuleOfOursIsStale(t *testing.T) {
+	f := installFakeIptables(t)
+	f.lines = append(realForwardLines("eth1", "41:65535"), realForwardLines("eth1", "41:65535")[0])
+	if RulesInPlace(context.Background(), testOpts()) {
+		t.Error("RulesInPlace = true with a duplicated rule, want false")
+	}
+}
+
+// TestRulesInPlace_ForeignNFLOGRuleIsNotOurs: another tool's NFLOG rule in
+// the same chain (a different group) must not make our own look drifted --
+// that would reinstall on every reconcile tick.
+func TestRulesInPlace_ForeignNFLOGRuleIsNotOurs(t *testing.T) {
+	f := installFakeIptables(t)
+	f.lines = append(realForwardLines("eth1", "41:65535"),
+		"-A FORWARD -o eth1 -p tcp -m tcp --dport 443 -m connbytes --connbytes 2:8 --connbytes-dir original --connbytes-mode packets -j NFLOG --nflog-group 210")
+	if !RulesInPlace(context.Background(), testOpts()) {
+		t.Errorf("RulesInPlace = false because of a foreign NFLOG rule: %v", f.lines)
 	}
 }
 

@@ -232,3 +232,32 @@ func TestL7SNISharedIPTracker_ExpireLeavesFreshSightings(t *testing.T) {
 		t.Errorf("seen = %v, want the still-fresh entry kept", tr.seen)
 	}
 }
+
+// TestSharedIPTracker_ConcurrentUse: the capture loop calls note for every
+// hostname it reads while a timer goroutine calls expire to keep the table
+// from growing for ever (l7SNIClassifySession). The tracker's map was
+// touched from both with no lock, which the Go runtime answers with a fatal
+// "concurrent map writes" -- an unrecoverable crash of the whole daemon, at
+// a moment that depends on traffic. The two have to be able to overlap.
+func TestSharedIPTracker_ConcurrentUse(t *testing.T) {
+	tr := newL7SNISharedIPTracker()
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() { // the timer goroutine, hammering harder than any real ticker
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				tr.expire(time.Now().Add(l7sniSharedIPMaxAge + time.Second)) // everything counts as stale
+			}
+		}
+	}()
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for i := 0; time.Now().Before(deadline); i++ {
+		tr.note([4]byte{10, byte(i >> 8), byte(i), 1}, "host.example", time.Now())
+	}
+	close(stop)
+	<-done
+}

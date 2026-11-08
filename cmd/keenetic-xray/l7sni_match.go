@@ -2,6 +2,7 @@ package main
 
 import (
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
@@ -154,11 +155,14 @@ type l7sniHostSighting struct {
 // bookkeeping for a P2-severity mitigation that doesn't need that
 // precision.
 //
-// Not safe for concurrent use -- owned by l7SNIClassifyLoop's own
-// goroutine and touched only from there, same "single reader/writer, no
-// locking needed" convention as that loop's own Reassembler and
-// l7sniSnapshot.
+// Safe for concurrent use: the capture loop calls note for every hostname
+// it reads, while a timer goroutine calls expire to keep the table from
+// growing for ever (l7SNIClassifySession). This used to be documented as
+// owned by the capture goroutine alone, which the session did not honour --
+// the Go runtime answers two goroutines on one map with a fatal "concurrent
+// map writes", an unrecoverable crash of the whole daemon.
 type l7sniSharedIPTracker struct {
+	mu   sync.Mutex
 	seen map[[4]byte]l7sniHostSighting
 }
 
@@ -175,6 +179,8 @@ func newL7SNISharedIPTracker() *l7sniSharedIPTracker {
 // serve", which needs every sighting, not just the ones that happen to
 // match a route list.
 func (t *l7sniSharedIPTracker) note(dst [4]byte, host string, now time.Time) (previousHost string, shared bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	prev, ok := t.seen[dst]
 	t.seen[dst] = l7sniHostSighting{host: host, at: now}
 	if ok && prev.host != host && now.Sub(prev.at) <= l7sniSharedIPMaxAge {
@@ -188,6 +194,8 @@ func (t *l7sniSharedIPTracker) note(dst [4]byte, host string, now time.Time) (pr
 // uptime. Not on the hot path -- call periodically, same convention as
 // internal/l7sni.Reassembler's own Expire.
 func (t *l7sniSharedIPTracker) expire(now time.Time) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	for dst, sighting := range t.seen {
 		if now.Sub(sighting.at) > l7sniSharedIPMaxAge {
 			delete(t.seen, dst)

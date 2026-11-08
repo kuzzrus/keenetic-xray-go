@@ -8,13 +8,17 @@
 // a destination's identity from IP-range membership (known ranges,
 // naive /24s) -- knowing the actual SNI means never having to guess.
 //
-// QUIC is deliberately out of scope: a QUIC Initial packet's ClientHello
-// is wrapped in a real (if publicly-derivable) AEAD encryption keyed off
-// the connection ID and the negotiated QUIC version, and Encrypted
-// Client Hello (ECH, increasingly deployed by Cloudflare and some Google
-// properties) hides the SNI behind a decoy name entirely -- both add
-// real, open-ended maintenance cost and a hard blind spot this package
-// doesn't take on. See the [[hydraroute-comparison]] memory for the
+// QUIC (HTTP/3 over UDP/443) is covered too, by ParseQUICInitial and
+// QUICReassembler (quic.go, quic_reassemble.go): a client's Initial packet
+// is protected, but with keys anyone on the path can derive from the packet
+// itself (RFC 9001; RFC 9369 for version 2), so the ClientHello inside is as
+// readable as on TCP. Two limits remain. Encrypted Client Hello hides the
+// real name behind the client-facing server's public one wherever it is
+// really in use (ClientHelloInfo.ECH marks the extension; browsers also send
+// a GREASE one to servers without ECH, so it is a marker, not a verdict),
+// and the QUIC versions with a known salt are the two above. This package
+// only parses; whether to capture QUIC at all, and what to do with a name,
+// is the caller's business. See the [[hydraroute-comparison]] memory for the
 // research this package's technique is modeled on
 // (Ground-Zerro/HydraRoute Neo's own L7 detector).
 //

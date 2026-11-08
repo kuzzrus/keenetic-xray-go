@@ -59,10 +59,10 @@ func ExtractHTTPHost(data []byte) (host string, ok bool) {
 		if i := strings.LastIndexByte(h, ':'); i > 0 && isAllDigits(h[i+1:]) {
 			h = h[:i]
 		}
-		if h == "" {
-			return "", false
-		}
-		return h, true
+		// A Host that is not a valid hostname (an IPv6 literal, a stray
+		// byte) is no use here: report it as "no host" rather than hand
+		// the caller something to log or match that nobody validated.
+		return normalizeHostname(h)
 	}
 }
 

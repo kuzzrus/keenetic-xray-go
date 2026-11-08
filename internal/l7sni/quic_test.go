@@ -388,7 +388,7 @@ func TestQUICReassembler_RetransmittedFlightIsReportedOnce(t *testing.T) {
 
 func TestQUICReassembler_FinishedMemoryIsBounded(t *testing.T) {
 	ch := buildClientHelloMsg("example.com")
-	r := NewQUICReassembler(time.Minute, 4)
+	r := NewQUICReassembler(time.Minute, 4) // remembers 4 * finishedPerFlight finished flows
 	now := time.Now()
 	for i := 0; i < 50; i++ {
 		r.Feed(FlowKey{SPort: uint16(2000 + i), DPort: 443}, []CryptoFragment{{0, ch}}, now)
@@ -396,7 +396,90 @@ func TestQUICReassembler_FinishedMemoryIsBounded(t *testing.T) {
 	r.mu.Lock()
 	n := len(r.finished)
 	r.mu.Unlock()
-	if n > 4 {
-		t.Errorf("remembers %d finished flows, want at most maxFlows (4)", n)
+	if want := 4 * finishedPerFlight; n != want {
+		t.Errorf("remembers %d finished flows, want exactly the cap of %d", n, want)
+	}
+}
+
+// TestParseQUICInitial_PacketNumberLengths: the sender chooses how many
+// bytes of packet number to put on the wire (1 to 4), and the nonce, the AAD
+// and the start of the ciphertext all depend on it while the header
+// protection sample does not.
+func TestParseQUICInitial_PacketNumberLengths(t *testing.T) {
+	ch := buildClientHelloMsg("pn.example.org")
+	for _, version := range []uint32{QUICVersion1, QUICVersion2} {
+		for _, tc := range []struct {
+			pnLen int
+			pn    uint32
+		}{{1, 5}, {2, 300}, {3, 70000}, {4, 5000000}} {
+			pkt := buildInitialWith(t, initialOpts{
+				version: version, dcid: rfcDCID, scid: []byte{9, 9},
+				pn: tc.pn, pnLen: tc.pnLen, frames: cryptoFrame(0, ch), datagramLen: 1200,
+			})
+			init, st := ParseQUICInitial(pkt)
+			if st != QUICOK || len(init.Fragments) != 1 || !bytes.Equal(init.Fragments[0].Data, ch) {
+				t.Errorf("v%#x, %d-byte packet number: status %d, fragments %+v", version, tc.pnLen, st, init.Fragments)
+			}
+		}
+	}
+}
+
+// TestParseQUICInitial_HeaderVariants: connection IDs of other lengths, a
+// token (after a Retry, or from NEW_TOKEN), a 2-byte token length, and
+// another packet coalesced behind the Initial in the same datagram.
+func TestParseQUICInitial_HeaderVariants(t *testing.T) {
+	ch := buildClientHelloMsg("variants.example.net")
+	long20 := bytes.Repeat([]byte{0xab}, 20)
+	cases := []struct {
+		name       string
+		dcid, scid []byte
+		token      []byte
+		trailer    []byte
+	}{
+		{"4-byte DCID", []byte{1, 2, 3, 4}, nil, nil, nil},
+		{"20-byte DCID and SCID", long20, long20, nil, nil},
+		{"empty SCID", rfcDCID, nil, nil, nil},
+		{"a short token", rfcDCID, []byte{7}, []byte("tok-0123456789"), nil},
+		{"a token needing a 2-byte length", rfcDCID, []byte{7}, bytes.Repeat([]byte{0x55}, 100), nil},
+		{"a coalesced packet behind it", rfcDCID, []byte{7}, nil, bytes.Repeat([]byte{0xee}, 60)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pkt := buildInitialWith(t, initialOpts{
+				version: QUICVersion1, dcid: tc.dcid, scid: tc.scid, token: tc.token,
+				pn: 1, pnLen: 2, frames: cryptoFrame(0, ch), datagramLen: 1252, trailer: tc.trailer,
+			})
+			init, st := ParseQUICInitial(pkt)
+			if st != QUICOK || len(init.Fragments) != 1 || !bytes.Equal(init.Fragments[0].Data, ch) {
+				t.Fatalf("status %d, fragments %+v", st, init.Fragments)
+			}
+		})
+	}
+}
+
+func TestCryptoFragments_LongPaddingRuns(t *testing.T) {
+	a := []byte("AAAA")
+	plain := concat(paddingFrames(1000), cryptoFrame(0, a), paddingFrames(150))
+	frags, ok := cryptoFragments(plain)
+	if !ok || len(frags) != 1 || !bytes.Equal(frags[0].Data, a) {
+		t.Errorf("got %+v, ok=%v, want the CRYPTO frame between the padding runs", frags, ok)
+	}
+}
+
+// TestQUICReassembler_CRYPTOLessDatagramDoesNotRefresh: a datagram with no
+// CRYPTO frame (an ACK or PING probe) is no progress and must not keep a
+// half-built flight alive.
+func TestQUICReassembler_CRYPTOLessDatagramDoesNotRefresh(t *testing.T) {
+	r := NewQUICReassembler(5*time.Second, 8)
+	key := FlowKey{SPort: 4000, DPort: 443}
+	t0 := time.Now()
+	r.Feed(key, []CryptoFragment{{0, []byte{0x01, 0x00, 0x04, 0x00, 1, 2}}}, t0)
+	if r.Len() != 1 {
+		t.Fatalf("setup: %d flights held", r.Len())
+	}
+	r.Feed(key, nil, t0.Add(4*time.Second)) // an ACK-only Initial
+	r.Expire(t0.Add(6 * time.Second))
+	if r.Len() != 0 {
+		t.Error("an Initial without CRYPTO frames kept the half-built flight alive")
 	}
 }

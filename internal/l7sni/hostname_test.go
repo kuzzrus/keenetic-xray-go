@@ -52,3 +52,19 @@ func TestExtractHTTPHost_InvalidHostIsRejected(t *testing.T) {
 		t.Errorf("trailing dot and port: got %q, %v, want example.com", h, ok)
 	}
 }
+
+// TestNormalizeHostname_RejectsEmptyLabels: single dots between labels, no
+// leading dot, no "..". ".." would otherwise survive the trailing-dot trim
+// as ".".
+func TestNormalizeHostname_RejectsEmptyLabels(t *testing.T) {
+	for _, in := range []string{"..", "...", ".example.com", "a..b", "example..com", "."} {
+		if got, ok := normalizeHostname(in); ok {
+			t.Errorf("normalizeHostname(%q) = %q, true, want it rejected", in, got)
+		}
+	}
+	for _, in := range []string{"a.b", "x", "a-b.c_d.example"} {
+		if _, ok := normalizeHostname(in); !ok {
+			t.Errorf("normalizeHostname(%q) rejected", in)
+		}
+	}
+}

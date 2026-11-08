@@ -120,35 +120,61 @@ func sealInitialPacket(t testing.TB, version uint32, dcid, header []byte, pnOffs
 	return out
 }
 
-// buildInitial assembles a client Initial datagram of datagramLen bytes
-// carrying frames (zero-padded up to the size), under dcid, with a 4-byte
-// packet number.
-func buildInitial(t testing.TB, version uint32, dcid []byte, pn uint32, frames []byte, datagramLen int) []byte {
+// initialOpts describes a client Initial datagram for buildInitialWith.
+type initialOpts struct {
+	version     uint32
+	dcid, scid  []byte
+	token       []byte
+	pn          uint32
+	pnLen       int // 1..4 bytes of packet number on the wire
+	frames      []byte
+	datagramLen int    // size of the Initial packet itself, zero-padded up to it
+	trailer     []byte // bytes after the packet in the same datagram (a coalesced packet)
+}
+
+// buildInitialWith assembles a client Initial packet from o.
+func buildInitialWith(t testing.TB, o initialOpts) []byte {
 	t.Helper()
-	scid := []byte{1, 2, 3, 4}
+	if o.pnLen < 1 || o.pnLen > 4 {
+		t.Fatalf("pnLen %d out of range", o.pnLen)
+	}
 	typeBits := byte(0)
-	if version == QUICVersion2 {
+	if o.version == QUICVersion2 {
 		typeBits = 1
 	}
-	hdr := []byte{0xc0 | typeBits<<4 | 0x03} // long header, fixed bit, Initial, 4-byte packet number
-	hdr = binary.BigEndian.AppendUint32(hdr, version)
-	hdr = append(hdr, byte(len(dcid)))
-	hdr = append(hdr, dcid...)
-	hdr = append(hdr, byte(len(scid)))
-	hdr = append(hdr, scid...)
-	hdr = append(hdr, 0) // token length
+	hdr := []byte{0xc0 | typeBits<<4 | byte(o.pnLen-1)} // long header, fixed bit, Initial, packet number length
+	hdr = binary.BigEndian.AppendUint32(hdr, o.version)
+	hdr = append(hdr, byte(len(o.dcid)))
+	hdr = append(hdr, o.dcid...)
+	hdr = append(hdr, byte(len(o.scid)))
+	hdr = append(hdr, o.scid...)
+	hdr = appendVarint(hdr, uint64(len(o.token)))
+	hdr = append(hdr, o.token...)
 	lengthField := len(hdr)
 	hdr = append(hdr, 0, 0) // 2-byte Length, filled in below
 	pnOffset := len(hdr)
-	hdr = binary.BigEndian.AppendUint32(hdr, pn)
+	pnBytes := binary.BigEndian.AppendUint32(nil, o.pn)
+	hdr = append(hdr, pnBytes[4-o.pnLen:]...)
 
-	plainLen := datagramLen - len(hdr) - 16
-	if plainLen < len(frames) {
-		t.Fatalf("frames (%d bytes) do not fit a %d-byte datagram", len(frames), datagramLen)
+	plainLen := o.datagramLen - len(hdr) - 16
+	if plainLen < len(o.frames) {
+		t.Fatalf("frames (%d bytes) do not fit a %d-byte datagram", len(o.frames), o.datagramLen)
 	}
-	plain := append(append([]byte(nil), frames...), make([]byte, plainLen-len(frames))...)
-	binary.BigEndian.PutUint16(hdr[lengthField:], 0x4000|uint16(4+plainLen+16))
-	return sealInitialPacket(t, version, dcid, hdr, pnOffset, 4, plain)
+	plain := append(append([]byte(nil), o.frames...), make([]byte, plainLen-len(o.frames))...)
+	binary.BigEndian.PutUint16(hdr[lengthField:], 0x4000|uint16(o.pnLen+plainLen+16))
+	pkt := sealInitialPacket(t, o.version, o.dcid, hdr, pnOffset, o.pnLen, plain)
+	return append(pkt, o.trailer...)
+}
+
+// buildInitial assembles a client Initial datagram of datagramLen bytes
+// carrying frames (zero-padded up to the size), under dcid, with a 4-byte
+// packet number, a 4-byte source connection ID and no token.
+func buildInitial(t testing.TB, version uint32, dcid []byte, pn uint32, frames []byte, datagramLen int) []byte {
+	t.Helper()
+	return buildInitialWith(t, initialOpts{
+		version: version, dcid: dcid, scid: []byte{1, 2, 3, 4},
+		pn: pn, pnLen: 4, frames: frames, datagramLen: datagramLen,
+	})
 }
 
 // buildClientHelloMsg returns a ClientHello handshake message (msg_type,

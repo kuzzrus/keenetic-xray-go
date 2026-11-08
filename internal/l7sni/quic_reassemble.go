@@ -25,20 +25,29 @@ type QUICReassembler struct {
 	mu       sync.Mutex
 	maxAge   time.Duration
 	maxFlows int
+	maxDone  int // how many finished flows are remembered
 	flows    map[FlowKey]*quicFlow
 	finished map[FlowKey]time.Time
 }
 
+// finishedPerFlight sizes the memory of finished flows relative to the cap
+// on incomplete flights. Finished flows are by far the common case (a
+// ClientHello that fits one datagram never becomes a flight at all), so
+// they get a table of their own, several times larger: sharing the small
+// cap made the memory stop working at about 50 new connections a second.
+const finishedPerFlight = 4
+
 // NewQUICReassembler returns a ready-to-use QUICReassembler. maxAge bounds
 // how long an incomplete flight is held (Expire drops it) and how long a
-// finished one is remembered; maxFlows caps how many of each are kept at
-// once, which bounds worst-case memory under a flood of UDP/443 datagrams
-// that look like Initials -- beyond it new flights that do not complete in
-// their first datagram are simply not tracked, and finished ones are not
-// remembered.
+// finished one is remembered; maxFlows caps how many incomplete flights are
+// kept at once (and, times finishedPerFlight, how many finished flows are
+// remembered), which bounds worst-case memory under a flood of UDP/443
+// datagrams that look like Initials -- beyond it new flights that do not
+// complete in their first datagram are simply not tracked, and finished
+// ones are not remembered.
 func NewQUICReassembler(maxAge time.Duration, maxFlows int) *QUICReassembler {
 	return &QUICReassembler{
-		maxAge: maxAge, maxFlows: maxFlows,
+		maxAge: maxAge, maxFlows: maxFlows, maxDone: maxFlows * finishedPerFlight,
 		flows:    map[FlowKey]*quicFlow{},
 		finished: map[FlowKey]time.Time{},
 	}
@@ -68,13 +77,15 @@ func (r *QUICReassembler) Feed(key FlowKey, frags []CryptoFragment, now time.Tim
 			return nil, false
 		}
 	}
-	fl.lastSeen = now
+	if len(frags) > 0 { // a datagram with no CRYPTO frame (ACK, PING, padding) is no progress
+		fl.lastSeen = now
+	}
 
 	msg, state := clientHelloIn(fl.stream.prefix())
 	switch state {
 	case helloComplete:
 		delete(r.flows, key)
-		if len(r.finished) < r.maxFlows {
+		if len(r.finished) < r.maxDone {
 			r.finished[key] = now
 		}
 		return msg, true

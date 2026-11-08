@@ -256,7 +256,11 @@ func cryptoFragments(plain []byte) (frags []CryptoFragment, ok bool) {
 		}
 		pos += n
 		switch ftype {
-		case 0x00, 0x01: // PADDING, PING
+		case 0x00: // PADDING -- an Initial is padded to 1200 bytes, so take the whole run at once
+			for pos < len(plain) && plain[pos] == 0 {
+				pos++
+			}
+		case 0x01: // PING
 		case 0x02, 0x03: // ACK, ACK_ECN
 			// Largest Acknowledged, ACK Delay, ACK Range Count, First ACK
 			// Range -- then Range Count (Gap, ACK Range) pairs, and for the

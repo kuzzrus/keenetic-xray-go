@@ -33,5 +33,11 @@ func normalizeHostname(s string) (string, bool) {
 			return "", false
 		}
 	}
+	// Labels are separated by single dots: no leading dot, no empty label.
+	// ".." would otherwise survive the trailing-dot trim as ".", and
+	// "a..b" is no name either.
+	if s[0] == '.' || strings.Contains(s, "..") {
+		return "", false
+	}
 	return s, true
 }

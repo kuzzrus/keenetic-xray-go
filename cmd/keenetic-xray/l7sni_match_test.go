@@ -233,13 +233,14 @@ func TestL7SNISharedIPTracker_ExpireLeavesFreshSightings(t *testing.T) {
 	}
 }
 
-// TestSharedIPTracker_ConcurrentUse: the capture loop calls note for every
-// hostname it reads while a timer goroutine calls expire to keep the table
-// from growing for ever (l7SNIClassifySession). The tracker's map was
+// TestL7SNISharedIPTracker_ConcurrentUse: the capture loop calls note for
+// every hostname it reads while a timer goroutine calls expire to keep the
+// table from growing for ever (l7SNIClassifySession). The tracker's map was
 // touched from both with no lock, which the Go runtime answers with a fatal
-// "concurrent map writes" -- an unrecoverable crash of the whole daemon, at
-// a moment that depends on traffic. The two have to be able to overlap.
-func TestSharedIPTracker_ConcurrentUse(t *testing.T) {
+// "concurrent map iteration and map write" -- an unrecoverable crash of the
+// whole daemon, at a moment that depends on traffic. The two have to be able
+// to overlap.
+func TestL7SNISharedIPTracker_ConcurrentUse(t *testing.T) {
 	tr := newL7SNISharedIPTracker()
 	stop := make(chan struct{})
 	done := make(chan struct{})

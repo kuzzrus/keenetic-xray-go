@@ -160,7 +160,8 @@ type l7sniHostSighting struct {
 // growing for ever (l7SNIClassifySession). This used to be documented as
 // owned by the capture goroutine alone, which the session did not honour --
 // the Go runtime answers two goroutines on one map with a fatal "concurrent
-// map writes", an unrecoverable crash of the whole daemon.
+// map iteration and map write" (or "concurrent map writes"), an
+// unrecoverable crash of the whole daemon.
 type l7sniSharedIPTracker struct {
 	mu   sync.Mutex
 	seen map[[4]byte]l7sniHostSighting

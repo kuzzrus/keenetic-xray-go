@@ -20,37 +20,6 @@ import (
 	"time"
 )
 
-// nflogCopyRange is the per-packet copy size this package asks for --
-// large enough to comfortably hold a TLS ClientHello (even a large post-
-// quantum one) or an HTTP request line plus Host header, without copying
-// more of each packet than internal/l7sni's parsers ever look at.
-//
-// The rest is the kernel-side batching, pinned instead of left to the
-// kernel's defaults. nfnetlink_log's own instance defaults are 100 packets
-// or 1 s, whichever comes first -- which, if they applied, would mean up to
-// a second between a ClientHello leaving the router and l7sni hearing
-// about it, by which time the handshake is long done and the conntrack
-// delete lands on a connection that has already moved on. HydraRoute Neo
-// reports exactly that on Keenetic and settled on a batch of 8 packets or
-// 20 ms; the same numbers are used here. Whether the defaults ever applied
-// to these rules is NOT established: the xt_NFLOG target carries a
-// threshold of its own (iptables' default is 1) and the kernel takes the
-// smaller of the two, so with plain `-j NFLOG --nflog-group N` each packet
-// may well have been delivered at once already, in which case this changes
-// nothing. It cannot make things worse: a batch is at most 20 ms old.
-//
-// 8 x (2048 + metadata) fits a 16 KiB buffer, and 16 KiB matters on its
-// own: the old 128 KiB hint asked the kernel for an order-5 contiguous
-// block per batch, which a small router (HydraRoute's MT7621 has none in
-// its Normal zone) cannot always give; a packet larger than the buffer
-// still goes out in an skb of its own size.
-const (
-	nflogCopyRange  = 2048
-	nflogNLBufSize  = 16384
-	nflogQThreshold = 8
-	nflogFlushCS    = 2 // centiseconds -> 20 ms
-)
-
 // Capture is one open NFLOG group subscription. Not safe for concurrent
 // use from multiple goroutines -- one capture loop per Capture, same as
 // HydraRoute Neo's own single-threaded design.
@@ -146,7 +115,7 @@ func Open(nflogGroup uint16) (*Capture, error) {
 		syscall.Close(fd)
 		return nil, fmt.Errorf("l7capture: bind group %d: %w", nflogGroup, err)
 	}
-	if err := c.sendAndAck(buildConfigMode(c.nextSeq(), c.portID, nflogGroup, nflogCopyRange, nflogNLBufSize, nflogFlushCS, nflogQThreshold)); err != nil {
+	if err := c.sendAndAck(buildConfigMode(c.nextSeq(), c.portID, nflogGroup, defaultNFLOGConfig)); err != nil {
 		syscall.Close(fd)
 		return nil, fmt.Errorf("l7capture: set mode on group %d: %w", nflogGroup, err)
 	}

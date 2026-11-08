@@ -129,16 +129,61 @@ func buildConfigCmd(seq, pid uint32, group uint16, family, cmd uint8) []byte {
 	return buf
 }
 
+// nflogConfig is how an NFLOG group is configured. A struct rather than
+// four adjacent uint32 arguments: they are all the same type and fed from
+// plain numbers, so a swapped pair (say the flush timer and the packet
+// threshold) would compile and pass for a different batching.
+type nflogConfig struct {
+	CopyRange uint32 // bytes of each packet copied to userspace
+	NLBufSize uint32 // kernel-side netlink buffer, in bytes
+	TimeoutCS uint32 // flush timer, in centiseconds
+	QThresh   uint32 // flush after this many queued packets
+}
+
+// defaultNFLOGConfig is what Open asks for.
+//
+// CopyRange is large enough to comfortably hold a TLS ClientHello (even a
+// large post-quantum one) or an HTTP request line plus Host header,
+// without copying more of each packet than internal/l7sni's parsers ever
+// look at.
+//
+// The rest is the kernel-side batching, pinned instead of left to the
+// kernel's defaults. nfnetlink_log's own instance defaults are 100 packets
+// or 1 s, whichever comes first -- which, if they applied, would mean up to
+// a second between a ClientHello leaving the router and l7sni hearing
+// about it, by which time the handshake is long done and the conntrack
+// delete lands on a connection that has already moved on. HydraRoute Neo
+// reports exactly that on Keenetic and settled on a batch of 8 packets or
+// 20 ms; the same numbers are used here. Whether the defaults ever applied
+// to these rules is NOT established: the xt_NFLOG target carries a
+// threshold of its own (iptables' default is 1) and the kernel takes the
+// smaller of the two, so with plain `-j NFLOG --nflog-group N` each packet
+// may well have been delivered at once already, in which case the timer and
+// threshold here change nothing (batching for real would need
+// `--nflog-threshold` on the rule). They cannot make things worse: a batch
+// is at most 20 ms old.
+//
+// 8 x (2048 + metadata) fits a 16 KiB buffer, and 16 KiB matters on its
+// own: the old 128 KiB hint asked the kernel for an order-5 contiguous
+// block per batch, which a small router (HydraRoute's MT7621 has none in
+// its Normal zone) cannot always give; a packet larger than the buffer
+// still goes out in an skb of its own size.
+var defaultNFLOGConfig = nflogConfig{
+	CopyRange: 2048,
+	NLBufSize: 16384,
+	TimeoutCS: 2, // centiseconds -> 20 ms
+	QThresh:   8,
+}
+
 // buildConfigMode builds a complete NFULNL_MSG_CONFIG message carrying
-// NFULA_CFG_MODE (copyRange + NFULNL_COPY_PACKET), NFULA_CFG_NLBUFSIZ,
+// NFULA_CFG_MODE (CopyRange + NFULNL_COPY_PACKET), NFULA_CFG_NLBUFSIZ,
 // NFULA_CFG_TIMEOUT and NFULA_CFG_QTHRESH -- mirroring HydraRoute's own
 // nflog_cfg_mode, plus the batching the kernel would otherwise default
-// (nfnetlink_log.c: 100 packets or 1 s, whichever comes first).
-// copyRange, nlbufsiz, timeoutCS (centiseconds) and qthresh (packets) are
-// netfilter attribute *values*, so big-endian (see putNfgenmsg's doc
+// (nfnetlink_log.c: 100 packets or 1 s, whichever comes first). The values
+// are netfilter attribute *values*, so big-endian (see putNfgenmsg's doc
 // comment) -- unlike the attribute headers' own length/type fields,
 // written by putAttrHeader in native order.
-func buildConfigMode(seq, pid uint32, group uint16, copyRange, nlbufsiz, timeoutCS, qthresh uint32) []byte {
+func buildConfigMode(seq, pid uint32, group uint16, c nflogConfig) []byte {
 	const modeDataLen = 6 // copy_range(4) + copy_mode(1) + pad(1)
 	modeAttrLen := nlaAlign(nlaHdrLen + modeDataLen)
 	u32AttrLen := nlaAlign(nlaHdrLen + 4)
@@ -150,7 +195,7 @@ func buildConfigMode(seq, pid uint32, group uint16, copyRange, nlbufsiz, timeout
 
 	attrs := buf[nlHdrLen+nfgenLen:]
 	putAttrHeader(attrs, nfulaCfgMode, modeDataLen)
-	binary.BigEndian.PutUint32(attrs[nlaHdrLen:nlaHdrLen+4], copyRange)
+	binary.BigEndian.PutUint32(attrs[nlaHdrLen:nlaHdrLen+4], c.CopyRange)
 	attrs[nlaHdrLen+4] = nfulnlCopyPacket
 	// attrs[nlaHdrLen+5] is the struct's pad byte -- already zero.
 
@@ -159,9 +204,9 @@ func buildConfigMode(seq, pid uint32, group uint16, copyRange, nlbufsiz, timeout
 		typ uint16
 		val uint32
 	}{
-		{nfulaCfgNLBufSiz, nlbufsiz},
-		{nfulaCfgTimeout, timeoutCS},
-		{nfulaCfgQThresh, qthresh},
+		{nfulaCfgNLBufSiz, c.NLBufSize},
+		{nfulaCfgTimeout, c.TimeoutCS},
+		{nfulaCfgQThresh, c.QThresh},
 	} {
 		putAttrHeader(rest, a.typ, 4)
 		binary.BigEndian.PutUint32(rest[nlaHdrLen:nlaHdrLen+4], a.val)

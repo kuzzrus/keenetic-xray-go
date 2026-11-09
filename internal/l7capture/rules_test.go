@@ -353,3 +353,114 @@ func TestResolveWANInterface_MissingFile(t *testing.T) {
 		t.Error("ResolveWANInterface on a missing file: want error")
 	}
 }
+
+func quicOpts() RuleOptions {
+	o := testOpts()
+	o.QUIC = true
+	return o
+}
+
+// realQUICLine is the UDP/443 rule as `iptables -S` prints it.
+func realQUICLine(wan string) string {
+	return "-A FORWARD -o " + wan + " -p udp -m udp --dport 443 -m connbytes --connbytes 0:3" +
+		" --connbytes-dir original --connbytes-mode packets -m length --length 1200:65535" +
+		" -m comment --comment \"" + l7RuleComment + "\" -j NFLOG --nflog-group 4210"
+}
+
+// TestRuleSpec_SignatureMatchesItsOwnArgs: whatever a spec installs, the
+// signature recognises it -- the two are rendered from the same fields, and
+// this is the test that notices if that ever stops being true.
+func TestRuleSpec_SignatureMatchesItsOwnArgs(t *testing.T) {
+	for _, spec := range ruleSpecs(quicOpts()) {
+		line := "-A FORWARD " + strings.Join(spec.args(), " ")
+		for _, want := range spec.signature() {
+			if !strings.Contains(line, want) {
+				t.Errorf("rule %q does not contain its own signature part %q", line, want)
+			}
+		}
+	}
+}
+
+func TestRuleSpec_SignatureRejectsOtherRules(t *testing.T) {
+	udp := ruleSpec{iface: "eth1", proto: "udp", dport: 443, window: quicWindow, minLen: quicMinLength, group: 4210}
+	tcp := ruleSpec{iface: "eth1", proto: "tcp", dport: 443, window: "2:8", minLen: tcpMinLength, group: 4210}
+	udpLine := "-A FORWARD " + strings.Join(udp.args(), " ")
+	tcpLine := "-A FORWARD " + strings.Join(tcp.args(), " ")
+	has := func(line string, s ruleSpec) bool {
+		for _, w := range s.signature() {
+			if !strings.Contains(line, w) {
+				return false
+			}
+		}
+		return true
+	}
+	if has(tcpLine, udp) || has(udpLine, tcp) {
+		t.Error("a TCP/443 rule and a UDP/443 rule read as each other")
+	}
+	other := udp
+	other.window = "0:5"
+	if has(udpLine, other) {
+		t.Error("a different connbytes window reads as the same rule")
+	}
+}
+
+func TestEnsureRules_QUICAddsTheUDPRule(t *testing.T) {
+	f := installFakeIptables(t)
+	if err := EnsureRules(context.Background(), quicOpts()); err != nil {
+		t.Fatalf("EnsureRules: %v", err)
+	}
+	if len(f.lines) != 3 {
+		t.Fatalf("FORWARD chain has %d rules, want 3 (443, 80 and the QUIC rule): %v", len(f.lines), f.lines)
+	}
+	var udp string
+	for _, l := range f.lines {
+		if strings.Contains(l, "-p udp") {
+			udp = l
+		}
+	}
+	for _, want := range []string{"-o eth1", "--dport 443", "--connbytes 0:3", "--length 1200:", "--nflog-group 4210", "-j NFLOG"} {
+		if !strings.Contains(udp, want) {
+			t.Errorf("QUIC rule %q lacks %q", udp, want)
+		}
+	}
+	if strings.Contains(udp, "--tcp-flags") {
+		t.Errorf("QUIC rule %q carries a TCP flags match", udp)
+	}
+}
+
+// TestRulesInPlace_FollowsTheQUICMode: switching QUIC on installs the UDP
+// rule, switching it off removes it again -- RulesInPlace reads the chain as
+// drifted in both directions, so the next reconcile does the work.
+func TestRulesInPlace_FollowsTheQUICMode(t *testing.T) {
+	f := installFakeIptables(t)
+	ctx := context.Background()
+
+	_ = EnsureRules(ctx, testOpts())
+	if !RulesInPlace(ctx, testOpts()) {
+		t.Fatal("TCP-only rules not in place for TCP-only options")
+	}
+	if RulesInPlace(ctx, quicOpts()) {
+		t.Error("QUIC wanted but no UDP rule installed: want drift")
+	}
+
+	_ = EnsureRules(ctx, quicOpts())
+	if !RulesInPlace(ctx, quicOpts()) {
+		t.Errorf("rules not in place after installing with QUIC: %v", f.lines)
+	}
+	if RulesInPlace(ctx, testOpts()) {
+		t.Error("QUIC switched off but its UDP rule is still installed: want drift")
+	}
+
+	_ = EnsureRules(ctx, testOpts())
+	if len(f.lines) != 2 {
+		t.Errorf("after switching QUIC off the chain has %d rules, want 2: %v", len(f.lines), f.lines)
+	}
+}
+
+func TestRulesInPlace_RealQUICLine(t *testing.T) {
+	f := installFakeIptables(t)
+	f.lines = append(realForwardLines("eth1", "41:65535"), realQUICLine("eth1"))
+	if !RulesInPlace(context.Background(), quicOpts()) {
+		t.Errorf("not in place for the rules as iptables prints them: %v", f.lines)
+	}
+}

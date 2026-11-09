@@ -262,3 +262,62 @@ func TestL7SNISharedIPTracker_ConcurrentUse(t *testing.T) {
 	close(stop)
 	<-done
 }
+
+func sharedIPTestAddr(i int) [4]byte { return [4]byte{10, byte(i >> 16), byte(i >> 8), byte(i)} }
+
+// TestL7SNISharedIPTracker_TableIsCapped: a flood of distinct destinations
+// (a scanner, a peer-to-peer client) must not grow the table without bound.
+func TestL7SNISharedIPTracker_TableIsCapped(t *testing.T) {
+	tr := newL7SNISharedIPTracker()
+	now := time.Now()
+	total := 3*l7sniSharedIPMaxEntries + 5
+	for i := 0; i < total; i++ {
+		tr.note(sharedIPTestAddr(i), "flood.example", now)
+		if len(tr.seen) > l7sniSharedIPMaxEntries {
+			t.Fatalf("after %d addresses the table holds %d entries, cap is %d", i+1, len(tr.seen), l7sniSharedIPMaxEntries)
+		}
+	}
+	// the newest sighting survives the reset that made room for it
+	if prev, shared := tr.note(sharedIPTestAddr(total-1), "other.example", now); !shared || prev != "flood.example" {
+		t.Errorf("latest address: previous=%q shared=%v, want the sighting just before the call", prev, shared)
+	}
+}
+
+// TestL7SNISharedIPTracker_FullTableDropsStaleBeforeForgettingEverything:
+// when the table is full, the sightings that have already lapsed go first
+// and the live ones are kept.
+func TestL7SNISharedIPTracker_FullTableDropsStaleBeforeForgettingEverything(t *testing.T) {
+	tr := newL7SNISharedIPTracker()
+	now := time.Now()
+	old := now.Add(-2 * l7sniSharedIPMaxAge)
+	for i := 0; i < l7sniSharedIPMaxEntries-1; i++ {
+		tr.note(sharedIPTestAddr(i), "old.example", old)
+	}
+	live := sharedIPTestAddr(1 << 20)
+	tr.note(live, "live.example", now) // the table is exactly full now
+	if len(tr.seen) != l7sniSharedIPMaxEntries {
+		t.Fatalf("setup: %d entries, want %d", len(tr.seen), l7sniSharedIPMaxEntries)
+	}
+
+	tr.note(sharedIPTestAddr(1<<20+1), "new.example", now) // one more: makes room
+	if _, ok := tr.seen[live]; !ok {
+		t.Error("a live sighting was dropped although stale ones were available")
+	}
+	if len(tr.seen) != 2 {
+		t.Errorf("%d entries left, want the live one and the new one", len(tr.seen))
+	}
+}
+
+// At the cap, noting an address that is already tracked adds nothing and so
+// must not evict anything.
+func TestL7SNISharedIPTracker_KnownAddressAtTheCapEvictsNothing(t *testing.T) {
+	tr := newL7SNISharedIPTracker()
+	now := time.Now()
+	for i := 0; i < l7sniSharedIPMaxEntries; i++ {
+		tr.note(sharedIPTestAddr(i), "a.example", now)
+	}
+	tr.note(sharedIPTestAddr(7), "b.example", now)
+	if len(tr.seen) != l7sniSharedIPMaxEntries {
+		t.Errorf("%d entries, want %d: re-noting a known address reset the table", len(tr.seen), l7sniSharedIPMaxEntries)
+	}
+}

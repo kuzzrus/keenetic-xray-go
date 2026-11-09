@@ -13,15 +13,13 @@ package main
 import (
 	"context"
 	"fmt"
-	"net"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/adaptiveroute"
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 	"github.com/kuzzrus/keenetic-xray-go/internal/keenetic"
 	"github.com/kuzzrus/keenetic-xray-go/internal/l7capture"
-	"github.com/kuzzrus/keenetic-xray-go/internal/l7sni"
 )
 
 // reconcileL7SNI re-asserts the NFLOG-triggering iptables rules when the
@@ -31,9 +29,13 @@ import (
 // without this a firewall rebuild silently stops sending packets its
 // way. Same cheap check-then-fix shape as this file's neighbor
 // reconcileAdaptiveRoute (cmd/keenetic-xray/adaptiveroute.go).
-func reconcileL7SNI(ctx context.Context, cfg *config.Config, logf func(string, ...any)) {
+//
+// Failures are logged here and also returned, for the one caller that has to
+// tell the operator whether the rules are in place (`transport l7sni quic`);
+// the reconcile loop just tries again on its next tick.
+func reconcileL7SNI(ctx context.Context, cfg *config.Config, logf func(string, ...any)) error {
 	if !cfg.L7SNI.Enabled || !keenetic.Available() {
-		return
+		return nil
 	}
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -41,11 +43,11 @@ func reconcileL7SNI(ctx context.Context, cfg *config.Config, logf func(string, .
 	wan, err := l7capture.ResolveWANInterface("")
 	if err != nil {
 		logf("l7sni: reconcile WAN detection failed: %v", err)
-		return
+		return err
 	}
-	opts := l7capture.RuleOptions{WANInterface: wan, Group: l7sniNflogGroup}
+	opts := l7capture.RuleOptions{WANInterface: wan, Group: l7sniNflogGroup, QUIC: l7sniQUICModeFor(cfg) != config.L7SNIQUICOff}
 	if l7capture.RulesInPlace(cctx, opts) {
-		return
+		return nil
 	}
 	// Found live (2026-09-15): without this, a router where the NFLOG
 	// kernel modules never got loaded (l7SNIClassifyLoop's own startup
@@ -58,13 +60,14 @@ func reconcileL7SNI(ctx context.Context, cfg *config.Config, logf func(string, .
 	// is a no-op check against /proc/modules in that case).
 	if err := l7capture.EnsureNFLOGModule(cctx); err != nil {
 		logf("l7sni: reconcile: loading NFLOG kernel modules failed: %v", err)
-		return
+		return err
 	}
 	if err := l7capture.EnsureRules(cctx, opts); err != nil {
 		logf("l7sni: reconcile failed: %v", err)
-		return
+		return err
 	}
-	logf("l7sni: re-asserted NFLOG rules on %s (firmware had dropped them)", wan)
+	logf("l7sni: re-asserted NFLOG rules on %s (they were missing or out of date)", wan)
+	return nil
 }
 
 // l7sniNflogGroup is this project's own NFLOG group number -- picked to
@@ -74,15 +77,6 @@ func reconcileL7SNI(ctx context.Context, cfg *config.Config, logf func(string, .
 // default is 210, a different number, so the two could even coexist on
 // one router without conflict).
 const l7sniNflogGroup = 4210
-
-// l7sniReassembleMaxAge/l7sniReassembleMaxSize bound the Reassembler's
-// memory: an incomplete split ClientHello is dropped after this long (a
-// lost segment, or traffic that was never really TLS at all), and this
-// is the largest single ClientHello this will ever buffer.
-const (
-	l7sniReassembleMaxAge  = 5 * time.Second
-	l7sniReassembleMaxSize = 16384
-)
 
 // l7sniStartupTimeout bounds each individual step of l7SNIClassifyLoop's
 // startup sequence below. Found live (2026-09-15): none of these calls
@@ -202,9 +196,12 @@ func l7SNIClassifySession(ctx context.Context, logf func(string, ...any)) (start
 		return false, err
 	}
 
-	logf("l7sni: installing NFLOG rules on %s", wan)
+	cfgQUIC := l7sniQUICModeFor(cfg)
+	ruleOpts := l7capture.RuleOptions{WANInterface: wan, Group: l7sniNflogGroup, QUIC: cfgQUIC != config.L7SNIQUICOff}
+
+	logf("l7sni: installing NFLOG rules on %s (QUIC %s)", wan, cfgQUIC)
 	rctx, rcancel := context.WithTimeout(ctx, l7sniStartupTimeout)
-	err = l7capture.EnsureRules(rctx, l7capture.RuleOptions{WANInterface: wan, Group: l7sniNflogGroup})
+	err = l7capture.EnsureRules(rctx, ruleOpts)
 	rcancel()
 	if err != nil {
 		logf("l7sni: installing NFLOG rules failed: %v", err)
@@ -218,6 +215,17 @@ func l7SNIClassifySession(ctx context.Context, logf func(string, ...any)) (start
 		return false, err
 	}
 	defer capture.Close()
+
+	// sctx is this session's lifetime, which ends when the daemon's does or
+	// when the loop below returns on a read error -- and the loop restarts
+	// the session after that (l7SNIClassifyLoop). Every goroutine started
+	// below waits on sctx rather than on the daemon's ctx: tied to ctx, the
+	// ones of a session that had failed stayed parked until shutdown, one
+	// more pair for every restart, holding the dead session's tables, and
+	// the closer below closed a descriptor number its own session had given
+	// back long before.
+	sctx, endSession := context.WithCancel(ctx)
+	defer endSession()
 
 	// capture.Read below is a raw blocking syscall with no context
 	// awareness at all -- ctx.Err() is only checked *between* reads, so
@@ -236,31 +244,54 @@ func l7SNIClassifySession(ctx context.Context, logf func(string, ...any)) (start
 	// cancelled unblocks the read with an error, so the main loop below
 	// exits through its own ordinary error path instead.
 	go func() {
-		<-ctx.Done()
+		<-sctx.Done()
 		capture.Close()
 	}()
 
-	reasm := l7sni.NewReassembler(l7sniReassembleMaxAge, l7sniReassembleMaxSize)
-	sharedIPs := newL7SNISharedIPTracker()
+	handler := newL7SNIHandler(l7sniStatsState)
+
+	// quicMode is the effective QUIC mode, updated by the capture loop below
+	// each time it re-reads config and read by the publisher goroutine.
+	var quicMode atomic.Value
+	quicMode.Store(config.L7SNIQUICOff)
+
 	expire := time.NewTicker(l7sniReassembleMaxAge)
 	defer expire.Stop()
+	publish := time.NewTicker(l7sniStatsPublishEvery)
+	defer publish.Stop()
+	publishStats := func(final bool) {
+		reads, msgs := capture.BatchStats()
+		l7sniStatsState.setBatches(reads, msgs)
+		gap := l7sniStatsMinInterval
+		if final {
+			gap = 0
+		}
+		if _, err := l7sniStatsState.publishIfDirty(l7sniStatsPath(), time.Now(), gap, quicMode.Load().(string)); err != nil {
+			logf("l7sni: publishing stats failed: %v", err)
+		}
+	}
 	go func() {
 		for {
 			select {
-			case <-ctx.Done():
+			case <-sctx.Done():
 				return
 			case <-expire.C:
-				now := time.Now()
-				reasm.Expire(now)
-				sharedIPs.expire(now)
+				handler.expire(time.Now())
+			case <-publish.C:
+				publishStats(false)
 			}
 		}
 	}()
+	// Deferred in this order so the final publish (which still sees this
+	// session's read counters) runs before they are folded into the totals.
+	defer l7sniStatsState.endBatches()
+	defer publishStats(true)
 
-	logf("l7sni: capturing on %s (NFLOG group %d)", wan, l7sniNflogGroup)
+	logf("l7sni: capturing on %s (NFLOG group %d, QUIC %s)", wan, l7sniNflogGroup, cfgQUIC)
 	exclWatch := &adaptiveroute.ExclusionsWatcher{Path: adaptiveroute.ExclusionsPath(configPath())}
 	snap := l7sniLoadSnapshot()
 	snap.excluded, _ = exclWatch.Get()
+	quicMode.Store(snap.quic)
 	snapAt := time.Now()
 	for {
 		if ctx.Err() != nil {
@@ -273,217 +304,22 @@ func l7SNIClassifySession(ctx context.Context, logf func(string, ...any)) (start
 		if time.Since(snapAt) >= l7sniConfigRefreshInterval {
 			snap = l7sniLoadSnapshot()
 			snap.excluded, _ = exclWatch.Get()
+			quicMode.Store(snap.quic)
 			snapAt = time.Now()
 		}
-		l7SNIHandlePacket(ctx, pkt.Payload, reasm, sharedIPs, snap, logf)
+		handler.handle(ctx, pkt.Payload, snap, logf)
 	}
 }
 
-// l7sniConfigRefreshInterval is how often the capture loop re-reads
-// config, replacing what used to be a config.Load *per captured packet*
-// inside l7SNIHandlePacket. Found by reading the hot path (2026-09-16)
-// after l7sni turned out to load this router's CPU heavily enough to be
-// worth turning off: every captured packet that yielded a hostname --
-// i.e. every HTTPS connection on the network -- opened, read and
-// JSON-unmarshalled the entire config (profiles, every route list, every
-// setting) and then threw it away, plus re-classified every route entry
-// (see l7sniDomainSet). One page load fans out to dozens of TLS
-// connections, so ordinary browsing meant hundreds of full config parses
-// a second for microseconds of actual work.
-//
-// 2s rather than the classify loop's own 500ms: nothing here needs to
-// react fast. The operator toggling l7sni off or editing a route list
-// taking a couple of seconds to take effect is irrelevant, and this is
-// already several orders of magnitude cheaper than what it replaces.
-const l7sniConfigRefreshInterval = 2 * time.Second
+// l7sniStatsState is the daemon's counters. One per process, not per capture
+// session: a session that ends and restarts (L7-02) keeps counting.
+var l7sniStatsState = newL7SNIStats(time.Now())
 
-// l7sniSnapshot is everything l7SNIHandlePacket needs from config,
-// resolved once per l7sniConfigRefreshInterval instead of per packet.
-// Owned by l7SNIClassifyLoop's own goroutine and passed down by value --
-// no atomics or locking needed, since that loop is the only reader.
-type l7sniSnapshot struct {
-	enabled bool
-	ttl     time.Duration
-	domains l7sniDomainSet
-
-	// excluded is the operator's never-route list. A routes-list match is
-	// not allowed to override it: the list says this address must not go
-	// through the tunnel, whatever name was seen on it. nil -> none.
-	excluded *adaptiveroute.Exclusions
-}
-
-// l7sniExcludedLogEvery limits the "matched, but excluded" line to once per
-// address per this long -- a busy site on an excluded address would
-// otherwise log it on every connection.
-const l7sniExcludedLogEvery = 10 * time.Minute
-
-var l7sniExcludedLogged = struct {
-	sync.Mutex
-	at map[string]time.Time
-}{at: map[string]time.Time{}}
-
-// l7sniBlockedByExclusion reports whether a routes-list match on dstIP must be
-// dropped because the operator excluded the address, saying so in the log at
-// most once per l7sniExcludedLogEvery.
-func l7sniBlockedByExclusion(snap l7sniSnapshot, host, dstIP string, dport uint, now time.Time, logf func(string, ...any)) bool {
-	if !snap.excluded.Contains(dstIP) {
-		return false
-	}
-	if l7sniShouldLogExcluded(dstIP, now) {
-		logf("l7sni: %s -> %s:%d matched a routes list, but the address is on the adaptive-route exclusion list -- not redirecting",
-			host, dstIP, dport)
-	}
-	return true
-}
-
-// l7sniShouldLogExcluded reports whether the exclusion line for ip is due.
-func l7sniShouldLogExcluded(ip string, now time.Time) bool {
-	l7sniExcludedLogged.Lock()
-	defer l7sniExcludedLogged.Unlock()
-	if last, ok := l7sniExcludedLogged.at[ip]; ok && now.Sub(last) < l7sniExcludedLogEvery {
-		return false
-	}
-	if len(l7sniExcludedLogged.at) >= 256 {
-		l7sniExcludedLogged.at = map[string]time.Time{}
-	}
-	l7sniExcludedLogged.at[ip] = now
-	return true
-}
-
-// l7sniLoadSnapshot reads config once and pre-resolves it. A failed read
-// yields the zero snapshot (disabled, no domains), which the hot path
-// treats as "match nothing" -- the same do-nothing outcome the old
-// per-packet config.Load already had on error.
-func l7sniLoadSnapshot() l7sniSnapshot {
-	cfg, err := config.Load(configPath())
-	if err != nil {
-		return l7sniSnapshot{}
-	}
-	return l7sniSnapshot{
-		enabled: l7sniEnabled(cfg),
-		ttl:     cfg.AdaptiveRoute.EffectiveOKTTL(),
-		domains: l7sniDomainsFrom(cfg),
-	}
-}
-
-// l7SNIHandlePacket parses one NFLOG-captured packet, extracts a
-// hostname if it's carrying (or completes) a TLS ClientHello or an HTTP
-// request, and acts on a route-list match. Best-effort throughout --
-// anything that doesn't parse cleanly is simply not a packet this
-// feature has a use for, not an error worth logging on every occurrence
-// (this runs on every captured packet; a persistent problem would show
-// up as "never logs a match", something hardware testing needs to
-// notice directly, not a log line per uninteresting packet).
-func l7SNIHandlePacket(ctx context.Context, raw []byte, reasm *l7sni.Reassembler, sharedIPs *l7sniSharedIPTracker, snap l7sniSnapshot, logf func(string, ...any)) {
-	if !snap.enabled || len(snap.domains) == 0 {
-		// Nothing this packet could possibly match -- checked before any
-		// parsing at all, since with no route lists configured (the
-		// common case for an operator who hasn't set any up) every
-		// captured packet would otherwise be fully parsed just to be
-		// discarded at the match step.
-		return
-	}
-	proto, src, dst, sport, dport, seq, payload, ok := l7sni.ParseIPv4(raw)
-	if !ok || proto != 6 { // TCP only -- QUIC (UDP) is out of scope, see internal/l7sni's doc comment
-		return
-	}
-	if len(payload) == 0 {
-		// An empty ACK: nothing to parse, and it must not touch the
-		// reassembler either. The NFLOG filter's 41-byte bound lets the ones
-		// carrying a TCP timestamp (52 bytes) through, so this is the early
-		// drop that bound relies on.
-		return
-	}
-
-	var host string
-	switch dport {
-	case 443:
-		h, ok := l7SNIExtractTLS(reasm, l7sni.FlowKey{Src: src, Dst: dst, SPort: sport, DPort: dport}, seq, payload)
-		if !ok {
-			return
-		}
-		host = h
-	case 80:
-		h, ok := l7sni.ExtractHTTPHost(payload)
-		if !ok {
-			return
-		}
-		host = h
-	default:
-		return
-	}
-
-	// AR-07: note every successfully-extracted hostname, matched or not
-	// -- what this needs to catch is "does dst also serve something
-	// else", which requires seeing every sighting, not just the ones
-	// that happen to match a route list.
-	previousHost, shared := sharedIPs.note(dst, host, time.Now())
-
-	if !snap.domains.matches(host) {
-		return
-	}
-
-	dstIP := net.IP(dst[:]).String()
-	if l7sniBlockedByExclusion(snap, host, dstIP, uint(dport), time.Now(), logf) {
-		return
-	}
-	ttl := snap.ttl
-	if shared {
-		// A route-list match is only evidence about host itself -- dst
-		// having just as recently served previousHost too means this is
-		// very likely a shared CDN/hosting IP, and the full-length
-		// AdaptiveRoute TTL would route all of that IP's unrelated
-		// traffic through the tunnel as well, not just host's. Use a
-		// short TTL instead to bound how long that collateral redirect
-		// can last; an actively-used blocked domain simply gets
-		// re-redirected on its own very next connection.
-		ttl = l7sniSharedIPRedirectTTL
-	}
-	actx, cancel := context.WithTimeout(ctx, adaptiveRouteOpTimeout)
-	defer cancel()
-	if err := adaptiveroute.AddIP(actx, adaptiveRouteIPSet, dstIP, ttl); err != nil {
-		// L7-01 (part 2/3): a failed AddIP means dst was never actually
-		// redirected -- deleting the conntrack entry anyway would just
-		// tear down a working connection for nothing, since the very
-		// next attempt has nowhere new to route to either and goes
-		// straight back out DIRECT, identically to the one just killed.
-		logf("l7sni: %s -> %s:%d matched a routes list, but redirecting failed: %v", host, dstIP, dport, err)
-		return
-	}
-	keenetic.DeleteConntrackFlow(actx, "tcp", net.IP(src[:]).String(), dstIP, uint(sport), uint(dport))
-	adaptiveroute.NoteAdded(adaptiveroute.Note{
-		Addr: dstIP, Tier: adaptiveroute.TierL7SNI, Reason: adaptiveroute.ReasonL7SNI, Host: host,
-		Client: net.IP(src[:]).String(), Proto: "tcp", DPort: uint(dport), At: time.Now(),
-	})
-	if shared {
-		logf("l7sni: %s -> %s:%d matched a routes list, but this IP also recently served %q -- "+
-			"redirecting with a short TTL to limit collateral impact on unrelated traffic sharing the address",
-			host, dstIP, dport, previousHost)
-		return
-	}
-	logf("l7sni: %s -> %s:%d matched a routes list, redirecting", host, dstIP, dport)
-}
-
-// l7SNIExtractTLS tries ExtractTLSSNI directly against payload (the
-// common case: the whole ClientHello landed in one captured packet),
-// falling back to Reassembler for one already in progress, or starting
-// one when payload looks like the start of a ClientHello but
-// TLSRecordLen says more is still to come.
-func l7SNIExtractTLS(reasm *l7sni.Reassembler, key l7sni.FlowKey, seq uint32, payload []byte) (string, bool) {
-	if reasm.Lookup(key) {
-		full, complete := reasm.Feed(key, seq, payload)
-		if !complete {
-			return "", false
-		}
-		return l7sni.ExtractTLSSNI(full)
-	}
-	if host, ok := l7sni.ExtractTLSSNI(payload); ok {
-		return host, true
-	}
-	if l7sni.IsTLSClientHello(payload) {
-		if reclen := l7sni.TLSRecordLen(payload); reclen > len(payload) {
-			reasm.Start(key, seq, payload, reclen)
-		}
-	}
-	return "", false
-}
+const (
+	// l7sniStatsPublishEvery is how often the publisher looks at the
+	// counters; l7sniStatsMinInterval is the least time between two writes of
+	// the file. /tmp is RAM, so the write is cheap, but there is no reason to
+	// do it more than a few times a minute.
+	l7sniStatsPublishEvery = 5 * time.Second
+	l7sniStatsMinInterval  = 10 * time.Second
+)

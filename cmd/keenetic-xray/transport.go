@@ -71,7 +71,7 @@ func cmdTransport(args []string) error {
 	case "l7sni":
 		return transportL7SNI(cfg, args[1:])
 	default:
-		return fmt.Errorf("usage: keenetic-xray transport {show|mode <mode>|mode-clear|mss <1200..1452|auto|off>|wg {show|on|off}|tun {show|on|off|mtu}|adaptive {show|on|off|flush|list|excluded|exclude <ip|cidr>...|include <ip|cidr>...}|l7sni {show|on|off}}")
+		return fmt.Errorf("usage: keenetic-xray transport {show|mode <mode>|mode-clear|mss <1200..1452|auto|off>|wg {show|on|off}|tun {show|on|off|mtu}|adaptive {show|on|off|flush|list|excluded|exclude <ip|cidr>...|include <ip|cidr>...}|l7sni {show|on|off|quic {off|observe|act}|stats}}")
 	}
 
 	if err := cfg.Save(configPath()); err != nil {
@@ -118,7 +118,7 @@ func printTransport(cfg *config.Config) {
 	}
 
 	if cfg.L7SNI.Enabled {
-		fmt.Println("l7sni (определение домена по TLS SNI/HTTP Host): вкл")
+		fmt.Printf("l7sni (определение домена по TLS SNI/HTTP Host): вкл, QUIC: %s\n", l7sniQUICWord(l7sniQUICModeFor(cfg)))
 	} else {
 		fmt.Println("l7sni (определение домена по TLS SNI/HTTP Host): выкл")
 	}

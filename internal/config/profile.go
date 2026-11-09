@@ -790,11 +790,40 @@ func (a AdaptiveRouteConfig) EffectivePort() int {
 // dataplane -- that one is populated by the router's own DNS proxy
 // seeing a resolution happen, which is exactly what this feature exists
 // to route around, so it isn't a mechanism a manually-detected IP can
-// feed into directly. QUIC is deliberately out of scope -- see the
-// l7sni-build-plan memory for why (real per-version AEAD decrypt, and a
-// hard blind spot from Encrypted Client Hello).
+// feed into directly.
+//
+// QUIC (HTTP/3 over UDP/443) is a separate, opt-in step on top of that --
+// see QUIC below. Its Initial packets are readable by anyone on the path
+// (the keys come from the packet itself), but Encrypted Client Hello hides
+// the name entirely wherever it is really in use, so whether it pays off is
+// something to measure on the router first: hence "observe".
 type L7SNIConfig struct {
 	Enabled bool `json:"enabled"`
+
+	// QUIC is what to do with QUIC Initial packets on UDP/443: "" or "off"
+	// (not captured at all), "observe" (parsed and counted -- names seen,
+	// how many carry an ECH extension -- but nothing is redirected) or "act"
+	// (a name on a routes list is redirected like a TLS/HTTP one). Needs
+	// Enabled; "act" additionally needs adaptive routing, like TLS/HTTP.
+	QUIC string `json:"quic,omitempty"`
+}
+
+// The QUIC modes of L7SNIConfig.
+const (
+	L7SNIQUICOff     = "off"
+	L7SNIQUICObserve = "observe"
+	L7SNIQUICAct     = "act"
+)
+
+// QUICMode returns the configured QUIC mode, with anything unrecognised (a
+// typo in a hand-edited config, a value from a later version) read as off.
+func (c L7SNIConfig) QUICMode() string {
+	switch c.QUIC {
+	case L7SNIQUICObserve, L7SNIQUICAct:
+		return c.QUIC
+	default:
+		return L7SNIQUICOff
+	}
 }
 
 func (a AdaptiveRouteConfig) EffectiveOKTTL() time.Duration {

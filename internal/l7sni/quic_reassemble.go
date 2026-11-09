@@ -125,3 +125,16 @@ func (r *QUICReassembler) Len() int {
 	defer r.mu.Unlock()
 	return len(r.flows)
 }
+
+// Pending reports whether flow key has an incomplete flight held, waiting
+// for more datagrams. Feed returns (nil, false) for that and also for a flow
+// it has nothing to say about -- a repeat of a ClientHello it already handed
+// out, a flight that did not begin with one, CRYPTO data that contradicts
+// itself -- so a caller that wants to count the flights that really go on
+// cannot tell them apart from the return values alone.
+func (r *QUICReassembler) Pending(key FlowKey) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.flows[key]
+	return ok
+}

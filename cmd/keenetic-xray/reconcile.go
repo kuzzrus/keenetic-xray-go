@@ -67,7 +67,7 @@ func reconcileOnce(ctx context.Context, d *failover.Daemon, logf func(string, ..
 	}
 	reconcileAdaptiveRoute(ctx, cfg, logf)
 	reconcileMSSClamp(ctx, cfg, logf)
-	reconcileL7SNI(ctx, cfg, logf)
+	_ = reconcileL7SNI(ctx, cfg, logf) // logs its own failures; the next tick retries
 	reconcileProxy0(ctx, cfg, logf)
 	reconcileInboundBind(ctx, d, cfg, logf)
 	applyRoutesAtStartup(cfg, logf) // already drift-based and quiet-when-clean

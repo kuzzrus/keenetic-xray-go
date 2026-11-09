@@ -483,3 +483,40 @@ func TestQUICReassembler_CRYPTOLessDatagramDoesNotRefresh(t *testing.T) {
 		t.Error("an Initial without CRYPTO frames kept the half-built flight alive")
 	}
 }
+
+// TestQUICReassembler_PendingSeparatesAFlightThatGoesOnFromOneThatIsOver:
+// Feed answers (nil, false) both for a ClientHello that is still incomplete
+// and for a flow it has nothing more to say about; Pending is how a caller
+// tells them apart.
+func TestQUICReassembler_PendingSeparatesAFlightThatGoesOnFromOneThatIsOver(t *testing.T) {
+	ch := buildClientHelloMsg("www.youtube.com")
+	r := NewQUICReassembler(5*time.Second, 16)
+	t0 := time.Now()
+	key := func(n int) FlowKey { return FlowKey{SPort: uint16(5000 + n), DPort: 443} }
+
+	// a ClientHello split over two datagrams
+	r.Feed(key(1), []CryptoFragment{{0, ch[:20]}}, t0)
+	if !r.Pending(key(1)) {
+		t.Error("the first half of a ClientHello is not reported pending")
+	}
+	if _, done := r.Feed(key(1), []CryptoFragment{{20, ch[20:]}}, t0); !done || r.Pending(key(1)) {
+		t.Errorf("after the second half: done=%v pending=%v, want done and not pending", done, r.Pending(key(1)))
+	}
+
+	// its retransmission: nothing returned, and nothing pending either
+	if _, done := r.Feed(key(1), []CryptoFragment{{0, ch}}, t0.Add(time.Second)); done || r.Pending(key(1)) {
+		t.Errorf("a repeat of a finished ClientHello: done=%v pending=%v", done, r.Pending(key(1)))
+	}
+
+	// a flight that does not begin with a ClientHello is dropped, not held
+	r.Feed(key(2), []CryptoFragment{{0, []byte{0x02, 0x00, 0x00, 0x04, 1, 2, 3, 4}}}, t0)
+	if r.Pending(key(2)) {
+		t.Error("a flight that is not a ClientHello is reported pending")
+	}
+
+	// a datagram with no CRYPTO data starts nothing
+	r.Feed(key(3), nil, t0)
+	if r.Pending(key(3)) {
+		t.Error("an ACK-only datagram is reported pending")
+	}
+}

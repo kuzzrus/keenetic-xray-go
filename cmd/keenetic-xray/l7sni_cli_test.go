@@ -3,8 +3,12 @@ package main
 import (
 	"bytes"
 	"errors"
+	"os"
+	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -71,7 +75,8 @@ func TestL7SNIQUICHints(t *testing.T) {
 func TestTransportL7SNIQUIC_SavesAndClearsTheMode(t *testing.T) {
 	cfgPath := filepath.Join(t.TempDir(), "c.json")
 	t.Setenv("KEENETIC_XRAY_CONFIG", cfgPath)
-	cfg := l7sniTestConfig(false, true, "") // l7sni off: no router is touched
+	t.Setenv("KEENETIC_XRAY_PID_FILE", filepath.Join(t.TempDir(), "none.pid")) // no daemon to signal
+	cfg := l7sniTestConfig(false, true, "")                                    // l7sni off: no router is touched
 	if err := cfg.Save(cfgPath); err != nil {
 		t.Fatal(err)
 	}
@@ -220,5 +225,42 @@ func TestL7SNIQUICApplyMessage(t *testing.T) {
 	got := l7sniQUICApplyMessage(errors.New("iptables: boom"))
 	if !strings.Contains(got, "предупреждение") || strings.Contains(got, "приведено в соответствие") || !strings.Contains(got, "режим сохранён") {
 		t.Errorf("failure message must not claim the rule was applied: %q", got)
+	}
+}
+
+// TestTransportL7SNIQUIC_ReloadsTheDaemon: the daemon and the bot inside it
+// hold their own copy of the config and write it back whole whenever they
+// save something else (every bot button that changes a setting does), so the
+// new mode must reach them through the usual SIGHUP reload -- otherwise the
+// next press of an unrelated button puts the old mode back on disk.
+func TestTransportL7SNIQUIC_ReloadsTheDaemon(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("SIGHUP delivery via os.Process.Signal is a Unix-only path -- the daemon only ever runs on Linux")
+	}
+	cfgPath := filepath.Join(t.TempDir(), "c.json")
+	t.Setenv("KEENETIC_XRAY_CONFIG", cfgPath)
+	cfg := l7sniTestConfig(false, true, "") // l7sni off: no router is touched
+	if err := cfg.Save(cfgPath); err != nil {
+		t.Fatal(err)
+	}
+	self := os.Getpid()
+	writePIDFile(t, self)
+	withProcessName(t, func(pid int) string {
+		if pid == self {
+			return "keenetic-xray"
+		}
+		return ""
+	})
+	got := make(chan os.Signal, 1)
+	signal.Notify(got, syscall.SIGHUP) // without a handler the signal would end the test process
+	t.Cleanup(func() { signal.Stop(got) })
+
+	if err := transportL7SNIQUIC(cfg, []string{"observe"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-got:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no SIGHUP reached the daemon: it and the bot would keep the old mode and write it back")
 	}
 }

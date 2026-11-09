@@ -81,6 +81,12 @@ func transportL7SNI(cfg *config.Config, args []string) error {
 // couple of seconds, and the one thing it cannot do itself -- the NFLOG rule
 // for UDP/443 -- is placed (or removed) right here through the same
 // reconcileL7SNI the daemon runs every few minutes.
+//
+// What the capture does not make unnecessary is the usual reload
+// (applyDaemonChange, a SIGHUP): the daemon and the bot inside it each hold
+// their own copy of the config and write it back whole whenever they save
+// anything else, so a copy that never heard of the new mode would put the old
+// one back with the next button press.
 func transportL7SNIQUIC(cfg *config.Config, args []string) error {
 	if len(args) != 1 {
 		return errors.New(l7sniUsage)
@@ -101,6 +107,7 @@ func transportL7SNIQUIC(cfg *config.Config, args []string) error {
 	for _, hint := range l7sniQUICHints(cfg) {
 		fmt.Println("  " + hint)
 	}
+	applyDaemonChange(bufio.NewReader(os.Stdin), true)
 
 	if cfg.L7SNI.Enabled && keenetic.Available() {
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)

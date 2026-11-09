@@ -105,10 +105,21 @@ func transportL7SNIQUIC(cfg *config.Config, args []string) error {
 	if cfg.L7SNI.Enabled && keenetic.Available() {
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
-		reconcileL7SNI(ctx, cfg, func(format string, a ...any) { fmt.Printf(format+"\n", a...) })
-		fmt.Println("правило перехвата UDP/443 приведено в соответствие, демон подхватит режим сам (до нескольких секунд), перезапуск не нужен")
+		err := reconcileL7SNI(ctx, cfg, func(format string, a ...any) { fmt.Printf(format+"\n", a...) })
+		fmt.Println(l7sniQUICApplyMessage(err))
 	}
 	return nil
+}
+
+// l7sniQUICApplyMessage is the last line of `quic <mode>`: whether the NFLOG
+// rule for UDP/443 is now in line with the saved mode. The mode is saved
+// either way; a rule that could not be placed now is retried by the daemon's
+// own reconcile.
+func l7sniQUICApplyMessage(err error) string {
+	if err != nil {
+		return "предупреждение: правило перехвата UDP/443 поставить не удалось (причина выше) — режим сохранён, демон повторит попытку при ближайшей сверке (раз в 2 минуты)"
+	}
+	return "правило перехвата UDP/443 приведено в соответствие; если демон запущен, он подхватит режим сам (до нескольких секунд), перезапуск не нужен"
 }
 
 // printL7SNIState is `transport l7sni show`.
@@ -146,6 +157,12 @@ func l7sniQUICLine(cfg *config.Config) string {
 	line := "QUIC (UDP/443): " + l7sniQUICWord(set)
 	switch {
 	case set == config.L7SNIQUICOff:
+		// A value that is not one of the three (a hand-edited "Observe" or
+		// "on") reads as off; say so, or the missing counters look like a
+		// capture problem.
+		if raw := cfg.L7SNI.QUIC; raw != "" && raw != config.L7SNIQUICOff {
+			return fmt.Sprintf("%s — в config.json записано %q, это не off/observe/act, читается как «выкл»", line, raw)
+		}
 		return line
 	case !cfg.L7SNI.Enabled:
 		return line + " — но l7sni выключен, поэтому не работает"

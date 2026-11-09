@@ -2,15 +2,11 @@ package l7snitest
 
 // The client Initial of RFC 9001 Appendix A.2 (QUIC version 1): destination
 // connection ID 0x8394c8f03e515708, packet number 2, one CRYPTO frame with a
-// ClientHello for example.com, padded to a 1200-byte datagram. The header
-// is the unprotected one up to and including the packet number, the frames
-// the plaintext before padding, the packet the protected datagram as it goes
-// on the wire. Transcribed through the test tables of
+// ClientHello for example.com, padded to a 1200-byte datagram. The frames
+// are the plaintext before padding, the packet the protected datagram as it
+// goes on the wire (the unprotected header is not kept: Initial.Datagram
+// builds it). Transcribed through the test tables of
 // github.com/quic-go/quic-go (MIT), which carry the RFC's values verbatim.
-
-const rfc9001V1Header = "" +
-	"c300000001088394c8f03e5157080000449e00000002" +
-	""
 
 const rfc9001V1Frames = "" +
 	"060040f1010000ed0303ebf8fa56f12939b9584a3896472ec40bb863cfd3e86804fe3a47f06a2b69484c000004130113" +

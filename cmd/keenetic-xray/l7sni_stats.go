@@ -61,8 +61,10 @@ type l7sniStats struct {
 	since     time.Time
 	counts    map[string]uint64
 	names     map[string]*l7sniNameStat // key: proto + " " + host
-	reads     uint64                    // NFLOG recv() calls that carried packets
+	reads     uint64                    // NFLOG recv() calls that carried packets, in the running capture session
 	messages  uint64                    // packets those calls carried
+	readsDone uint64                    // the same two, summed over the sessions that have ended
+	msgsDone  uint64
 	dirty     bool
 	lastWrite time.Time
 }
@@ -110,11 +112,26 @@ func (s *l7sniStats) seenName(proto, host string, ech bool) {
 	s.dirty = true
 }
 
-// setBatches stores the NFLOG read counters (cumulative, from the capture).
+// setBatches stores the running capture session's NFLOG read counters. A
+// Capture counts from zero, so these are cumulative for that session only.
 func (s *l7sniStats) setBatches(reads, messages uint64) {
 	s.mu.Lock()
 	if reads != s.reads || messages != s.messages {
 		s.reads, s.messages = reads, messages
+		s.dirty = true
+	}
+	s.mu.Unlock()
+}
+
+// endBatches folds the finished session's read counters into the process
+// totals, so that the next session -- whose Capture starts from zero -- adds
+// to them instead of replacing them, like every other counter here.
+func (s *l7sniStats) endBatches() {
+	s.mu.Lock()
+	if s.reads != 0 || s.messages != 0 {
+		s.readsDone += s.reads
+		s.msgsDone += s.messages
+		s.reads, s.messages = 0, 0
 		s.dirty = true
 	}
 	s.mu.Unlock()
@@ -151,7 +168,7 @@ func (s *l7sniStats) snapshot(now time.Time, quicMode string) l7sniStatsFile {
 	defer s.mu.Unlock()
 	f := l7sniStatsFile{
 		Version: l7sniStatsVersion, Since: s.since, At: now, QUIC: quicMode,
-		Counts: make(map[string]uint64, len(s.counts)), Reads: s.reads, Messages: s.messages,
+		Counts: make(map[string]uint64, len(s.counts)), Reads: s.readsDone + s.reads, Messages: s.msgsDone + s.messages,
 	}
 	for k, v := range s.counts {
 		f.Counts[k] = v
@@ -242,7 +259,7 @@ func readL7SNIStats(path string) (*l7sniStatsFile, error) {
 func renderL7SNIStats(w io.Writer, f *l7sniStatsFile, now time.Time) {
 	c := f.Counts
 	fmt.Fprintf(w, "l7sni: считается с %s (%s назад), файл обновлён %s назад\n",
-		f.Since.Local().Format("02.01 15:04"), shortAge(now.Sub(f.Since)), shortAge(now.Sub(f.At)))
+		f.Since.Local().Format("02.01 15:04"), ageRU(now.Sub(f.Since)), ageRU(now.Sub(f.At)))
 
 	fmt.Fprintf(w, "TLS (TCP/443): ClientHello разобрано %d, с именем %d, с ECH-расширением %d; совпало со списками %d, переправлено %d\n",
 		c[statTLSHello], c[statTLSName], c[statTLSECH], c[statTLSMatch], c[statTLSActed])
@@ -291,19 +308,4 @@ func percent(part, whole uint64) string {
 		return "—"
 	}
 	return fmt.Sprintf("%.1f%%", 100*float64(part)/float64(whole))
-}
-
-// shortAge renders a duration the way the adaptive-routing summaries do:
-// seconds, minutes or hours, no fractions.
-func shortAge(d time.Duration) string {
-	switch {
-	case d < 0:
-		return "0 с"
-	case d < time.Minute:
-		return fmt.Sprintf("%d с", int(d.Seconds()))
-	case d < time.Hour:
-		return fmt.Sprintf("%d мин", int(d.Minutes()))
-	default:
-		return fmt.Sprintf("%.1f ч", d.Hours())
-	}
 }

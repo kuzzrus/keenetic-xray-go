@@ -13,7 +13,6 @@ package main
 import (
 	"context"
 	"fmt"
-
 	"sync/atomic"
 	"time"
 
@@ -30,9 +29,13 @@ import (
 // without this a firewall rebuild silently stops sending packets its
 // way. Same cheap check-then-fix shape as this file's neighbor
 // reconcileAdaptiveRoute (cmd/keenetic-xray/adaptiveroute.go).
-func reconcileL7SNI(ctx context.Context, cfg *config.Config, logf func(string, ...any)) {
+//
+// Failures are logged here and also returned, for the one caller that has to
+// tell the operator whether the rules are in place (`transport l7sni quic`);
+// the reconcile loop just tries again on its next tick.
+func reconcileL7SNI(ctx context.Context, cfg *config.Config, logf func(string, ...any)) error {
 	if !cfg.L7SNI.Enabled || !keenetic.Available() {
-		return
+		return nil
 	}
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -40,11 +43,11 @@ func reconcileL7SNI(ctx context.Context, cfg *config.Config, logf func(string, .
 	wan, err := l7capture.ResolveWANInterface("")
 	if err != nil {
 		logf("l7sni: reconcile WAN detection failed: %v", err)
-		return
+		return err
 	}
 	opts := l7capture.RuleOptions{WANInterface: wan, Group: l7sniNflogGroup, QUIC: l7sniQUICModeFor(cfg) != config.L7SNIQUICOff}
 	if l7capture.RulesInPlace(cctx, opts) {
-		return
+		return nil
 	}
 	// Found live (2026-09-15): without this, a router where the NFLOG
 	// kernel modules never got loaded (l7SNIClassifyLoop's own startup
@@ -57,13 +60,14 @@ func reconcileL7SNI(ctx context.Context, cfg *config.Config, logf func(string, .
 	// is a no-op check against /proc/modules in that case).
 	if err := l7capture.EnsureNFLOGModule(cctx); err != nil {
 		logf("l7sni: reconcile: loading NFLOG kernel modules failed: %v", err)
-		return
+		return err
 	}
 	if err := l7capture.EnsureRules(cctx, opts); err != nil {
 		logf("l7sni: reconcile failed: %v", err)
-		return
+		return err
 	}
 	logf("l7sni: re-asserted NFLOG rules on %s (they were missing or out of date)", wan)
+	return nil
 }
 
 // l7sniNflogGroup is this project's own NFLOG group number -- picked to
@@ -278,6 +282,9 @@ func l7SNIClassifySession(ctx context.Context, logf func(string, ...any)) (start
 			}
 		}
 	}()
+	// Deferred in this order so the final publish (which still sees this
+	// session's read counters) runs before they are folded into the totals.
+	defer l7sniStatsState.endBatches()
 	defer publishStats(true)
 
 	logf("l7sni: capturing on %s (NFLOG group %d, QUIC %s)", wan, l7sniNflogGroup, cfgQUIC)

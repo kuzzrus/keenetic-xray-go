@@ -399,6 +399,10 @@ func TestHandler_QUICRetransmissionIsCountedOnce(t *testing.T) {
 	if r.count(statQUICInitial) != 3 {
 		t.Errorf("initials decrypted = %d, want 3 (each datagram is still parsed)", r.count(statQUICInitial))
 	}
+	// the repeats are not a ClientHello that goes on in a later datagram
+	if r.count(statQUICWaiting) != 0 {
+		t.Errorf("waiting = %d, want 0: retransmissions of a finished ClientHello counted as pending", r.count(statQUICWaiting))
+	}
 }
 
 // A post-quantum-sized ClientHello continues in a second datagram.
@@ -417,6 +421,9 @@ func TestHandler_QUICClientHelloAcrossTwoDatagrams(t *testing.T) {
 	r.feed(quicPacket(dg2), snap)
 	if r.count(statQUICHello) != 1 || r.count(statQUICName) != 1 || len(r.redirects) != 1 {
 		t.Errorf("after the second: hello=%d name=%d redirects=%d", r.count(statQUICHello), r.count(statQUICName), len(r.redirects))
+	}
+	if r.count(statQUICWaiting) != 1 {
+		t.Errorf("waiting = %d, want 1: only the first datagram left the ClientHello incomplete", r.count(statQUICWaiting))
 	}
 }
 

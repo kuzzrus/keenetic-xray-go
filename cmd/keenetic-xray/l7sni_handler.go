@@ -269,7 +269,9 @@ func (h *l7sniHandler) handleQUIC(ctx context.Context, src, dst [4]byte, sport, 
 	key := l7sni.FlowKey{Src: src, Dst: dst, SPort: sport, DPort: dport}
 	hs, done := h.qreasm.Feed(key, init.Fragments, now)
 	if !done {
-		if len(init.Fragments) > 0 {
+		// Not done is also what a repeat of a ClientHello that was already
+		// handed out looks like, so "the flight goes on" has to be asked.
+		if h.qreasm.Pending(key) {
 			h.stats.inc(statQUICWaiting)
 		}
 		return

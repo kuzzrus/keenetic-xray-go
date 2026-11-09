@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -30,7 +31,8 @@ func TestL7SNIQUICLine(t *testing.T) {
 		{"act", l7sniTestConfig(true, true, "act"), "действие — имя из списка маршрутов переправляется", ""},
 		{"act without adaptive routing says it only observes", l7sniTestConfig(true, false, "act"), "работает как «наблюдение»", ""},
 		{"a mode with l7sni off says it does nothing", l7sniTestConfig(false, true, "observe"), "но l7sni выключен", ""},
-		{"a typo in the config is off", l7sniTestConfig(true, true, "Act"), "QUIC (UDP/443): выкл", ""},
+		{"a typo in the config is off, and says so", l7sniTestConfig(true, true, "Act"), "записано \"Act\", это не off/observe/act", ""},
+		{"an explicit off needs no warning", l7sniTestConfig(true, true, "off"), "QUIC (UDP/443): выкл", "не off"},
 	}
 	for _, tc := range cases {
 		got := l7sniQUICLine(tc.cfg)
@@ -194,12 +196,29 @@ func TestWriteDiagL7SNI(t *testing.T) {
 
 	s := newL7SNIStats(now.Add(-time.Minute))
 	s.inc(statTLSHello)
+	s.seenName("tls", "private-site.example", false)
 	if err := writeL7SNIStats(path, s.snapshot(now, "observe")); err != nil {
 		t.Fatal(err)
 	}
 	var with bytes.Buffer
 	writeDiagL7SNI(&with, cfg, now)
-	if out := with.String(); !strings.Contains(out, "TLS (TCP/443): ClientHello разобрано 1") {
+	out := with.String()
+	if !strings.Contains(out, "TLS (TCP/443): ClientHello разобрано 1") {
 		t.Errorf("with a stats file:\n%s", out)
+	}
+	// the names clients connected to are their browsing history: counters
+	// only in a bundle that gets pasted around
+	if strings.Contains(out, "private-site.example") {
+		t.Errorf("the diag bundle lists a hostname a LAN client visited:\n%s", out)
+	}
+}
+
+func TestL7SNIQUICApplyMessage(t *testing.T) {
+	if got := l7sniQUICApplyMessage(nil); !strings.Contains(got, "приведено в соответствие") || strings.Contains(got, "предупреждение") {
+		t.Errorf("success message: %q", got)
+	}
+	got := l7sniQUICApplyMessage(errors.New("iptables: boom"))
+	if !strings.Contains(got, "предупреждение") || strings.Contains(got, "приведено в соответствие") || !strings.Contains(got, "режим сохранён") {
+		t.Errorf("failure message must not claim the rule was applied: %q", got)
 	}
 }

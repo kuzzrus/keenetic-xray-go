@@ -150,7 +150,7 @@ func TestRenderL7SNIStats(t *testing.T) {
 	renderL7SNIStats(&buf, f, now)
 	out := buf.String()
 	for _, want := range []string{
-		"1.5 ч назад", "5 с назад",
+		"1 ч 30 мин назад", "меньше минуты назад",
 		"режим «наблюдение»",
 		"Initial расшифровано 100",
 		"ClientHello собрано 90",
@@ -174,14 +174,29 @@ func TestRenderL7SNIStats(t *testing.T) {
 	}
 }
 
-func TestShortAge(t *testing.T) {
-	cases := map[time.Duration]string{
-		-time.Second: "0 с", 5 * time.Second: "5 с", 90 * time.Second: "1 мин",
-		59 * time.Minute: "59 мин", 90 * time.Minute: "1.5 ч",
+// The NFLOG read counters belong to a capture session and restart from zero
+// with the next one; the totals shown must keep adding up across restarts
+// like every other counter does.
+func TestL7SNIStats_BatchCountersSurviveASessionRestart(t *testing.T) {
+	now := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
+	s := newL7SNIStats(now)
+
+	s.setBatches(40, 100) // first session
+	if f := s.snapshot(now, "off"); f.Reads != 40 || f.Messages != 100 {
+		t.Fatalf("during the first session: %d reads, %d messages", f.Reads, f.Messages)
 	}
-	for d, want := range cases {
-		if got := shortAge(d); got != want {
-			t.Errorf("shortAge(%v) = %q, want %q", d, got, want)
-		}
+	s.endBatches()
+	if f := s.snapshot(now, "off"); f.Reads != 40 || f.Messages != 100 {
+		t.Errorf("right after the first session ended: %d reads, %d messages, want the totals kept", f.Reads, f.Messages)
+	}
+
+	s.setBatches(10, 12) // the next session's Capture starts from zero again
+	if f := s.snapshot(now, "off"); f.Reads != 50 || f.Messages != 112 {
+		t.Errorf("second session: %d reads, %d messages, want 50 and 112", f.Reads, f.Messages)
+	}
+	s.endBatches()
+	s.endBatches() // a second end with nothing running adds nothing
+	if f := s.snapshot(now, "off"); f.Reads != 50 || f.Messages != 112 {
+		t.Errorf("after both sessions: %d reads, %d messages", f.Reads, f.Messages)
 	}
 }

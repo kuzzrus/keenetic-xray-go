@@ -15,4 +15,6 @@ import (
 
 func l7SNIClassifyLoop(ctx context.Context, logf func(string, ...any)) {}
 
-func reconcileL7SNI(ctx context.Context, cfg *config.Config, logf func(string, ...any)) {}
+func reconcileL7SNI(ctx context.Context, cfg *config.Config, logf func(string, ...any)) error {
+	return nil
+}

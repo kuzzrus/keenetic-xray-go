@@ -220,8 +220,12 @@ func writeDiag(w io.Writer) {
 }
 
 // writeDiagL7SNI is the l7sni section: which QUIC mode the config asks for
-// and what the daemon's capture has counted so far (the same text as
-// `transport l7sni stats`, read from the file the daemon publishes).
+// and what the daemon's capture has counted so far (the text of
+// `transport l7sni stats`, read from the file the daemon publishes) -- minus
+// the list of most-seen names. That list is the household's browsing
+// history, the stats file is private for that reason, and a diag bundle is
+// pasted into issues and relayed through the bot; the counters say what is
+// needed to judge the capture.
 func writeDiagL7SNI(w io.Writer, cfg *config.Config, now time.Time) {
 	fmt.Fprintln(w, "\n---- l7sni ----")
 	fmt.Fprintln(w, l7sniQUICLine(cfg))
@@ -230,7 +234,9 @@ func writeDiagL7SNI(w io.Writer, cfg *config.Config, now time.Time) {
 		fmt.Fprintf(w, "статистика: %v\n", err)
 		return
 	}
+	f.Top = nil
 	renderL7SNIStats(w, f, now)
+	fmt.Fprintln(w, "(самые частые имена в diag не выводятся — это история посещений; они есть в `transport l7sni stats`)")
 }
 
 // diagPortListening reports whether something accepts TCP on

@@ -826,6 +826,25 @@ func (c L7SNIConfig) QUICMode() string {
 	}
 }
 
+// EffectiveL7SNIQUIC is the QUIC mode the L7 capture actually runs with: off
+// unless L7 detection itself is on; the configured "observe"/"act"
+// otherwise, except that "act" with adaptive routing off is read as
+// "observe" -- a match has nowhere to be redirected to, the same reason TLS
+// and HTTP matching want both switches. Observing needs neither adaptive
+// routing nor any route list: it only counts. Shared by the daemon's capture
+// (which rules to install, what to do with a match), the CLI and the bot, so
+// that all of them say the same thing about the same config.
+func (c *Config) EffectiveL7SNIQUIC() string {
+	if !c.L7SNI.Enabled {
+		return L7SNIQUICOff
+	}
+	mode := c.L7SNI.QUICMode()
+	if mode == L7SNIQUICAct && !c.AdaptiveRoute.Enabled {
+		return L7SNIQUICObserve
+	}
+	return mode
+}
+
 func (a AdaptiveRouteConfig) EffectiveOKTTL() time.Duration {
 	if a.OKTTLHours > 0 {
 		return time.Duration(a.OKTTLHours) * time.Hour

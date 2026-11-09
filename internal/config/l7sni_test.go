@@ -52,3 +52,29 @@ func TestL7SNIConfig_QUICRoundTripAndOldConfigs(t *testing.T) {
 		t.Errorf("an unset mode is written out: %s", off)
 	}
 }
+
+func TestConfig_EffectiveL7SNIQUIC(t *testing.T) {
+	mk := func(l7, adaptive bool, quic string) *Config {
+		c := Default()
+		c.L7SNI = L7SNIConfig{Enabled: l7, QUIC: quic}
+		c.AdaptiveRoute.Enabled = adaptive
+		return c
+	}
+	cases := []struct {
+		name string
+		cfg  *Config
+		want string
+	}{
+		{"l7sni off beats everything", mk(false, true, "act"), L7SNIQUICOff},
+		{"unset is off", mk(true, true, ""), L7SNIQUICOff},
+		{"observe stands without adaptive routing", mk(true, false, "observe"), L7SNIQUICObserve},
+		{"act with adaptive routing", mk(true, true, "act"), L7SNIQUICAct},
+		{"act without adaptive routing degrades to observe", mk(true, false, "act"), L7SNIQUICObserve},
+		{"a typo is off", mk(true, true, "Act"), L7SNIQUICOff},
+	}
+	for _, tc := range cases {
+		if got := tc.cfg.EffectiveL7SNIQUIC(); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}

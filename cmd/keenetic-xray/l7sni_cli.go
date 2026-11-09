@@ -157,10 +157,10 @@ func l7sniQUICWord(mode string) string {
 // l7sniQUICLine says what the QUIC mode is and what it amounts to. The
 // configured mode and the one the capture runs with can differ -- l7sni
 // itself off silences it, and "act" with adaptive routing off only observes
-// (l7sniQUICModeFor) -- and the line says so rather than leaving the
+// (Config.EffectiveL7SNIQUIC) -- and the line says so rather than leaving the
 // operator to wonder why nothing happens.
 func l7sniQUICLine(cfg *config.Config) string {
-	set, eff := cfg.L7SNI.QUICMode(), l7sniQUICModeFor(cfg)
+	set, eff := cfg.L7SNI.QUICMode(), cfg.EffectiveL7SNIQUIC()
 	line := "QUIC (UDP/443): " + l7sniQUICWord(set)
 	switch {
 	case set == config.L7SNIQUICOff:
@@ -219,4 +219,24 @@ func printL7SNIStats(w io.Writer, now time.Time) error {
 	}
 	renderL7SNIStats(w, f, now)
 	return nil
+}
+
+// l7sniStatsText is `transport l7sni stats` as a string, for the bot.
+func l7sniStatsText(now time.Time) (string, error) {
+	var b strings.Builder
+	if err := printL7SNIStats(&b, now); err != nil {
+		return "", err
+	}
+	return b.String(), nil
+}
+
+// reconcileL7SNIFromDisk is reconcileL7SNI against the config as it is on
+// disk right now -- for the bot, which has just saved a new QUIC mode and
+// wants the NFLOG rule to follow it at once.
+func reconcileL7SNIFromDisk(ctx context.Context, logf func(string, ...any)) error {
+	cfg, err := config.Load(configPath())
+	if err != nil {
+		return err
+	}
+	return reconcileL7SNI(ctx, cfg, logf)
 }

@@ -81,6 +81,9 @@ func (h *RouterHandler) adaptiveRouteShow(ctx context.Context) (string, error) {
 	if h.Config.L7SNI.Enabled {
 		l7sniLine = "\n🔍 L7 SNI: вкл"
 	}
+	if h.Config.L7SNI.Enabled || h.Config.L7SNI.QUICMode() != config.L7SNIQUICOff {
+		l7sniLine += "\n🔍 " + l7sniQUICStatusRU(h.Config)
+	}
 	if !a.Enabled {
 		return "Адаптивная маршрутизация: выкл" + l7sniLine, nil
 	}

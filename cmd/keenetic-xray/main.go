@@ -424,6 +424,8 @@ func startAgent(ctx context.Context, cfg *config.Config, d *failover.Daemon, log
 		SelfUpdateEvents:       selfUpdateFail,
 		AdaptiveRouteStatePath: adaptiveRouteStatePath(),
 		TunGate:                tunGate,
+		ReconcileL7SNI:         func(ctx context.Context) error { return reconcileL7SNIFromDisk(ctx, logf) },
+		L7SNIStatsText:         func() (string, error) { return l7sniStatsText(time.Now()) },
 	}
 	opts.StatusFunc = func(ctx context.Context) string {
 		out, _ := handler.Handle(ctx, botcontrol.Command{Action: botcontrol.ActionStatus})

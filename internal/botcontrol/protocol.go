@@ -129,6 +129,18 @@ const (
 	// restart the daemon directly rather than trying rebindXray first.
 	ActionL7SNIOn  = "l7sni_on"  // no args -- enables the config flag, restarts the daemon
 	ActionL7SNIOff = "l7sni_off" // no args -- disables the config flag, clears the NFLOG iptables rules, restarts the daemon
+	// The QUIC (UDP/443) part of the L7 capture, a separate opt-in on top of
+	// l7sni_on: off, observe (parse the first datagrams of a flow, count what
+	// is found -- names, ECH extensions -- and redirect nothing) or act (a
+	// name on a routes list is redirected like a TLS one). Unlike l7sni_on
+	// and l7sni_off these restart nothing: the capture re-reads the mode every
+	// couple of seconds and the NFLOG rule for UDP/443 is placed on the spot.
+	ActionL7SNIQUICOff     = "l7q_off"
+	ActionL7SNIQUICObserve = "l7q_obs"
+	ActionL7SNIQUICAct     = "l7q_act"
+	// ActionL7SNIStats: no args -> what the L7 capture has counted since the
+	// daemon started (human text; the same as `transport l7sni stats`).
+	ActionL7SNIStats = "l7sni_stats"
 	// Keenetic dns-proxy secure upstreams (DoT/DoH). See
 	// internal/keenetic.ApplyDNS + internal/dnsupstream.
 	ActionDNSShow    = "dns_show"     // no args -> config + live upstreams (human text)

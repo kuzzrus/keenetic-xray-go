@@ -99,23 +99,6 @@ func l7sniEnabled(cfg *config.Config) bool {
 	return cfg.L7SNI.Enabled && cfg.AdaptiveRoute.Enabled
 }
 
-// l7sniQUICModeFor is the QUIC mode the capture actually runs with: off
-// unless L7 detection itself is on; the configured "observe"/"act"
-// otherwise, except that "act" with adaptive routing off is read as
-// "observe" -- a match has nowhere to be redirected to, the same reason
-// l7sniEnabled wants both switches for TLS and HTTP. Observing needs
-// neither adaptive routing nor any route list: it only counts.
-func l7sniQUICModeFor(cfg *config.Config) string {
-	if !cfg.L7SNI.Enabled {
-		return config.L7SNIQUICOff
-	}
-	mode := cfg.L7SNI.QUICMode()
-	if mode == config.L7SNIQUICAct && !cfg.AdaptiveRoute.Enabled {
-		return config.L7SNIQUICObserve
-	}
-	return mode
-}
-
 // l7sniMatchesRoutes reports whether host matches any enabled route
 // list's domain entries. The plain config-in form of the same question
 // l7sniDomainSet.matches answers -- kept for callers (and tests) that

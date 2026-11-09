@@ -652,9 +652,9 @@ func TestTelegramBot_AdaptiveStaleButtonsDoNotCrash(t *testing.T) {
 	if got := fake.lastEdit(t); !strings.Contains(got.Text, "плохая кнопка") {
 		t.Errorf("adxE:home answered %q", got.Text)
 	}
-	press("adxQ:home")
+	press("adxZ:home")
 	if got := fake.lastEdit(t); !strings.Contains(got.Text, "неизвестная кнопка") {
-		t.Errorf("adxQ:home answered %q", got.Text)
+		t.Errorf("adxZ:home answered %q", got.Text)
 	}
 	press("adxO:nosuchrouter")
 	if got := fake.lastEdit(t); !strings.Contains(got.Text, "нет такого роутера") {

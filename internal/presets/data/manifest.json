@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated": "2026-11-01",
+  "generated": "2026-11-09",
   "categories": [
     "Мессенджеры",
     "Видео",
@@ -428,8 +428,8 @@
       "title": "GitHub",
       "category": "Разработка",
       "kind": "domains",
-      "count": 65,
-      "rev": "46bb50a74cc3",
+      "count": 66,
+      "rev": "9483837adf6a",
       "sources": [
         "Geo-Aggregator: github"
       ]
@@ -1281,8 +1281,8 @@
       "title": "X (Twitter)",
       "category": "Соцсети",
       "kind": "domains",
-      "count": 27,
-      "rev": "ec0aa9a57517",
+      "count": 28,
+      "rev": "dd06d8dc70cc",
       "sources": [
         "Geo-Aggregator: x"
       ]
@@ -1305,8 +1305,8 @@
       "title": "xAI / Grok",
       "category": "Искусственный интеллект",
       "kind": "domains",
-      "count": 4,
-      "rev": "37d9fb72383a",
+      "count": 5,
+      "rev": "0728a0ce10bd",
       "sources": [
         "Geo-Aggregator: xai"
       ]

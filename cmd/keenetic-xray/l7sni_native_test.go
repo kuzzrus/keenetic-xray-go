@@ -420,3 +420,31 @@ func TestCaptureCheckCarriesTheNamesSentence(t *testing.T) {
 		t.Errorf("capture check lacks the names sentence:\n%s", got)
 	}
 }
+
+// `quic act` with nothing to match against used to say so (through its hints);
+// the warning now comes from the names sentence, and only for an act that acts.
+func TestL7SNIQUICNamesWarning(t *testing.T) {
+	stubRouter(t, true, nil, nil)
+	act := wgConfig()
+	act.L7SNI.QUIC = config.L7SNIQUICAct
+	if line, none := l7sniQUICNamesWarning(act); !none || !strings.Contains(line, "Сравнивать не с чем") {
+		t.Errorf("act with nothing to match: %q none=%v", line, none)
+	}
+
+	observe := wgConfig()
+	observe.L7SNI.QUIC = config.L7SNIQUICObserve
+	if line, none := l7sniQUICNamesWarning(observe); none || line != "" {
+		t.Errorf("observe counts and needs no list, but warned: %q", line)
+	}
+
+	noAdaptive := act
+	noAdaptive.AdaptiveRoute.Enabled = false // act reads as observe
+	if line, _ := l7sniQUICNamesWarning(noAdaptive); line != "" {
+		t.Errorf("an act that only observes warned: %q", line)
+	}
+
+	stubRouter(t, true, hisRoutes(), nil)
+	if line, none := l7sniQUICNamesWarning(act); none {
+		t.Errorf("act with router lists to match warned: %q", line)
+	}
+}

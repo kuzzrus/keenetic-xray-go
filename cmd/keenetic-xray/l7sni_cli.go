@@ -137,6 +137,9 @@ func transportL7SNIQUIC(cfg *config.Config, args []string) error {
 	for _, hint := range l7sniQUICHints(cfg) {
 		fmt.Println("  " + hint)
 	}
+	if line, none := l7sniQUICNamesWarning(cfg); none {
+		fmt.Println("  " + line)
+	}
 	applyDaemonChange(bufio.NewReader(os.Stdin), true)
 
 	if cfg.L7SNI.Enabled && keenetic.Available() {
@@ -255,6 +258,16 @@ func l7sniQUICHints(cfg *config.Config) []string {
 		out = append(out, "что насчиталось: keenetic-xray transport l7sni stats")
 	}
 	return out
+}
+
+// l7sniQUICNamesWarning is the "nothing to redirect" warning for the QUIC
+// command: only an "act" that really acts has anything to say about it (observe
+// counts, and needs no list), and only when there is nothing to match against.
+func l7sniQUICNamesWarning(cfg *config.Config) (line string, none bool) {
+	if cfg.EffectiveL7SNIQUIC() != config.L7SNIQUICAct {
+		return "", false
+	}
+	return l7sniNamesNow(cfg)
 }
 
 // l7sniNamesNow is the sentence about what the capture matches against, for a

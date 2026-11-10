@@ -54,7 +54,15 @@ const l7sniConfigRefreshInterval = 2 * time.Second
 type l7sniSnapshot struct {
 	enabled bool
 	ttl     time.Duration
+
+	// The names a match is looked for in: domains is what this config's own lists
+	// routed into our xray hold; native is what the router's own DNS-routing lists
+	// (domain-listN, the ones set up in its web interface) routed into it hold,
+	// read by l7sniRouterNamesLoop. veto is the names of lists routed anywhere
+	// else, config's and the router's: a host under one of them is left alone.
 	domains l7sniDomainSet
+	native  l7sniDomainSet
+	veto    []l7sniDomainSet
 
 	// quic is the effective QUIC mode (config.L7SNIQUIC*): what the config
 	// says, with "act" read as "observe" when adaptive routing is off -- a
@@ -65,6 +73,20 @@ type l7sniSnapshot struct {
 	// not allowed to override it: the list says this address must not go
 	// through the tunnel, whatever name was seen on it. nil -> none.
 	excluded *adaptiveroute.Exclusions
+}
+
+// hasNames reports whether there is anything to match a host against.
+func (s l7sniSnapshot) hasNames() bool { return len(s.domains) > 0 || len(s.native) > 0 }
+
+// matchesName reports whether host is on a list the capture acts on and not on
+// one routed elsewhere.
+func (s l7sniSnapshot) matchesName(host string) bool {
+	for _, v := range s.veto {
+		if v.matches(host) {
+			return false
+		}
+	}
+	return s.domains.matches(host) || s.native.matches(host)
 }
 
 // l7sniExcludedLogEvery limits the "matched, but excluded" line (and the
@@ -115,12 +137,22 @@ func l7sniLoadSnapshot() l7sniSnapshot {
 	if err != nil {
 		return l7sniSnapshot{quic: config.L7SNIQUICOff}
 	}
-	return l7sniSnapshot{
+	snap := l7sniSnapshot{
 		enabled: l7sniEnabled(cfg),
 		ttl:     cfg.AdaptiveRoute.EffectiveOKTTL(),
 		domains: l7sniDomainsFrom(cfg),
 		quic:    cfg.EffectiveL7SNIQUIC(),
 	}
+	if v := l7sniVetoFrom(cfg); len(v) > 0 {
+		snap.veto = append(snap.veto, v)
+	}
+	if r := l7sniRouterCache.Load(); r != nil {
+		snap.native = r.allow
+		if len(r.veto) > 0 {
+			snap.veto = append(snap.veto, r.veto)
+		}
+	}
+	return snap
 }
 
 // l7sniHandler turns captured packets into hostnames and acts on matches.
@@ -238,7 +270,7 @@ func (h *l7sniHandler) handleTCP(ctx context.Context, src, dst [4]byte, sport, d
 		return
 	}
 
-	if len(snap.domains) == 0 {
+	if !snap.hasNames() {
 		// Nothing to match against: the sighting is counted, and that is all
 		// -- not worth a place in the shared-address table either, which only
 		// serves the TTL of a match.
@@ -251,7 +283,7 @@ func (h *l7sniHandler) handleTCP(ctx context.Context, src, dst [4]byte, sport, d
 	// match a route list.
 	previousHost, shared := h.sharedIPs.note(dst, host, h.now())
 
-	if !snap.domains.matches(host) {
+	if !snap.matchesName(host) {
 		return
 	}
 	h.stats.inc(matchStat)
@@ -306,7 +338,7 @@ func (h *l7sniHandler) handleQUIC(ctx context.Context, src, dst [4]byte, sport, 
 	h.stats.seenName("quic", info.Host, info.ECH)
 
 	previousHost, shared := h.sharedIPs.note(dst, info.Host, now)
-	if !snap.domains.matches(info.Host) {
+	if !snap.matchesName(info.Host) {
 		return
 	}
 	h.stats.inc(statQUICMatch)

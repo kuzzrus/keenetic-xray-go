@@ -17,44 +17,63 @@ import (
 // comment (l7sni_handler.go) for the measurement that prompted this.
 type l7sniDomainSet map[string]struct{}
 
-// l7sniDomainsFrom flattens cfg's enabled route lists into a
-// l7sniDomainSet. Entries mix domains and IPv4/CIDR (see
+// l7sniDomainsFrom flattens cfg's enabled route lists that are routed into our
+// own xray into a l7sniDomainSet. Entries mix domains and IPv4/CIDR (see
 // config.RouteList); ClassifyRouteEntry is what tells them apart, same
 // validator the CLI itself uses when an entry is first added -- called
 // here, once per config read, rather than once per packet.
 //
-// L7-01 (part 3/3): only lists whose RouteIface() is "Proxy0" (the
-// default, and the only one a bare RouteList without an explicit
-// Interface resolves to) are included, even though RouteIface() exists
-// and every other consumer of Routing.Lists (internal/botcontrol,
-// cmd/keenetic-xray's own routes.go) already honors it. A match here
-// only ever feeds the one adaptive-routing ipset, which always rides
-// whatever profile is the current live egress (see
-// transportAdaptive's own doc comment) -- there's no dataplane hook
-// through which this could actually route a match through a specific
-// non-default Proxy<n>/Wireguard<n> interface the way RouteIface()
-// promises the rest of the system it will. Silently ignoring that
-// promise for a domain the operator explicitly pointed elsewhere would
-// be worse than not matching it here at all: NDM's own object-group
-// dataplane (see config.L7SNIConfig's own doc comment) still routes it
-// correctly whenever this router's own DNS actually resolves it, this
-// just declines to be a second, conflicting path for entries this
-// feature has no way to honor properly.
+// Which lists: config.Config.L7SNIListEligible -- the managed Proxy interface
+// and the WG / TUN transports while they are on. A match only ever feeds the
+// one adaptive-routing ipset, which is redirected into whatever profile is the
+// current live egress of that same xray, so a name on a list routed into it
+// belongs there (L7-01 part 3/3 used to accept the Proxy interface only, which
+// left an operator whose lists go through the WG transport with a capture that
+// could never match). A list routed anywhere else -- a second VPN, the LTE
+// modem -- has an egress the redirect cannot honour; its names are not matched
+// and, see l7sniVetoFrom, are protected from the lists that are.
 func l7sniDomainsFrom(cfg *config.Config) l7sniDomainSet {
 	set := l7sniDomainSet{}
 	for _, rl := range cfg.Routing.Lists {
-		if !config.L7SNIListEligible(rl) {
+		if !cfg.L7SNIListEligible(rl) {
 			continue
 		}
-		for _, e := range rl.Entries {
-			kind, domain, err := config.ClassifyRouteEntry(e)
-			if err != nil || kind != config.RouteDomain {
-				continue
-			}
-			set[domain] = struct{}{}
-		}
+		addDomains(set, rl.Entries)
 	}
 	return set
+}
+
+// l7sniVetoFrom is the domain entries of cfg's enabled lists that are routed
+// somewhere other than our own xray. A host that falls under one of them is
+// never redirected by the capture, even if a list of ours also covers it: the
+// operator sent that name elsewhere on purpose (the LTE modem, a second VPN),
+// and the capture only ever sees a flow because the router's own routing did
+// not apply to it -- redirecting it into the tunnel would be the capture
+// overriding a decision it was not asked to second-guess.
+func l7sniVetoFrom(cfg *config.Config) l7sniDomainSet {
+	set := l7sniDomainSet{}
+	for _, rl := range cfg.Routing.Lists {
+		if rl.Disabled || cfg.L7SNIListEligible(rl) {
+			continue
+		}
+		addDomains(set, rl.Entries)
+	}
+	return set
+}
+
+// addDomains puts the domain entries of a list into set (IPs and subnets are
+// not names, and are skipped).
+func addDomains(set l7sniDomainSet, entries []string) int {
+	n := 0
+	for _, e := range entries {
+		kind, domain, err := config.ClassifyRouteEntry(e)
+		if err != nil || kind != config.RouteDomain {
+			continue
+		}
+		set[domain] = struct{}{}
+		n++
+	}
+	return n
 }
 
 // matches reports whether host is covered by this set -- exact, or as a
@@ -110,7 +129,7 @@ func l7sniEnabled(cfg *config.Config) bool {
 // so it's worth being able to build and test on any platform (including
 // the Windows box this project is developed on).
 func l7sniMatchesRoutes(cfg *config.Config, host string) bool {
-	return l7sniDomainsFrom(cfg).matches(host)
+	return l7sniSnapshot{domains: l7sniDomainsFrom(cfg), veto: []l7sniDomainSet{l7sniVetoFrom(cfg)}}.matchesName(host)
 }
 
 // l7sniSharedIPMaxAge bounds how long a previous SNI/Host sighting on an

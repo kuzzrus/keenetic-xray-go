@@ -88,25 +88,42 @@ func TestL7SNIScreen_ButtonsSayWhatTheyDoToQUIC(t *testing.T) {
 	wantAll(t, "screen text", text, "выключать её не нужно", "«QUIC выкл» его выключает")
 }
 
-// His setup: every list routed through Wireguard0. The screen says why the
-// capture only counts, naming the interface.
-func TestL7SNIShow_SaysWhyNothingIsMatched(t *testing.T) {
+// The L7 screen says what the capture matches names against, in the words of the
+// daemon's own hook -- and warns when that is nothing, since a running capture
+// that never redirects is otherwise a mystery.
+func TestL7SNIShow_SaysWhatTheCaptureMatchesAgainst(t *testing.T) {
 	h := newL7Handler(t)
 	h.Config.AdaptiveRoute.Enabled = true
 	h.Config.L7SNI = config.L7SNIConfig{Enabled: true}
-	h.Config.Routing.Lists = []config.RouteList{{Name: "telegram", Entries: []string{"t.me"}, Interface: "Wireguard0"}}
+
+	h.L7SNINames = func(context.Context) (string, bool) { return "Имена для сравнения: 5", false }
 	out, err := h.Handle(context.Background(), Command{Action: ActionL7SNIShow})
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantAll(t, "lists on Wireguard0", out, "через Proxy0 нет ни одного домена", "имена только считаются", "твои списки идут через Wireguard0")
+	wantAll(t, "names", out, "ℹ️ Имена для сравнения: 5")
+	wantNone(t, "names", out, "⚠️ Имена")
 
-	h.Config.Routing.Lists = []config.RouteList{{Name: "ru", Entries: []string{"youtube.com"}}}
+	h.L7SNINames = func(context.Context) (string, bool) {
+		return "Сравнивать не с чем: нет ни одного домена", true
+	}
 	out, _ = h.Handle(context.Background(), Command{Action: ActionL7SNIShow})
-	wantNone(t, "a Proxy0 list with a domain", out, "нет ни одного домена")
+	wantAll(t, "nothing to match", out, "⚠️ Сравнивать не с чем")
+
+	h.L7SNINames = func(context.Context) (string, bool) { return "", false }
+	out, _ = h.Handle(context.Background(), Command{Action: ActionL7SNIShow})
+	wantNone(t, "empty answer", out, "Имена", "Сравнивать")
+
+	h.L7SNINames = nil // an agent built without the hook
+	out, _ = h.Handle(context.Background(), Command{Action: ActionL7SNIShow})
+	wantNone(t, "no hook", out, "Имена", "Сравнивать")
 
 	h.Config.L7SNI.Enabled = false
-	h.Config.Routing.Lists = nil
+	called := false
+	h.L7SNINames = func(context.Context) (string, bool) { called = true; return "x", false }
 	out, _ = h.Handle(context.Background(), Command{Action: ActionL7SNIShow})
-	wantNone(t, "L7 SNI off", out, "нет ни одного домена")
+	if called {
+		t.Error("the router's lists are asked about while L7 SNI is off")
+	}
+	wantNone(t, "L7 off", out, "x\n")
 }

@@ -39,9 +39,11 @@ var (
 )
 
 // l7sniCaptureCheck is the text block for the places that show the counters: the
-// kernel's count per rule and, when something is wrong, what. f is the stats
-// file the daemon published, nil when there is none. Empty off a router and
-// while L7 SNI is off.
+// kernel's count per rule and, when something is wrong, what -- and what the
+// capture matches the names it reads against (l7sniNames), since a capture that
+// has nothing to match counts and redirects nothing, which the counters alone do
+// not explain. f is the stats file the daemon published, nil when there is none.
+// Empty off a router and while L7 SNI is off.
 func l7sniCaptureCheck(f *l7sniStatsFile) string {
 	if !l7sniCheckEnabled() {
 		return ""
@@ -50,7 +52,13 @@ func l7sniCaptureCheck(f *l7sniStatsFile) string {
 	defer cancel()
 	stats, err := l7sniRuleCounters(ctx)
 	wan, wanErr := l7sniDefaultRoute()
-	return strings.Join(renderL7SNICaptureCheck(stats, err, wan, wanErr, f), "\n")
+	lines := renderL7SNICaptureCheck(stats, err, wan, wanErr, f)
+	if cfg, err := config.Load(configPath()); err == nil {
+		if line, _ := l7sniNamesNow(cfg); line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // l7sniQUICSilentMinTCP is how many TCP packets the rules must have counted

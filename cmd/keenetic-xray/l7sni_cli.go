@@ -78,8 +78,8 @@ func transportL7SNI(cfg *config.Config, args []string) error {
 	if cfg.L7SNI.Enabled && !cfg.AdaptiveRoute.Enabled {
 		fmt.Println(l7sniNeedsAdaptiveNote)
 	}
-	if note := l7sniNoListsNote(cfg); note != "" {
-		fmt.Println("ℹ️ " + note)
+	if line, none := l7sniNamesNow(cfg); none {
+		fmt.Println("ℹ️ " + line)
 	}
 	offerDaemonRestart(bufio.NewReader(os.Stdin))
 	return nil
@@ -137,6 +137,9 @@ func transportL7SNIQUIC(cfg *config.Config, args []string) error {
 	for _, hint := range l7sniQUICHints(cfg) {
 		fmt.Println("  " + hint)
 	}
+	if line, none := l7sniQUICNamesWarning(cfg); none {
+		fmt.Println("  " + line)
+	}
 	applyDaemonChange(bufio.NewReader(os.Stdin), true)
 
 	if cfg.L7SNI.Enabled && keenetic.Available() {
@@ -178,15 +181,11 @@ func printL7SNIState(w io.Writer, cfg *config.Config) {
 		fmt.Fprintln(w, "l7sni: выкл")
 	}
 	fmt.Fprintln(w, l7sniQUICLine(cfg))
-	noList := l7sniNoListsNote(cfg)
 	for _, hint := range l7sniQUICHints(cfg) {
 		fmt.Fprintln(w, "  "+hint)
-		if hint == noList {
-			noList = "" // said already: the "act" hints carry it
-		}
 	}
-	if noList != "" {
-		fmt.Fprintln(w, "  "+noList)
+	if line, _ := l7sniNamesNow(cfg); line != "" {
+		fmt.Fprintln(w, "  "+line)
 	}
 }
 
@@ -253,9 +252,6 @@ func l7sniQUICHints(cfg *config.Config) []string {
 		out = append(out, "включить адаптивную маршрутизацию (иначе совпавшие имена не переправляются): keenetic-xray transport adaptive on")
 	}
 	if eff == config.L7SNIQUICAct {
-		if note := l7sniNoListsNote(cfg); note != "" {
-			out = append(out, note)
-		}
 		out = append(out, "браузеры сами уходят на TCP, когда QUIC к адресу отбит; приложение без запасного пути на TCP останется без QUIC к этому адресу")
 	}
 	if eff != config.L7SNIQUICOff {
@@ -264,24 +260,23 @@ func l7sniQUICHints(cfg *config.Config) []string {
 	return out
 }
 
-// l7sniNoListsNote says why L7 SNI can only count: no route list the capture
-// looks at holds a domain. The capture matches Proxy0 lists only, so an operator
-// whose lists are all routed through Wireguard0 (the WG transport) saw a running
-// capture, zero matches and no explanation. Empty when there is something to
-// match against, and while L7 SNI is off.
-func l7sniNoListsNote(cfg *config.Config) string {
-	if !cfg.L7SNI.Enabled {
-		return ""
+// l7sniQUICNamesWarning is the "nothing to redirect" warning for the QUIC
+// command: only an "act" that really acts has anything to say about it (observe
+// counts, and needs no list), and only when there is nothing to match against.
+func l7sniQUICNamesWarning(cfg *config.Config) (line string, none bool) {
+	if cfg.EffectiveL7SNIQUIC() != config.L7SNIQUICAct {
+		return "", false
 	}
-	domains, others := cfg.L7SNIListSummary()
-	if domains > 0 {
-		return ""
-	}
-	msg := "в списках маршрутов через Proxy0 нет ни одного домена — переправлять нечего, имена только считаются"
-	if len(others) > 0 {
-		msg += " (твои списки идут через " + strings.Join(others, ", ") + ", а их захват не смотрит)"
-	}
-	return msg
+	return l7sniNamesNow(cfg)
+}
+
+// l7sniNamesNow is the sentence about what the capture matches against, for a
+// command run by hand: it may read the router's lists itself (a second or so),
+// which the daemon's own callers avoid by their cache. Empty while L7 SNI is off.
+func l7sniNamesNow(cfg *config.Config) (line string, none bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), l7sniRouterReadTimeout+5*time.Second)
+	defer cancel()
+	return l7sniNamesLine(ctx, cfg)
 }
 
 // noL7SNIStatsMessage is what a missing stats file means to the operator.

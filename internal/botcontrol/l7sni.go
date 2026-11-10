@@ -146,7 +146,7 @@ func (h *RouterHandler) l7sniStats() (string, error) {
 // off, what to press. The screen used to be static text, and an operator who
 // saw "QUIC-перехват: выкл" in the answer to a button had no way to tell a
 // state from a button, nor which of the three buttons next to it turns it on.
-func (h *RouterHandler) l7sniShow() string {
+func (h *RouterHandler) l7sniShow(ctx context.Context) string {
 	cfg := h.Config
 	var b strings.Builder
 	b.WriteString("🎯 Адаптивная маршрутизация: " + onOffRU(cfg.AdaptiveRoute.Enabled))
@@ -161,16 +161,16 @@ func (h *RouterHandler) l7sniShow() string {
 	if !cfg.AdaptiveRoute.Enabled {
 		b.WriteString("\n⚠️ Адаптивная маршрутизация выключена — включи её на экране выше (⬅️ Назад): без неё L7 SNI ничего не переправляет, только считает. Выключать её ради L7 не нужно.")
 	}
-	if cfg.L7SNI.Enabled {
-		// The capture matches names against the lists routed through Proxy0
-		// only; an operator whose lists go through Wireguard0 saw it run, count
-		// and never match, with nothing to say why.
-		if domains, others := cfg.L7SNIListSummary(); domains == 0 {
-			b.WriteString("\nℹ️ В списках маршрутов через Proxy0 нет ни одного домена — переправлять нечего, имена только считаются")
-			if len(others) > 0 {
-				b.WriteString(" (твои списки идут через " + strings.Join(others, ", ") + ", а их захват не смотрит)")
+	if cfg.L7SNI.Enabled && h.L7SNINames != nil {
+		// What the capture matches names against -- the config's lists and the
+		// router's own -- and, when that is nothing, why a running capture never
+		// redirects. Worded by the daemon, like the CLI's, so the two agree.
+		if line, none := h.L7SNINames(ctx); line != "" {
+			mark := "ℹ️ "
+			if none {
+				mark = "⚠️ "
 			}
-			b.WriteString(".")
+			b.WriteString("\n" + mark + line)
 		}
 	}
 	return b.String()

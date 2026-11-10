@@ -63,13 +63,11 @@ func TestL7SNIQUICHints(t *testing.T) {
 		t.Errorf("observe, l7sni off should point at `l7sni on`: %q", off)
 	}
 
+	// what the capture matches against is said by l7sniNames.line (it may need the
+	// router), not by the hints
 	act := l7sniTestConfig(true, true, "act")
-	if h := strings.Join(l7sniQUICHints(act), "|"); !strings.Contains(h, "нет ни одного домена") {
-		t.Errorf("act without route-list domains should say there is nothing to redirect: %q", h)
-	}
-	act.Routing.Lists = []config.RouteList{{Name: "ru-blocked", Entries: []string{"youtube.com"}}}
 	if h := strings.Join(l7sniQUICHints(act), "|"); strings.Contains(h, "нет ни одного домена") {
-		t.Errorf("act with a domain on a list still warns about an empty list: %q", h)
+		t.Errorf("the hints speak about the lists again: %q", h)
 	}
 }
 
@@ -341,7 +339,7 @@ func TestL7SNIQUICHints_FollowTheEffectiveMode(t *testing.T) {
 		cfg           *config.Config
 		want, wantNot []string
 	}{
-		{"act in effect", l7sniTestConfig(true, true, "act"), []string{warn, noList, stats}, []string{l7on, adaptOn}},
+		{"act in effect", l7sniTestConfig(true, true, "act"), []string{warn, stats}, []string{l7on, adaptOn, noList}},
 		{"act, adaptive routing off: it only observes", l7sniTestConfig(true, false, "act"), []string{adaptOn, stats}, []string{warn, noList, l7on}},
 		{"act, l7sni off: nothing runs", l7sniTestConfig(false, true, "act"), []string{l7on}, []string{warn, noList, stats, adaptOn}},
 		{"act, both off", l7sniTestConfig(false, false, "act"), []string{l7on, adaptOn}, []string{warn, noList, stats}},
@@ -361,63 +359,5 @@ func TestL7SNIQUICHints_FollowTheEffectiveMode(t *testing.T) {
 				t.Errorf("%s: hints %q should not contain %q", tc.name, got, w)
 			}
 		}
-	}
-}
-
-// The capture matches Proxy0 lists only. An operator whose lists go through the
-// WG transport used to see a running capture, zero matches and no reason; the
-// note names the interfaces the capture does not look at.
-func TestL7SNINoListsNote(t *testing.T) {
-	cfg := l7sniTestConfig(true, true, "")
-	cfg.Routing.Lists = []config.RouteList{
-		{Name: "telegram", Entries: []string{"t.me"}, Interface: "Wireguard0"},
-		{Name: "telegram-ip", Entries: []string{"149.154.160.0/20"}, Interface: "Wireguard0"},
-	}
-	note := l7sniNoListsNote(cfg)
-	for _, want := range []string{"через Proxy0 нет ни одного домена", "имена только считаются", "твои списки идут через Wireguard0"} {
-		if !strings.Contains(note, want) {
-			t.Errorf("note %q lacks %q", note, want)
-		}
-	}
-
-	cfg.Routing.Lists = nil
-	if note := l7sniNoListsNote(cfg); !strings.Contains(note, "нет ни одного домена") || strings.Contains(note, "твои списки") {
-		t.Errorf("no lists at all: %q", note)
-	}
-
-	cfg.Routing.Lists = []config.RouteList{{Name: "ru", Entries: []string{"youtube.com"}}}
-	if note := l7sniNoListsNote(cfg); note != "" {
-		t.Errorf("a Proxy0 list with a domain: the note should be silent, got %q", note)
-	}
-	cfg.Routing.Lists = nil
-	cfg.L7SNI.Enabled = false
-	if note := l7sniNoListsNote(cfg); note != "" {
-		t.Errorf("L7 SNI off: the note should be silent, got %q", note)
-	}
-}
-
-func TestPrintL7SNIState_SaysWhyThereIsNothingToMatch(t *testing.T) {
-	cfg := l7sniTestConfig(true, true, "")
-	cfg.Routing.Lists = []config.RouteList{{Name: "telegram", Entries: []string{"t.me"}, Interface: "Wireguard0"}}
-	var b bytes.Buffer
-	printL7SNIState(&b, cfg)
-	if !strings.Contains(b.String(), "твои списки идут через Wireguard0") {
-		t.Errorf("show does not say why nothing is matched:\n%s", b.String())
-	}
-
-	// the "act" hints carry the same sentence: it must not be printed twice
-	act := l7sniTestConfig(true, true, "act")
-	act.Routing.Lists = cfg.Routing.Lists
-	b.Reset()
-	printL7SNIState(&b, act)
-	if n := strings.Count(b.String(), "нет ни одного домена"); n != 1 {
-		t.Errorf("the no-lists sentence is printed %d times, want once:\n%s", n, b.String())
-	}
-
-	cfg.Routing.Lists = []config.RouteList{{Name: "ru", Entries: []string{"youtube.com"}}}
-	b.Reset()
-	printL7SNIState(&b, cfg)
-	if strings.Contains(b.String(), "нет ни одного домена") {
-		t.Errorf("show warns about empty lists although a Proxy0 list has a domain:\n%s", b.String())
 	}
 }

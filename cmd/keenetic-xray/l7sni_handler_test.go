@@ -218,16 +218,40 @@ func TestHandler_TLSECHExtensionIsCounted(t *testing.T) {
 	}
 }
 
-func TestHandler_TLSDisabledOrNoDomainsDoesNothing(t *testing.T) {
-	for name, snap := range map[string]l7sniSnapshot{
-		"adaptive routing / l7sni off": {enabled: false, domains: l7sniDomainSet{"youtube.com": {}}, quic: config.L7SNIQUICOff},
-		"no route lists":               {enabled: true, ttl: time.Hour, quic: config.L7SNIQUICOff},
-	} {
-		r := newRig(t)
-		r.feed(clientHelloPacket("www.youtube.com", 443), snap)
-		if len(r.redirects) != 0 || r.count(statTLSHello) != 0 {
-			t.Errorf("%s: acted or counted: %+v hello=%d", name, r.redirects, r.count(statTLSHello))
-		}
+// With L7 SNI (or adaptive routing) off the capture parses nothing at all.
+func TestHandler_DisabledDoesNothing(t *testing.T) {
+	snap := l7sniSnapshot{enabled: false, domains: l7sniDomainSet{"youtube.com": {}}, quic: config.L7SNIQUICOff}
+	r := newRig(t)
+	r.feed(clientHelloPacket("www.youtube.com", 443), snap)
+	if len(r.redirects) != 0 || r.count(statTLSHello) != 0 {
+		t.Errorf("acted or counted while disabled: %+v hello=%d", r.redirects, r.count(statTLSHello))
+	}
+}
+
+// The counters must not depend on a route list. On a router whose lists are all
+// routed through Wireguard0 the capture looks at none of them, and the TLS and
+// HTTP counters stayed at zero next to a capture that was receiving packets:
+// "L7 counters always empty". Names are read and counted -- and nothing is
+// redirected, there is nothing to match.
+func TestHandler_NamesAreCountedWithoutRouteLists(t *testing.T) {
+	snap := l7sniSnapshot{enabled: true, ttl: time.Hour, quic: config.L7SNIQUICOff}
+	r := newRig(t)
+	r.feed(clientHelloPacket("www.youtube.com", 443), snap)
+	r.feed(rawTCPv4(testClient, testServer, 40000, 80, 1, nil, []byte("GET / HTTP/1.1\r\nHost: blocked.example\r\n\r\n")), snap)
+
+	if r.count(statTLSHello) != 1 || r.count(statTLSName) != 1 || r.count(statHTTPHost) != 1 {
+		t.Errorf("hello=%d name=%d http=%d, want 1/1/1", r.count(statTLSHello), r.count(statTLSName), r.count(statHTTPHost))
+	}
+	if r.count(statTLSMatch) != 0 || r.count(statHTTPMatch) != 0 || len(r.redirects) != 0 || len(r.drops) != 0 {
+		t.Errorf("matched or redirected with no list to match: tls=%d http=%d redirects=%+v drops=%+v",
+			r.count(statTLSMatch), r.count(statHTTPMatch), r.redirects, r.drops)
+	}
+	seen := map[string]bool{}
+	for _, n := range r.stats.snapshot(time.Now(), "").Top {
+		seen[n.Proto+" "+n.Host] = true
+	}
+	if !seen["tls www.youtube.com"] || !seen["http blocked.example"] {
+		t.Errorf("the names are missing from the most-seen list: %v", seen)
 	}
 }
 

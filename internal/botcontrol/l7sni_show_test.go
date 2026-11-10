@@ -87,3 +87,26 @@ func TestL7SNIScreen_ButtonsSayWhatTheyDoToQUIC(t *testing.T) {
 	text := l7sniScreenText("home", "")
 	wantAll(t, "screen text", text, "выключать её не нужно", "«QUIC выкл» его выключает")
 }
+
+// His setup: every list routed through Wireguard0. The screen says why the
+// capture only counts, naming the interface.
+func TestL7SNIShow_SaysWhyNothingIsMatched(t *testing.T) {
+	h := newL7Handler(t)
+	h.Config.AdaptiveRoute.Enabled = true
+	h.Config.L7SNI = config.L7SNIConfig{Enabled: true}
+	h.Config.Routing.Lists = []config.RouteList{{Name: "telegram", Entries: []string{"t.me"}, Interface: "Wireguard0"}}
+	out, err := h.Handle(context.Background(), Command{Action: ActionL7SNIShow})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantAll(t, "lists on Wireguard0", out, "через Proxy0 нет ни одного домена", "имена только считаются", "твои списки идут через Wireguard0")
+
+	h.Config.Routing.Lists = []config.RouteList{{Name: "ru", Entries: []string{"youtube.com"}}}
+	out, _ = h.Handle(context.Background(), Command{Action: ActionL7SNIShow})
+	wantNone(t, "a Proxy0 list with a domain", out, "нет ни одного домена")
+
+	h.Config.L7SNI.Enabled = false
+	h.Config.Routing.Lists = nil
+	out, _ = h.Handle(context.Background(), Command{Action: ActionL7SNIShow})
+	wantNone(t, "L7 SNI off", out, "нет ни одного домена")
+}

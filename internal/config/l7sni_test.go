@@ -78,3 +78,56 @@ func TestConfig_EffectiveL7SNIQUIC(t *testing.T) {
 		}
 	}
 }
+
+// His real shape: every list routed through the WG transport. The capture looks
+// at Proxy0 lists only, so it has nothing to match -- and the summary says which
+// interface the lists it ignores are on.
+func TestL7SNIListSummary_ListsOnAnotherInterfaceAreNamedNotCounted(t *testing.T) {
+	c := Default()
+	c.Routing.Lists = []RouteList{
+		{Name: "telegram", Entries: []string{"t.me", "telegram.org"}, Interface: "Wireguard0"},
+		{Name: "telegram-ip", Entries: []string{"149.154.160.0/20"}, Interface: "Wireguard0"},
+	}
+	domains, others := c.L7SNIListSummary()
+	if domains != 0 || len(others) != 1 || others[0] != "Wireguard0" {
+		t.Errorf("summary = %d, %v, want 0 domains and [Wireguard0]", domains, others)
+	}
+}
+
+func TestL7SNIListSummary_CountsProxy0DomainsOnly(t *testing.T) {
+	c := Default()
+	c.Routing.Lists = []RouteList{
+		{Name: "default-iface", Entries: []string{"youtube.com", "10.0.0.0/8", "googlevideo.com"}},
+		{Name: "explicit", Entries: []string{"instagram.com"}, Interface: "Proxy0"},
+		{Name: "off", Entries: []string{"x.com"}, Disabled: true},
+		{Name: "wg", Entries: []string{"t.me"}, Interface: "Wireguard1"},
+		{Name: "tun", Entries: []string{"example.org"}, Interface: "OpkgTun0"},
+		{Name: "wg2", Entries: []string{"t.co"}, Interface: "Wireguard1"},
+		{Name: "ips-only", Entries: []string{"1.2.3.4"}, Interface: "Wireguard9"},
+	}
+	domains, others := c.L7SNIListSummary()
+	if domains != 3 {
+		t.Errorf("domains = %d, want 3 (the two of the default list and the explicit Proxy0 one; the CIDR and the disabled list do not count)", domains)
+	}
+	if len(others) != 2 || others[0] != "OpkgTun0" || others[1] != "Wireguard1" {
+		t.Errorf("skipped interfaces = %v, want [OpkgTun0 Wireguard1] (sorted, once each, no IP-only lists)", others)
+	}
+}
+
+func TestL7SNIListEligible(t *testing.T) {
+	cases := []struct {
+		name string
+		rl   RouteList
+		want bool
+	}{
+		{"default interface", RouteList{}, true},
+		{"explicit Proxy0", RouteList{Interface: "Proxy0"}, true},
+		{"another interface", RouteList{Interface: "Wireguard0"}, false},
+		{"disabled", RouteList{Disabled: true}, false},
+	}
+	for _, tc := range cases {
+		if got := L7SNIListEligible(tc.rl); got != tc.want {
+			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

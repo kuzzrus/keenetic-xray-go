@@ -151,6 +151,12 @@ func writeDiag(w io.Writer) {
 			}
 			fmt.Fprintf(w, ":%-5d %-30s %s\n", c.port, c.name, state)
 		}
+		if cfg.AdaptiveRoute.Enabled {
+			// The probe is a plain connect to a transparent inbound, which xray
+			// answers with this line in the log; seen in a pasted bundle it
+			// looked like a fault.
+			fmt.Fprintln(w, "(проверка слушающих портов — наш пробный коннект: xray может записать в лог «loopback connection detected», это не ошибка)")
+		}
 	}
 
 	if cfgErr == nil && cfg.AdaptiveRoute.Enabled && keenetic.Available() {

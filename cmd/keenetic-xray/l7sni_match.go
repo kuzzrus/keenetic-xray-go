@@ -43,7 +43,7 @@ type l7sniDomainSet map[string]struct{}
 func l7sniDomainsFrom(cfg *config.Config) l7sniDomainSet {
 	set := l7sniDomainSet{}
 	for _, rl := range cfg.Routing.Lists {
-		if rl.Disabled || rl.RouteIface() != "Proxy0" {
+		if !config.L7SNIListEligible(rl) {
 			continue
 		}
 		for _, e := range rl.Entries {

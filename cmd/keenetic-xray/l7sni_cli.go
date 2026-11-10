@@ -78,6 +78,9 @@ func transportL7SNI(cfg *config.Config, args []string) error {
 	if cfg.L7SNI.Enabled && !cfg.AdaptiveRoute.Enabled {
 		fmt.Println(l7sniNeedsAdaptiveNote)
 	}
+	if note := l7sniNoListsNote(cfg); note != "" {
+		fmt.Println("ℹ️ " + note)
+	}
 	offerDaemonRestart(bufio.NewReader(os.Stdin))
 	return nil
 }
@@ -175,8 +178,15 @@ func printL7SNIState(w io.Writer, cfg *config.Config) {
 		fmt.Fprintln(w, "l7sni: выкл")
 	}
 	fmt.Fprintln(w, l7sniQUICLine(cfg))
+	noList := l7sniNoListsNote(cfg)
 	for _, hint := range l7sniQUICHints(cfg) {
 		fmt.Fprintln(w, "  "+hint)
+		if hint == noList {
+			noList = "" // said already: the "act" hints carry it
+		}
+	}
+	if noList != "" {
+		fmt.Fprintln(w, "  "+noList)
 	}
 }
 
@@ -243,8 +253,8 @@ func l7sniQUICHints(cfg *config.Config) []string {
 		out = append(out, "включить адаптивную маршрутизацию (иначе совпавшие имена не переправляются): keenetic-xray transport adaptive on")
 	}
 	if eff == config.L7SNIQUICAct {
-		if len(l7sniDomainsFrom(cfg)) == 0 {
-			out = append(out, "в списках маршрутов (Proxy0) нет ни одного домена — переправлять нечего")
+		if note := l7sniNoListsNote(cfg); note != "" {
+			out = append(out, note)
 		}
 		out = append(out, "браузеры сами уходят на TCP, когда QUIC к адресу отбит; приложение без запасного пути на TCP останется без QUIC к этому адресу")
 	}
@@ -252,6 +262,26 @@ func l7sniQUICHints(cfg *config.Config) []string {
 		out = append(out, "что насчиталось: keenetic-xray transport l7sni stats")
 	}
 	return out
+}
+
+// l7sniNoListsNote says why L7 SNI can only count: no route list the capture
+// looks at holds a domain. The capture matches Proxy0 lists only, so an operator
+// whose lists are all routed through Wireguard0 (the WG transport) saw a running
+// capture, zero matches and no explanation. Empty when there is something to
+// match against, and while L7 SNI is off.
+func l7sniNoListsNote(cfg *config.Config) string {
+	if !cfg.L7SNI.Enabled {
+		return ""
+	}
+	domains, others := cfg.L7SNIListSummary()
+	if domains > 0 {
+		return ""
+	}
+	msg := "в списках маршрутов через Proxy0 нет ни одного домена — переправлять нечего, имена только считаются"
+	if len(others) > 0 {
+		msg += " (твои списки идут через " + strings.Join(others, ", ") + ", а их захват не смотрит)"
+	}
+	return msg
 }
 
 // noL7SNIStatsMessage is what a missing stats file means to the operator.

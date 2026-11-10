@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"github.com/kuzzrus/keenetic-xray-go/internal/opkg"
 )
 
 // mssComment tags the one mangle rule this project manages, so it can be
@@ -25,16 +27,11 @@ var (
 		out, err := exec.CommandContext(ctx, "iptables", "-t", "mangle", "-S", "FORWARD").Output()
 		return string(out), err
 	}
-	iptablesPresent     = func() bool { return exec.Command("iptables", "-V").Run() == nil }
-	opkgInstallIptables = func(ctx context.Context) error {
-		// `opkg update` first, best-effort: a router that's never run it
-		// (or hasn't in a while) can have a stale/empty local package
-		// index, which makes `opkg install <name>` fail as "not found"
-		// even though the package genuinely exists in the feed -- same
-		// reasoning as internal/addons' own opkgInstall helper.
-		_ = exec.CommandContext(ctx, "opkg", "update").Run()
-		return exec.CommandContext(ctx, "opkg", "install", "iptables").Run()
-	}
+	iptablesPresent = func() bool { return exec.Command("iptables", "-V").Run() == nil }
+	// opkg.Install runs `opkg update` first (a router that has never run it
+	// has an empty package index and `opkg install` then says "not found")
+	// and turns a failure into a reason an operator can act on.
+	opkgInstallIptables = func(ctx context.Context) error { return opkg.Install(ctx, "iptables") }
 )
 
 // IptablesPresent reports whether `iptables` is runnable right now (no

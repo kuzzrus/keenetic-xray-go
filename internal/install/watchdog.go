@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/kuzzrus/keenetic-xray-go/internal/opkg"
 )
 
 // WatchdogMarker tags the cron line this package manages, so it can be
@@ -249,10 +251,9 @@ var (
 		// (internal/botcontrol/commands.go) for the fuller incident.
 		ctx, cancel := context.WithTimeout(context.Background(), cronOpkgTimeout)
 		defer cancel()
-		// `opkg update` first, best-effort -- same reasoning as
-		// internal/addons' own opkgInstall helper.
-		_ = exec.CommandContext(ctx, "opkg", "update").Run()
-		return exec.CommandContext(ctx, "opkg", "install", "cron").Run()
+		// opkg.Install: `opkg update` first, and a failure comes back with
+		// a reason an operator can act on, not a bare exit status.
+		return opkg.Install(ctx, "cron")
 	}
 )
 

@@ -37,6 +37,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/kuzzrus/keenetic-xray-go/internal/opkg"
 )
 
 // RedirectSetName is the one ipset this project's adaptive-routing
@@ -79,16 +81,11 @@ var (
 		out, err := exec.CommandContext(ctx, "ipset", args...).Output()
 		return string(out), err
 	}
-	ipsetPresent     = func() bool { return exec.Command("ipset", "-v").Run() == nil }
-	opkgInstallIPSet = func(ctx context.Context) error {
-		// `opkg update` first, best-effort -- same reasoning as
-		// internal/addons' own opkgInstall helper and keenetic.
-		// opkgInstallIptables: a stale/empty local package index makes
-		// `opkg install <name>` fail as "not found" even when the
-		// package genuinely exists in the feed.
-		_ = exec.CommandContext(ctx, "opkg", "update").Run()
-		return exec.CommandContext(ctx, "opkg", "install", "ipset").Run()
-	}
+	ipsetPresent = func() bool { return exec.Command("ipset", "-v").Run() == nil }
+	// opkg.Install runs `opkg update` first (a stale index makes the install
+	// fail as "not found") and turns a failure into a reason an operator can
+	// act on instead of a bare exit status.
+	opkgInstallIPSet = func(ctx context.Context) error { return opkg.Install(ctx, "ipset") }
 )
 
 // runLogged runs name with args and, on failure, folds the process's

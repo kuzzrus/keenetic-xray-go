@@ -27,11 +27,45 @@ var (
 	iptablesRun = func(ctx context.Context, args ...string) error {
 		return runLoggedCmd(ctx, "iptables", args...)
 	}
-	iptablesListFORWARD = func(ctx context.Context) (string, error) {
-		out, err := exec.CommandContext(ctx, "iptables", "-S", "FORWARD").Output()
+	// iptablesListFORWARD is `iptables -t <table> -S FORWARD`: the rules, as
+	// commands that would recreate them.
+	iptablesListFORWARD = func(ctx context.Context, table string) (string, error) {
+		out, err := exec.CommandContext(ctx, "iptables", "-t", table, "-S", "FORWARD").Output()
+		return string(out), err
+	}
+	// iptablesListCounters is `iptables -t <table> -L FORWARD -v -n -x`: the
+	// same chain as a table with the packet and byte count of every rule (-x:
+	// exact numbers, not 12K).
+	iptablesListCounters = func(ctx context.Context, table string) (string, error) {
+		out, err := exec.CommandContext(ctx, "iptables", "-t", table, "-L", "FORWARD", "-v", "-n", "-x").Output()
 		return string(out), err
 	}
 )
+
+// ruleTable is the iptables table our NFLOG rules live in, in its FORWARD
+// chain; legacyRuleTable is where every build up to v0.32.111 put them.
+//
+// mangle, not filter. Found live (2026-11-10, after the capture's counters had
+// stayed empty on a router since the feature shipped): on a Keenetic
+// filter/FORWARD has the policy DROP and the firmware ACCEPTs what it allows
+// inside the chain, so a rule appended there sees only what nothing before it
+// let through -- never a client's ClientHello. The rules matched nothing, the
+// NFLOG socket never read a packet, and the log said "capturing" the whole
+// time. Reproduced on a real kernel in a network namespace: with a DROP-policy
+// FORWARD chain that accepts ESTABLISHED first, the filter rules counted 0
+// packets while the accept rule counted them all. mangle/FORWARD is traversed
+// before filter/FORWARD and carries no verdicts of its own; it is where
+// HydraRoute puts the same rules and where this project's MSS clamp already
+// lives.
+const (
+	ruleTable       = "mangle"
+	legacyRuleTable = "filter"
+)
+
+// DefaultGroup is the NFLOG group number this project uses for its own
+// capture. ClearRules, which is told nothing about its caller's options, knows
+// our rules by it.
+const DefaultGroup uint16 = 4210
 
 // runLoggedCmd runs name with args and, on failure, folds the process's
 // combined stdout+stderr into the returned error -- a bare exec error
@@ -227,22 +261,29 @@ func ruleSpecs(o RuleOptions) []ruleSpec {
 // this; its worst case is the same self-healing duplicate.)
 var rulesMu sync.Mutex
 
-// EnsureRules installs opts' NFLOG rules in filter/FORWARD, removing any
-// stale copy of ours first (a different WAN interface or group) --
+// EnsureRules installs opts' NFLOG rules in mangle/FORWARD (see ruleTable for
+// why not filter), removing any stale copy of ours first -- a different WAN
+// interface or group, and the copies an older build put in filter/FORWARD --
 // same clear-then-add idempotency as internal/adaptiveroute's own
-// EnsureRedirect. Falls back to rules without the `comment` match if
-// this iptables build doesn't have that module, same fallback that
-// function already established for this project.
+// EnsureRedirect. Falls back to rules without the `comment` match if this
+// iptables build doesn't have that module, same fallback that function already
+// established for this project.
+//
+// The rules are INSERTED at the head of the chain (positions 1..n, in the order
+// of ruleSpecs), not appended: nothing the firmware keeps in the chain, now or
+// in a later release, can then decide a packet before the capture has seen it.
+// That is the exact failure the move out of filter fixed, and the one place
+// where a silent zero would cost a router's worth of guessing again.
 func EnsureRules(ctx context.Context, opts RuleOptions) error {
 	if err := opts.validate(); err != nil {
 		return err
 	}
 	rulesMu.Lock()
 	defer rulesMu.Unlock()
-	clearOurRules(ctx)
+	clearOurRules(ctx, opts.Group)
 	add := func(withComment bool) error {
-		for _, spec := range ruleSpecs(opts) {
-			args := append([]string{"-A", "FORWARD"}, spec.args()...)
+		for i, spec := range ruleSpecs(opts) {
+			args := append([]string{"-t", ruleTable, "-I", "FORWARD", strconv.Itoa(i + 1)}, spec.args()...)
 			if withComment {
 				args = append(args, "-m", "comment", "--comment", l7RuleComment)
 			}
@@ -255,7 +296,7 @@ func EnsureRules(ctx context.Context, opts RuleOptions) error {
 	if add(true) == nil {
 		return nil
 	}
-	clearOurRules(ctx) // clean up any partial add before retrying
+	clearOurRules(ctx, opts.Group) // clean up any partial add before retrying
 	if err := add(false); err != nil {
 		return fmt.Errorf("adding NFLOG rules (group %d): %w", opts.Group, err)
 	}
@@ -274,11 +315,15 @@ func EnsureRules(ctx context.Context, opts RuleOptions) error {
 // next reconcile runs EnsureRules (clear ours, add the wanted set) instead
 // of leaving the old filter in place forever because everything the new
 // code asks for happens to be there too.
+//
+// A rule of ours still sitting in the table an older build used (filter, see
+// ruleTable) counts as drift too: it matches nothing there, but only EnsureRules
+// removes it, and a router that was updated in place has it until then.
 func RulesInPlace(ctx context.Context, opts RuleOptions) bool {
 	if opts.validate() != nil {
 		return false
 	}
-	out, err := iptablesListFORWARD(ctx)
+	out, err := iptablesListFORWARD(ctx, ruleTable)
 	if err != nil {
 		return false
 	}
@@ -289,28 +334,40 @@ func RulesInPlace(ctx context.Context, opts RuleOptions) bool {
 			return false
 		}
 	}
-	return ownRuleCount(lines, opts.Group) == len(specs)
+	if ownRuleCount(lines, opts.Group) != len(specs) {
+		return false
+	}
+	if legacy, err := iptablesListFORWARD(ctx, legacyRuleTable); err == nil && ownRuleCount(strings.Split(legacy, "\n"), opts.Group) > 0 {
+		return false
+	}
+	return true
 }
 
-// ownRuleCount counts the filter/FORWARD lines that feed our NFLOG group.
-// Counted by group rather than by isOurRule: another tool's NFLOG rule
-// with connbytes in the same chain must not read as ours here, or this
-// would call the chain drifted forever and reinstall on every reconcile.
+// ownRuleCount counts the FORWARD lines that feed our NFLOG group. Counted by
+// group rather than by comment: another tool's NFLOG rule with connbytes in the
+// same chain (HydraRoute keeps its own in mangle/FORWARD, with its own group)
+// must not read as ours here, or this would call the chain drifted forever and
+// reinstall on every reconcile.
 func ownRuleCount(lines []string, group uint16) int {
-	want := "-j NFLOG --nflog-group " + strconv.Itoa(int(group))
 	n := 0
 	for _, line := range lines {
-		if !strings.HasPrefix(line, "-A FORWARD ") {
-			continue
-		}
-		if i := strings.Index(line, want); i >= 0 {
-			rest := line[i+len(want):]
-			if rest == "" || rest[0] == ' ' {
-				n++
-			}
+		if strings.HasPrefix(line, "-A FORWARD ") && feedsGroup(line, group) {
+			n++
 		}
 	}
 	return n
+}
+
+// feedsGroup reports whether an `iptables -S` line ends in the NFLOG target of
+// the given group.
+func feedsGroup(line string, group uint16) bool {
+	want := "-j NFLOG --nflog-group " + strconv.Itoa(int(group))
+	i := strings.Index(line, want)
+	if i < 0 {
+		return false
+	}
+	rest := line[i+len(want):]
+	return rest == "" || rest[0] == ' '
 }
 
 func anyForwardLineHasAll(lines []string, want ...string) bool {
@@ -333,22 +390,26 @@ func anyForwardLineHasAll(lines []string, want ...string) bool {
 }
 
 // isOurRule matches an `iptables -S FORWARD` line this file would have
-// produced: our comment, or (on a build without the comment match) the
-// NFLOG target with our own group's signature. group is passed as a
-// literal number, not a struct, since ClearRules doesn't otherwise need
-// to know which options originally installed the rules it's removing.
-func isOurRule(line, comment string) bool {
-	if strings.Contains(line, comment) {
-		return true
+// produced: our comment, or (on a build without the comment match) the NFLOG
+// target of our own group. Not "any NFLOG rule with connbytes", which an
+// earlier version of this matched: with the rules in mangle/FORWARD that is
+// the chain HydraRoute keeps its own L7 rules in, and clearing ours would have
+// taken its rules with them.
+func isOurRule(line string, group uint16) bool {
+	if !strings.HasPrefix(line, "-A FORWARD ") {
+		return false
 	}
-	return strings.Contains(line, "-j NFLOG") && strings.Contains(line, "--connbytes-dir original")
+	return strings.Contains(line, l7RuleComment) || feedsGroup(line, group)
 }
 
-// ClearRules removes this file's NFLOG rules. A no-op when none exist.
+// ClearRules removes this file's NFLOG rules, from mangle and from the table an
+// older build used. A no-op when none exist. Our rules are told apart from
+// anyone else's by comment, or by DefaultGroup on a build without the comment
+// match.
 func ClearRules(ctx context.Context) error {
 	rulesMu.Lock()
 	defer rulesMu.Unlock()
-	return clearOurRules(ctx)
+	return clearOurRules(ctx, DefaultGroup)
 }
 
 // unquote strips one layer of surrounding double quotes -- real
@@ -369,27 +430,111 @@ func unquote(s string) string {
 	return s
 }
 
-// clearOurRules deletes every filter/FORWARD rule that is ours (see
-// isOurRule), reading the live spec back with `-S` so the `-D` matches
-// byte-for-byte whatever is actually there.
-func clearOurRules(ctx context.Context) error {
-	out, err := iptablesListFORWARD(ctx)
-	if err != nil {
-		return nil // nothing to list; not a cleanup failure worth reporting
-	}
+// clearOurRules deletes every rule of ours (see isOurRule) from FORWARD in both
+// tables we have ever used -- the current one and the one an older build
+// installed into -- reading the live spec back with `-S` so the `-D` matches
+// byte-for-byte whatever is actually there. A table that cannot be listed is
+// skipped, not reported: nothing to remove from it.
+func clearOurRules(ctx context.Context, group uint16) error {
 	var errs []error
-	for _, line := range strings.Split(out, "\n") {
-		if !strings.HasPrefix(line, "-A FORWARD ") || !isOurRule(line, l7RuleComment) {
+	for _, table := range []string{ruleTable, legacyRuleTable} {
+		out, err := iptablesListFORWARD(ctx, table)
+		if err != nil {
 			continue
 		}
-		fields := strings.Fields(strings.TrimPrefix(line, "-A "))
-		spec := make([]string, len(fields))
-		for i, f := range fields {
-			spec[i] = unquote(f)
-		}
-		if err := iptablesRun(ctx, append([]string{"-D"}, spec...)...); err != nil {
-			errs = append(errs, fmt.Errorf("removing stale rule %q: %w", line, err))
+		for _, line := range strings.Split(out, "\n") {
+			if !isOurRule(line, group) {
+				continue
+			}
+			fields := strings.Fields(strings.TrimPrefix(line, "-A "))
+			spec := make([]string, len(fields))
+			for i, f := range fields {
+				spec[i] = unquote(f)
+			}
+			if err := iptablesRun(ctx, append([]string{"-t", table, "-D"}, spec...)...); err != nil {
+				errs = append(errs, fmt.Errorf("removing stale rule %q from %s: %w", line, table, err))
+			}
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// RuleStat is how many packets one of our NFLOG rules has matched since it was
+// installed -- the kernel's own count, taken before anything reaches the NFLOG
+// socket, which is what tells "the rule never fires" from "it fires and nothing
+// arrives" when the capture's own counters stay at zero.
+type RuleStat struct {
+	Table   string // ruleTable, or legacyRuleTable for a leftover of an older build
+	Iface   string // the output interface the rule matches
+	Proto   string // "tcp" or "udp"
+	DPort   int
+	Packets uint64
+	Bytes   uint64
+}
+
+// RuleCounters reads the packet counters of every NFLOG rule feeding group in
+// mangle/FORWARD, then of any left in the table an older build used. The
+// current table failing to list is an error (iptables missing, no permission);
+// the old one failing is not, there is nothing to report from it.
+func RuleCounters(ctx context.Context, group uint16) ([]RuleStat, error) {
+	var out []RuleStat
+	for _, table := range []string{ruleTable, legacyRuleTable} {
+		listing, err := iptablesListCounters(ctx, table)
+		if err != nil {
+			if table == ruleTable {
+				return nil, fmt.Errorf("l7capture: listing %s/FORWARD: %w", table, err)
+			}
+			continue
+		}
+		for _, line := range strings.Split(listing, "\n") {
+			if st, ok := parseCounterLine(line, group); ok {
+				st.Table = table
+				out = append(out, st)
+			}
+		}
+	}
+	return out, nil
+}
+
+// parseCounterLine reads one rule line of `iptables -L FORWARD -v -n -x`:
+//
+//	pkts bytes target prot opt in out source destination [matches...]
+//	   3  1348 NFLOG  tcp  --  *  eth1 0.0.0.0/0 0.0.0.0/0 tcp dpt:443 ... nflog-group 4210
+//
+// ok is false for the header lines, for any other target, and for an NFLOG rule
+// of another group. The protocol column reads `tcp` from some iptables builds
+// and `6` from others.
+func parseCounterLine(line string, group uint16) (RuleStat, bool) {
+	f := strings.Fields(line)
+	if len(f) < 9 || f[2] != "NFLOG" {
+		return RuleStat{}, false
+	}
+	pkts, err1 := strconv.ParseUint(f[0], 10, 64)
+	bytes, err2 := strconv.ParseUint(f[1], 10, 64)
+	if err1 != nil || err2 != nil {
+		return RuleStat{}, false
+	}
+	want := "nflog-group " + strconv.Itoa(int(group))
+	i := strings.Index(line, want)
+	if i < 0 {
+		return RuleStat{}, false
+	}
+	if rest := line[i+len(want):]; rest != "" && rest[0] != ' ' {
+		return RuleStat{}, false // group 42100 is not group 4210
+	}
+	st := RuleStat{Iface: f[6], Packets: pkts, Bytes: bytes}
+	switch f[3] {
+	case "tcp", "6":
+		st.Proto = "tcp"
+	case "udp", "17":
+		st.Proto = "udp"
+	default:
+		return RuleStat{}, false
+	}
+	for _, tok := range f[9:] {
+		if v, ok := strings.CutPrefix(tok, "dpt:"); ok {
+			st.DPort, _ = strconv.Atoi(v)
+		}
+	}
+	return st, true
 }

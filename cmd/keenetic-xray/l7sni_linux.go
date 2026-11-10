@@ -76,8 +76,10 @@ func reconcileL7SNI(ctx context.Context, cfg *config.Config, logf func(string, .
 // claim it, and there's no registry to check against, same as any
 // other NFLOG consumer's own private choice (HydraRoute Neo's own
 // default is 210, a different number, so the two could even coexist on
-// one router without conflict).
-const l7sniNflogGroup = 4210
+// one router without conflict). The number itself lives in internal/l7capture
+// (DefaultGroup), which has to know our rules from anyone else's when it clears
+// them.
+const l7sniNflogGroup = l7capture.DefaultGroup
 
 // l7sniStartupTimeout bounds each individual step of l7SNIClassifyLoop's
 // startup sequence below. Found live (2026-09-15): none of these calls

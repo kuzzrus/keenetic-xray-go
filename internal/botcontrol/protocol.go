@@ -141,6 +141,10 @@ const (
 	// ActionL7SNIStats: no args -> what the L7 capture has counted since the
 	// daemon started (human text; the same as `transport l7sni stats`).
 	ActionL7SNIStats = "l7sni_stats"
+	// ActionL7SNIShow: no args -> where the three switches the L7 screen is about
+	// stand (adaptive routing, L7 SNI, the QUIC mode) and what to press next --
+	// human text, what the screen shows when it opens.
+	ActionL7SNIShow = "l7sni_show"
 	// Keenetic dns-proxy secure upstreams (DoT/DoH). See
 	// internal/keenetic.ApplyDNS + internal/dnsupstream.
 	ActionDNSShow    = "dns_show"     // no args -> config + live upstreams (human text)

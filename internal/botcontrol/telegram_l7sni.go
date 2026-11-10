@@ -26,26 +26,30 @@ var l7sniScreenNames = map[string]bool{
 
 func l7sniScreenText(id, head string) string {
 	return withHead(head, "🔍 L7 SNI и QUIC — "+id+"\n\n"+
+		"Порядок: адаптивная маршрутизация включена (L7 ей помогает, а не заменяет — выключать её "+
+		"не нужно) → «L7 SNI вкл» → при желании QUIC. Все три — отдельные переключатели.\n\n"+
 		"L7 SNI читает TLS SNI и HTTP Host прямо с провода (NFLOG) и досылает в список "+
 		"адресов адаптивной маршрутизации совпадения с твоими routes — даже если DNS-запрос "+
 		"роутер не видел (DoH/DoT, приложения с зашитым IP). Включение и выключение "+
 		"перезапускают демон.\n\n"+
-		"QUIC (UDP/443) — отдельный шаг поверх L7 SNI, демон не перезапускается:\n"+
+		"QUIC (UDP/443) — отдельный шаг поверх L7 SNI, демон не перезапускается. «QUIC выкл» его "+
+		"выключает, остальные две кнопки включают:\n"+
 		"• наблюдение — разбирает первые пакеты QUIC-соединений и только считает: сколько "+
 		"расшифровано, у скольких имя спрятано за ECH, какие имена видны. Ничего не "+
 		"переправляет — с него и стоит начать;\n"+
 		"• действие — совпавшее с routes имя переправляется, как для TLS: браузер, у которого "+
 		"QUIC к адресу отбит, сам уходит на TCP (приложению без запасного пути на TCP QUIC к "+
 		"такому адресу не достанется). Нужна включённая адаптивная маршрутизация.\n\n"+
-		"📈 Счётчики показывают, что захват видит и делает. Режим сейчас — 📊 Показать на "+
-		"экране адаптивной маршрутизации.")
+		"📈 Счётчики показывают, что захват видит и делает, и сколько пакетов дошло до его правил.")
 }
 
 func l7sniScreenKB(id string) inlineKeyboard {
 	return inlineKeyboard{InlineKeyboard: [][]inlineButton{
 		{{Text: "🔍 L7 SNI вкл", CallbackData: "adxQ:" + id + ":l7sni_on"}, {Text: "🔍 L7 SNI выкл", CallbackData: "adxQ:" + id + ":l7sni_off"}},
-		{{Text: "QUIC: выкл", CallbackData: "adxQ:" + id + ":l7q_off"}, {Text: "👁 наблюдение", CallbackData: "adxQ:" + id + ":l7q_obs"},
-			{Text: "⚡ действие", CallbackData: "adxQ:" + id + ":l7q_act"}},
+		// "QUIC выкл" is a button, not a state -- the screen's header says where
+		// the mode stands -- so each of the three says what pressing it does to QUIC.
+		{{Text: "⏹ QUIC выкл", CallbackData: "adxQ:" + id + ":l7q_off"}, {Text: "👁 QUIC наблюдение", CallbackData: "adxQ:" + id + ":l7q_obs"}},
+		{{Text: "⚡ QUIC действие (переправлять)", CallbackData: "adxQ:" + id + ":l7q_act"}},
 		{{Text: "📈 Счётчики", CallbackData: "adxS:" + id}},
 		{{Text: "⬅️ Назад", CallbackData: "adrt:" + id}},
 	}}
@@ -87,6 +91,29 @@ func (b *TelegramBot) l7sniMutate(ctx context.Context, chatID int64, msgID int, 
 	}()
 }
 
+// openL7SNIScreen shows the screen at once, then asks the router where its
+// switches stand and puts the answer on top. The screen must not wait for the
+// router -- it is a menu -- and must not fail without one: an agent that does
+// not know l7sni_show (older than the control server) or does not answer leaves
+// the static screen as it was.
+func (b *TelegramBot) openL7SNIScreen(ctx context.Context, cb tgCallbackQuery, id string) {
+	b.editCB(ctx, cb, l7sniScreenText(id, ""), l7sniScreenKB(id))
+	chatID, msgID := cb.Message.Chat.ID, cb.Message.MessageID
+	cmdID, err := b.Store.Enqueue(id, ActionL7SNIShow, nil)
+	if err != nil {
+		return
+	}
+	go func() {
+		res, ok := b.Store.AwaitResult(ctx, id, cmdID, b.resultTimeout())
+		if !ok || res.Err != "" {
+			return
+		}
+		if head := strings.TrimSpace(res.Output); head != "" {
+			b.editMessageText(ctx, chatID, msgID, l7sniScreenText(id, head), l7sniScreenKB(id))
+		}
+	}()
+}
+
 // showL7SNIStats fetches what the L7 capture has counted and shows it in place
 // of message msgID.
 func (b *TelegramBot) showL7SNIStats(ctx context.Context, chatID int64, msgID int, id string) {
@@ -122,7 +149,7 @@ func (b *TelegramBot) handleL7SNICallback(ctx context.Context, cb tgCallbackQuer
 			return true
 		}
 		if name == "" {
-			b.editCB(ctx, cb, l7sniScreenText(id, ""), l7sniScreenKB(id))
+			b.openL7SNIScreen(ctx, cb, id)
 			return true
 		}
 		action := callbackAction(name)

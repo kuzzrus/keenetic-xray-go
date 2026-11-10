@@ -231,6 +231,7 @@ func writeDiagL7SNI(w io.Writer, cfg *config.Config, now time.Time) {
 	fmt.Fprintln(w, l7sniQUICLine(cfg))
 	if err := writeL7SNICounters(w, now); err != nil {
 		fmt.Fprintf(w, "статистика: %v\n", err)
+		printL7SNICaptureCheck(w, nil) // with a file the counters above already carry it
 	}
 }
 
@@ -332,8 +333,10 @@ func writeDiagRoutes(ctx context.Context, w io.Writer) {
 
 // writeDiagIptables prints this project's own iptables rules -- the ones
 // tagged keenetic-xray-*: adaptive routing's REDIRECT (nat), the MSS
-// clamp (mangle), l7sni's NFLOG (filter). A rule missing here that the
-// config wants is ndm having dropped it (see the netfilter.d hook).
+// clamp and l7sni's NFLOG (mangle), the QUIC REJECT (filter). A rule missing
+// here that the config wants is ndm having dropped it (see the netfilter.d
+// hook). `-c` adds each rule's packet and byte count in front of it -- the
+// number that says whether traffic reaches a rule at all.
 func writeDiagIptables(ctx context.Context, w io.Writer) {
 	if _, err := exec.LookPath("iptables-save"); err != nil {
 		fmt.Fprintln(w, "iptables-save не найден")
@@ -341,7 +344,7 @@ func writeDiagIptables(ctx context.Context, w io.Writer) {
 	}
 	found := false
 	for _, table := range []string{"nat", "mangle", "filter"} {
-		out, err := exec.CommandContext(ctx, "iptables-save", "-t", table).Output()
+		out, err := exec.CommandContext(ctx, "iptables-save", "-c", "-t", table).Output()
 		if err != nil {
 			fmt.Fprintf(w, "%s: %v\n", table, err)
 			continue

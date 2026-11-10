@@ -327,6 +327,8 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 		return h.l7sniQUIC(ctx, config.L7SNIQUICAct)
 	case ActionL7SNIStats:
 		return h.l7sniStats()
+	case ActionL7SNIShow:
+		return h.l7sniShow(), nil
 	case ActionRCIShow:
 		return h.rciShow(ctx), nil
 	case ActionRCIOn:

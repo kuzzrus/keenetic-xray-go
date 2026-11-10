@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -16,12 +17,25 @@ func testOpts() RuleOptions {
 	return RuleOptions{WANInterface: "eth1", Group: 4210}
 }
 
-// fakeIptables gives EnsureRules/ClearRules/RulesInPlace an in-memory
-// FORWARD chain instead of a real iptables binary -- same "fake exec
-// layer via the package's own injectable vars" approach internal/
-// adaptiveroute's own tests use.
+// fakeIptables gives EnsureRules/ClearRules/RulesInPlace in-memory FORWARD
+// chains instead of a real iptables binary -- same "fake exec layer via the
+// package's own injectable vars" approach internal/adaptiveroute's own tests
+// use. lines is mangle/FORWARD, the chain our rules live in; legacy is
+// filter/FORWARD, where builds up to v0.32.111 put them.
 type fakeIptables struct {
-	lines []string
+	lines  []string
+	legacy []string
+	sent   []string // every command run, as one string each
+}
+
+func (f *fakeIptables) chain(table string) (*[]string, error) {
+	switch table {
+	case "mangle":
+		return &f.lines, nil
+	case "filter":
+		return &f.legacy, nil
+	}
+	return nil, fmt.Errorf("fakeIptables: no table %q", table)
 }
 
 func installFakeIptables(t *testing.T) *fakeIptables {
@@ -31,30 +45,53 @@ func installFakeIptables(t *testing.T) *fakeIptables {
 	iptablesRun = func(_ context.Context, args ...string) error {
 		return f.apply(args)
 	}
-	iptablesListFORWARD = func(context.Context) (string, error) {
-		return strings.Join(f.lines, "\n"), nil
+	iptablesListFORWARD = func(_ context.Context, table string) (string, error) {
+		c, err := f.chain(table)
+		if err != nil {
+			return "", err
+		}
+		return strings.Join(*c, "\n"), nil
 	}
 	t.Cleanup(func() { iptablesRun, iptablesListFORWARD = origRun, origList })
 	return f
 }
 
+// apply runs one command the way iptables would: every command of ours names
+// its table first (`-t <table> -A|-I|-D FORWARD ...`).
 func (f *fakeIptables) apply(args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("no args")
+	f.sent = append(f.sent, strings.Join(args, " "))
+	if len(args) < 3 || args[0] != "-t" {
+		return fmt.Errorf("fakeIptables: a command must start with -t <table>: %v", args)
 	}
+	chain, err := f.chain(args[1])
+	if err != nil {
+		return err
+	}
+	args = args[2:]
 	switch args[0] {
 	case "-A":
-		f.lines = append(f.lines, "-A "+strings.Join(args[1:], " "))
+		*chain = append(*chain, "-A "+strings.Join(args[1:], " "))
+		return nil
+	case "-I": // -I FORWARD <position> spec...
+		if len(args) < 4 {
+			return fmt.Errorf("fakeIptables: -I needs a chain, a position and a rule: %v", args)
+		}
+		pos, err := strconv.Atoi(args[2])
+		if err != nil || pos < 1 || pos-1 > len(*chain) {
+			return fmt.Errorf("fakeIptables: bad insert position in %v", args)
+		}
+		line := "-A " + args[1] + " " + strings.Join(args[3:], " ")
+		*chain = append((*chain)[:pos-1], append([]string{line}, (*chain)[pos-1:]...)...)
 		return nil
 	case "-D":
 		want := "-A " + strings.Join(args[1:], " ")
-		for i, l := range f.lines {
+		for i, l := range *chain {
 			// Real `iptables -S` wraps a --comment value in double quotes
 			// as shell quoting; the -D that clearOurRules sends has them
 			// stripped (see unquote), and iptables matches on the stored
 			// value, not on the quoting.
 			if strings.ReplaceAll(l, `"`, "") == want {
-				f.lines = append(f.lines[:i], f.lines[i+1:]...)
+				*chain = append((*chain)[:i], (*chain)[i+1:]...)
 				return nil
 			}
 		}
@@ -158,7 +195,7 @@ func TestRulesInPlace(t *testing.T) {
 	}
 }
 
-// realForwardLines renders the filter/FORWARD lines `iptables -S` prints
+// realForwardLines renders the mangle/FORWARD lines `iptables -S` prints
 // for the rules an install of the given length bound leaves behind -- the
 // real output spells the open-ended range out (`60:65535`), keeps the
 // comment in double quotes and orders the matches its own way, none of
@@ -269,7 +306,10 @@ func TestClearRules_UnquotesCommentField(t *testing.T) {
 	origRun, origList := iptablesRun, iptablesListFORWARD
 	defer func() { iptablesRun, iptablesListFORWARD = origRun, origList }()
 
-	iptablesListFORWARD = func(context.Context) (string, error) {
+	iptablesListFORWARD = func(_ context.Context, table string) (string, error) {
+		if table != ruleTable {
+			return "", nil
+		}
 		return "-A FORWARD -p tcp --dport 443 -o eth1 -m comment --comment \"" + l7RuleComment +
 			"\" -m connbytes --connbytes 1: --connbytes-dir original --connbytes-mode packets -j NFLOG --nflog-group 4210\n", nil
 	}
@@ -284,6 +324,9 @@ func TestClearRules_UnquotesCommentField(t *testing.T) {
 	}
 	if len(sent) != 1 {
 		t.Fatalf("iptables calls = %v, want exactly one -D", sent)
+	}
+	if !strings.HasPrefix(sent[0], "-t mangle -D FORWARD ") {
+		t.Errorf("call = %q, want it to delete from mangle/FORWARD", sent[0])
 	}
 	if strings.Contains(sent[0], `"`) {
 		t.Errorf("call = %q, want the comment unquoted -- iptablesRun execs directly, a literal quote in the field never matches what's actually stored", sent[0])
@@ -301,7 +344,10 @@ func TestClearRules_ReportsDeletionFailure(t *testing.T) {
 	origRun, origList := iptablesRun, iptablesListFORWARD
 	defer func() { iptablesRun, iptablesListFORWARD = origRun, origList }()
 
-	iptablesListFORWARD = func(context.Context) (string, error) {
+	iptablesListFORWARD = func(_ context.Context, table string) (string, error) {
+		if table != ruleTable {
+			return "", nil
+		}
 		return "-A FORWARD -p tcp --dport 443 -m comment --comment " + l7RuleComment + " -j NFLOG --nflog-group 4210\n", nil
 	}
 	iptablesRun = func(context.Context, ...string) error { return fmt.Errorf("iptables: exit status 2") }
@@ -487,11 +533,15 @@ func installLockedFakeIptables(t *testing.T) *lockedFakeIptables {
 		defer f.mu.Unlock()
 		return f.inner.apply(args)
 	}
-	iptablesListFORWARD = func(context.Context) (string, error) {
+	iptablesListFORWARD = func(_ context.Context, table string) (string, error) {
 		runtime.Gosched()
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		return strings.Join(f.inner.lines, "\n"), nil
+		c, err := f.inner.chain(table)
+		if err != nil {
+			return "", err
+		}
+		return strings.Join(*c, "\n"), nil
 	}
 	t.Cleanup(func() { iptablesRun, iptablesListFORWARD = origRun, origList })
 	return f

@@ -66,6 +66,8 @@ type TelegramBot struct {
 	wizardMu   sync.Mutex
 	wizards    map[int64]*wizState // per-chat multi-step dialog state (e.g. /add_router)
 
+	screens screenSeq // which tap each message is on, so a late answer cannot redraw a screen the operator has left
+
 	routeMenuMu sync.Mutex
 	routeMenus  map[int64]routeMenu // per-chat 📍 Маршруты state: the list snapshot the buttons index into
 

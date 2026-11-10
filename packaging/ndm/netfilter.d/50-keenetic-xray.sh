@@ -6,8 +6,9 @@
 # also polls every 2 minutes, but this makes the common "rule vanished
 # after a policy edit or a DHCP renew" case self-heal within a second.
 #
-# Our tables: filter (l7sni's NFLOG in FORWARD), mangle (the MSS clamp),
-# nat (adaptive routing's REDIRECT in PREROUTING). nat used to be missing
+# Our tables: mangle (l7sni's NFLOG rules and the MSS clamp, both in
+# FORWARD), filter (adaptive routing's QUIC REJECT, also FORWARD), nat
+# (adaptive routing's REDIRECT in PREROUTING). nat used to be missing
 # here, so a nat rebuild left adaptive-routed traffic going direct until
 # the next 2-minute poll.
 

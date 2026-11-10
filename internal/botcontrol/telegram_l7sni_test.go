@@ -56,15 +56,23 @@ func TestTelegramBot_L7SNIScreenSetsTheQUICMode(t *testing.T) {
 	msgID := fake.lastSent(t).MessageID
 
 	seen := answerCommands(t, store, "home", []Result{
+		{Output: "🎯 Адаптивная маршрутизация: вкл\n🔍 L7 SNI: вкл\n🔍 QUIC-перехват: выкл"},
 		{Output: "QUIC-перехват: наблюдение — считаем имена и ECH-расширения, ничего не переправляем\nПравило перехвата UDP/443 приведено в соответствие; демон подхватит режим сам, перезапуск не нужен."},
 		{Err: "сохранить не вышло"},
 	})
 
-	// open the screen: static, no router round trip
+	// open the screen: the menu itself comes at once, the router's state follows on top of it
 	fake.pushCallback(1, msgID, "adxQ:home")
 	fake.waitForEditContaining(t, 3*time.Second, "🔍 L7 SNI и QUIC — home")
 	if e := fake.lastEdit(t); !e.hasButton("adxQ:home:l7q_obs") || !e.hasButton("adxS:home") {
 		t.Fatalf("L7 screen buttons = %v", e.Buttons)
+	}
+	state := fake.waitForEditContaining(t, 3*time.Second, "🔍 QUIC-перехват: выкл")
+	if !strings.HasPrefix(state, "🎯 Адаптивная маршрутизация: вкл") || !strings.Contains(state, "🔍 L7 SNI и QUIC — home") {
+		t.Errorf("the state should head the screen:\n%s", state)
+	}
+	if cmd := <-seen; cmd.Action != ActionL7SNIShow || len(cmd.Args) != 0 {
+		t.Errorf("opening the screen asked the router for %+v, want %s without args", cmd, ActionL7SNIShow)
 	}
 
 	// choose observe: the router is asked, the screen comes back with its answer on top
@@ -88,6 +96,76 @@ func TestTelegramBot_L7SNIScreenSetsTheQUICMode(t *testing.T) {
 	}
 	if cmd := <-seen; cmd.Action != ActionL7SNIQUICAct {
 		t.Errorf("second command = %s, want %s", cmd.Action, ActionL7SNIQUICAct)
+	}
+}
+
+// An agent that does not know l7sni_show (it is older than the control server)
+// answers with an error: the menu must stay as it was, not show the error as if
+// a button had failed.
+func TestTelegramBot_L7SNIScreenSurvivesAnAgentWithoutTheStateAction(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	mustRegister(t, store, "home")
+	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL, ResultTimeout: 3 * time.Second}
+	runBotInBackground(t, bot)
+
+	fake.push(1, "/menu")
+	fake.waitForReply(t, 3*time.Second)
+	msgID := fake.lastSent(t).MessageID
+
+	seen := answerCommands(t, store, "home", []Result{{Err: "неизвестное действие l7sni_show"}})
+	fake.pushCallback(1, msgID, "adxQ:home")
+	fake.waitForEditContaining(t, 3*time.Second, "🔍 L7 SNI и QUIC — home")
+	if cmd := <-seen; cmd.Action != ActionL7SNIShow {
+		t.Fatalf("opening the screen asked for %s, want %s", cmd.Action, ActionL7SNIShow)
+	}
+	time.Sleep(300 * time.Millisecond) // the answer, if it were going to be drawn, has been by now
+	if text := fake.lastEdit(t).Text; strings.Contains(text, "неизвестное действие") || strings.Contains(text, "⚠️") {
+		t.Errorf("the menu shows the agent's error:\n%s", text)
+	}
+	if !fake.lastEdit(t).hasButton("adxQ:home:l7q_obs") {
+		t.Errorf("the menu lost its buttons: %v", fake.lastEdit(t).Buttons)
+	}
+}
+
+// The state is drawn by a goroutine that waits for the router. An operator who
+// has gone Back by then must keep the screen they are on.
+func TestTelegramBot_LateL7SNIStateDoesNotRedrawAScreenTheOperatorLeft(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	mustRegister(t, store, "home")
+	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL, ResultTimeout: 5 * time.Second}
+	runBotInBackground(t, bot)
+
+	fake.push(1, "/menu")
+	fake.waitForReply(t, 3*time.Second)
+	msgID := fake.lastSent(t).MessageID
+
+	fake.pushCallback(1, msgID, "adxQ:home")
+	fake.waitForEditContaining(t, 3*time.Second, "🔍 L7 SNI и QUIC — home")
+	// the operator does not wait for the router and goes Back
+	fake.pushCallback(1, msgID, "adrt:home")
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && strings.Contains(fake.lastEdit(t).Text, "🔍 L7 SNI и QUIC — home") {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if strings.Contains(fake.lastEdit(t).Text, "🔍 L7 SNI и QUIC — home") {
+		t.Fatal("setup: the Back button did not leave the L7 screen")
+	}
+
+	// now the router answers the state request
+	var cmd *Command
+	for i := 0; i < 100 && cmd == nil; i++ {
+		cmd, _ = store.Dequeue("home")
+		time.Sleep(20 * time.Millisecond)
+	}
+	if cmd == nil || cmd.Action != ActionL7SNIShow {
+		t.Fatalf("no l7sni_show request reached the router: %+v", cmd)
+	}
+	_ = store.RecordResult("home", Result{CommandID: cmd.ID, Output: "🎯 Адаптивная маршрутизация: вкл"})
+	time.Sleep(400 * time.Millisecond)
+	if text := fake.lastEdit(t).Text; strings.Contains(text, "🔍 L7 SNI и QUIC — home") {
+		t.Errorf("the late answer redrew the L7 screen over the one the operator was on:\n%s", text)
 	}
 }
 

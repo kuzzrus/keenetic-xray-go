@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
@@ -137,6 +138,37 @@ func (h *RouterHandler) l7sniStats() (string, error) {
 		return "", errors.New("счётчики L7 недоступны: этот агент собран без них")
 	}
 	return h.L7SNIStatsText()
+}
+
+// l7sniShow is what the L7 screen opens with: where its three switches stand --
+// adaptive routing (which L7 SNI feeds and which must be on for anything to be
+// redirected), L7 SNI itself, the QUIC mode -- and, for the first one that is
+// off, what to press. The screen used to be static text, and an operator who
+// saw "QUIC-перехват: выкл" in the answer to a button had no way to tell a
+// state from a button, nor which of the three buttons next to it turns it on.
+func (h *RouterHandler) l7sniShow() string {
+	cfg := h.Config
+	var b strings.Builder
+	b.WriteString("🎯 Адаптивная маршрутизация: " + onOffRU(cfg.AdaptiveRoute.Enabled))
+	b.WriteString("\n🔍 L7 SNI: " + onOffRU(cfg.L7SNI.Enabled))
+	b.WriteString("\n🔍 " + l7sniQUICStatusRU(cfg))
+	switch {
+	case !cfg.L7SNI.Enabled:
+		b.WriteString("\n➡️ Нажми «🔍 L7 SNI вкл» (демон перезапустится): без него не работает ни TLS/HTTP, ни QUIC.")
+	case cfg.L7SNI.QUICMode() == config.L7SNIQUICOff:
+		b.WriteString("\n➡️ QUIC-перехват включается кнопками «👁 QUIC наблюдение» (только считает) или «⚡ QUIC действие» (переправляет).")
+	}
+	if !cfg.AdaptiveRoute.Enabled {
+		b.WriteString("\n⚠️ Адаптивная маршрутизация выключена — включи её на экране выше (⬅️ Назад): без неё L7 SNI ничего не переправляет, только считает. Выключать её ради L7 не нужно.")
+	}
+	return b.String()
+}
+
+func onOffRU(on bool) string {
+	if on {
+		return "вкл"
+	}
+	return "выкл"
 }
 
 // l7sniQUICWordRU is the short name of a QUIC mode.

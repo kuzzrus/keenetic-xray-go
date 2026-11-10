@@ -264,12 +264,22 @@ func printL7SNIStats(w io.Writer, now time.Time) error {
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			fmt.Fprintln(w, noL7SNIStatsMessage)
+			printL7SNICaptureCheck(w, nil)
 			return nil
 		}
 		return fmt.Errorf("не удалось прочитать статистику l7sni: %w", err)
 	}
 	renderL7SNIStats(w, f, now)
+	printL7SNICaptureCheck(w, f)
 	return nil
+}
+
+// printL7SNICaptureCheck adds what the kernel says about the capture's rules
+// (see l7sniCaptureCheck) under the counters.
+func printL7SNICaptureCheck(w io.Writer, f *l7sniStatsFile) {
+	if check := l7sniCaptureCheck(f); check != "" {
+		fmt.Fprintln(w, check)
+	}
 }
 
 // writeL7SNICounters is the stats without the list of most-seen names, for
@@ -287,6 +297,7 @@ func writeL7SNICounters(w io.Writer, now time.Time) error {
 	f.Top = nil
 	renderL7SNIStats(w, f, now)
 	fmt.Fprintln(w, "(самые частые имена здесь не показываются — это история посещений; они есть в `transport l7sni stats` по SSH)")
+	printL7SNICaptureCheck(w, f)
 	return nil
 }
 
@@ -295,6 +306,11 @@ func l7sniStatsText(now time.Time) (string, error) {
 	var b strings.Builder
 	if err := writeL7SNICounters(&b, now); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
+			// No statistics yet is exactly when the rules' own counters are
+			// worth most: they say whether anything reaches the capture at all.
+			if check := l7sniCaptureCheck(nil); check != "" {
+				return noL7SNIStatsMessage + "\n\n" + check, nil
+			}
 			return noL7SNIStatsMessage, nil
 		}
 		return "", fmt.Errorf("не удалось прочитать статистику l7sni: %w", err)

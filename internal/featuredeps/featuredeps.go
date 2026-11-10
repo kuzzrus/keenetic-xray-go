@@ -236,14 +236,12 @@ func contains(needs []Need, n Need) bool {
 func (r Result) Err() error {
 	var groups []*failureGroup
 	byReason := map[string]*failureGroup{}
-	var first error
+	var causes []error
 	for _, f := range r.Failed {
 		if f.Need.optional() {
 			continue
 		}
-		if first == nil {
-			first = f.Err
-		}
+		causes = append(causes, f.Err)
 		key := reason(f.Err)
 		g := byReason[key]
 		if g == nil {
@@ -260,7 +258,7 @@ func (r Result) Err() error {
 	for i, g := range groups {
 		sentences[i] = g.sentence()
 	}
-	return &needError{msg: strings.Join(sentences, "\n"), err: first}
+	return &needError{msg: strings.Join(sentences, "\n"), errs: causes}
 }
 
 // failureGroup is the required needs that failed for one reason.
@@ -300,14 +298,14 @@ func manualInstall(pkgs ...string) string {
 }
 
 // needError is the error Err returns: the sentence for the operator, with the
-// underlying error still reachable through errors.Is/As.
+// underlying errors (every required failure) still reachable through errors.Is/As.
 type needError struct {
-	msg string
-	err error
+	msg  string
+	errs []error
 }
 
-func (e *needError) Error() string { return e.msg }
-func (e *needError) Unwrap() error { return e.err }
+func (e *needError) Error() string   { return e.msg }
+func (e *needError) Unwrap() []error { return e.errs }
 
 // Lines renders what happened for a person: one line per package installed
 // (prefixed with okPrefix), then one per optional need that could not be

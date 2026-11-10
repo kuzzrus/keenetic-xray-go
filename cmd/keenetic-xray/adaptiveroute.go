@@ -375,14 +375,15 @@ func applyAdaptiveRouteAtStartup(cfg *config.Config, logf func(string, ...any)) 
 	if !cfg.AdaptiveRoute.Enabled || !keenetic.Available() {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	// Same needs as adaptiveRouteOn, under this function's own 30 s: it runs on
-	// the daemon's startup path, which waits for it before the failover loop
-	// and the bot start, so an install that cannot finish in that time is given
-	// up on (the next explicit `transport adaptive on` retries it).
-	deps := featureEnsure(ctx, featuredeps.AdaptiveRouting)
+	// The required needs of adaptiveRouteOn, under their own 30 s: this runs on
+	// the daemon's startup path, which waits for it before the failover loop and
+	// the bot start, so an install that cannot finish in that time is given up on
+	// (the next explicit `transport adaptive on` retries it). A separate context
+	// from the dataplane's below: a slow opkg must not leave them an expired one.
+	// The optional conntrack is tried once, in the background, afterwards.
+	dctx, dcancel := context.WithTimeout(context.Background(), 30*time.Second)
+	deps := featureEnsureRequired(dctx, featuredeps.AdaptiveRouting)
+	dcancel()
 	for _, line := range deps.Lines("", "") {
 		logf("adaptive-route: %s", line)
 	}
@@ -390,6 +391,10 @@ func applyAdaptiveRouteAtStartup(cfg *config.Config, logf func(string, ...any)) 
 		logf("adaptive-route: not starting: %v", err)
 		return
 	}
+	ensureOptionalInBackground(featuredeps.AdaptiveRouting, "adaptive-route", logf)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	iface, _, err := adaptiveRouteLAN(ctx, cfg)
 	if err != nil {
 		logf("adaptive-route: LAN detection failed: %v", err)

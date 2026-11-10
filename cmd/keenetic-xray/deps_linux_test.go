@@ -49,10 +49,11 @@ func TestL7SNIClassifySession_MissingToolIsLoggedAndNothingIsTouched(t *testing.
 	}
 }
 
-// The first session of the process ensures everything, optional tools included;
-// a restart of the session (every few seconds while the NFLOG socket keeps
-// failing) only checks what the capture cannot run without.
-func TestL7SNIClassifySession_OptionalToolsAreTriedOnlyOnTheFirstStart(t *testing.T) {
+// Over any number of starts of the session (it restarts every few seconds while
+// the NFLOG socket keeps failing) only what the capture cannot run without is
+// checked, and synchronously: an optional tool never delays the start nor makes
+// a restart run `opkg update` again.
+func TestL7SNIClassifySession_OnlyRequiredToolsAreChecked(t *testing.T) {
 	cfgPath := filepath.Join(t.TempDir(), "c.json")
 	t.Setenv("KEENETIC_XRAY_CONFIG", cfgPath)
 	cfg := config.Default()
@@ -61,8 +62,6 @@ func TestL7SNIClassifySession_OptionalToolsAreTriedOnlyOnTheFirstStart(t *testin
 		t.Fatal(err)
 	}
 	fakeRouter(t)
-	l7sniOptionalDepsTried.Store(false)
-	t.Cleanup(func() { l7sniOptionalDepsTried.Store(false) })
 
 	var all, requiredOnly int
 	origE, origR, origM := featureEnsure, featureEnsureRequired, featureMissing
@@ -79,7 +78,7 @@ func TestL7SNIClassifySession_OptionalToolsAreTriedOnlyOnTheFirstStart(t *testin
 	for i := 0; i < 3; i++ {
 		_, _ = l7SNIClassifySession(context.Background(), func(string, ...any) {})
 	}
-	if all != 1 || requiredOnly != 2 {
-		t.Errorf("full ensure ran %d times and the required-only one %d times over three starts, want 1 and 2", all, requiredOnly)
+	if all != 0 || requiredOnly != 3 {
+		t.Errorf("full ensure ran %d times and the required-only one %d times over three starts, want 0 and 3", all, requiredOnly)
 	}
 }

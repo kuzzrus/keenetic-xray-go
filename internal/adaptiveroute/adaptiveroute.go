@@ -107,9 +107,9 @@ func runLogged(ctx context.Context, name string, args ...string) error {
 func IPSetPresent() bool { return ipsetPresent() }
 
 // EnsureIPSetTool makes sure `ipset` is runnable, installing the Entware
-// package if not. Unlike iptables (already guaranteed present -- this
-// project's own WAN masquerading needs it), ipset is not something
-// anything else in this project installs.
+// package if not. The enabling paths no longer call it: internal/featuredeps
+// installs ipset in the same opkg run as the other tools adaptive routing
+// needs (iptables, conntrack). Kept for a caller that needs only this one.
 func EnsureIPSetTool(ctx context.Context) error {
 	if ipsetPresent() {
 		return nil

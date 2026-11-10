@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/featuredeps"
 )
@@ -40,4 +41,25 @@ func ensureFeatureDepsTo(w io.Writer, f featuredeps.Feature) error {
 		fmt.Fprintln(w, line)
 	}
 	return res.Err()
+}
+
+// optionalTried records the features whose optional tools this process has
+// already tried to install.
+var optionalTried sync.Map
+
+// ensureOptionalInBackground installs the optional tools of f (conntrack) once
+// per process, in the background, and logs what happened. For the daemon's own
+// start-up paths: they check the REQUIRED tools synchronously and must never
+// wait for, or keep retrying, something the feature works without.
+func ensureOptionalInBackground(f featuredeps.Feature, prefix string, logf func(string, ...any)) {
+	if _, tried := optionalTried.LoadOrStore(f, struct{}{}); tried {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), featuredeps.Timeout)
+		defer cancel()
+		for _, line := range featureEnsure(ctx, f).Lines("", "") {
+			logf("%s: %s", prefix, line)
+		}
+	}()
 }

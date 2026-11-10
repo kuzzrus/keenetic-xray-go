@@ -54,9 +54,8 @@ var requiredKmods = []string{"nfnetlink_log", "xt_NFLOG", "xt_connbytes", "xt_le
 // EnsureNFLOGModule loads every kernel module in requiredKmods that
 // isn't already active. Mirrors HydraRoute Neo's own
 // l7_firewall_load_nflog_modules/module_already_loaded. Unlike ipset/
-// conntrack (see internal/adaptiveroute's EnsureIPSetTool, internal/
-// keenetic's EnsureConntrackTool, both opkg-install their tool on
-// demand), this project's opkg feed doesn't carry a separate
+// conntrack (which internal/featuredeps opkg-installs on demand, and which
+// calls this function for these modules), this project's opkg feed doesn't carry a separate
 // installable package for any of these -- confirmed live, `opkg list |
 // grep -iE "kmod-ipt|kmod-nf|iptables-mod"` came back empty. There is
 // nothing to install here, only something to load.

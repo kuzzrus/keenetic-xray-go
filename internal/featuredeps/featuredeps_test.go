@@ -445,3 +445,22 @@ func TestEnsureRequired_IgnoresOptionalNeeds(t *testing.T) {
 		t.Errorf("joint=%v result=%+v, want iptables installed alone", r.joint, res)
 	}
 }
+
+// Every required failure's cause is reachable, not only the first's.
+func TestErr_UnwrapsEveryRequiredFailure(t *testing.T) {
+	a := &opkg.Error{Pkgs: []string{"iptables"}, Reason: "нет связи", Err: errors.New("exit 1")}
+	b := errors.New("no modules")
+	res := Result{Failed: []Failure{
+		{Need: Need{Name: "iptables", Pkg: "iptables", Why: "x"}, Err: a},
+		{Need: Need{Name: "модули", Why: "y", Hint: "h"}, Err: b},
+		{Need: Need{Name: "conntrack", Pkg: "conntrack", Without: "z"}, Err: errors.New("optional")},
+	}}
+	err := res.Err()
+	var oe *opkg.Error
+	if !errors.As(err, &oe) || oe != a {
+		t.Error("the opkg failure is not reachable through errors.As")
+	}
+	if !errors.Is(err, b) {
+		t.Error("the second required failure is not reachable through errors.Is")
+	}
+}

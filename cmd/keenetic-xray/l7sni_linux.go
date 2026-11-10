@@ -71,10 +71,6 @@ func reconcileL7SNI(ctx context.Context, cfg *config.Config, logf func(string, .
 	return nil
 }
 
-// l7sniOptionalDepsTried is set by the first capture session of the process: it
-// installs the optional tools (conntrack) too, later sessions do not try again.
-var l7sniOptionalDepsTried atomic.Bool
-
 // l7sniNflogGroup is this project's own NFLOG group number -- picked to
 // be distinctive; nothing else on a Keenetic router is expected to
 // claim it, and there's no registry to check against, same as any
@@ -190,17 +186,14 @@ func l7SNIClassifySession(ctx context.Context, logf func(string, ...any)) (start
 	// there is to do -- see EnsureNFLOGModule's doc comment. The same call
 	// brings back a tool that /opt lost since L7 SNI was switched on.
 	//
-	// Everything is ensured on the first start of this process; a restart of the
-	// session (every few seconds while the socket keeps failing) only checks what
-	// the capture cannot run without, so an optional tool that could not be
-	// installed once does not start `opkg update` again on every retry.
+	// Only what the capture cannot run without, and synchronously: an optional
+	// tool (conntrack) must never delay the start -- offline at boot, `opkg update`
+	// can hang for minutes -- nor be retried by every restart of the session
+	// (every few seconds while the socket keeps failing). It is tried once per
+	// process, in the background, after the required ones are known to be there.
 	logf("l7sni: checking iptables and the NFLOG kernel modules")
-	ensure := featureEnsureRequired
-	if l7sniOptionalDepsTried.CompareAndSwap(false, true) {
-		ensure = featureEnsure
-	}
 	dctx, dcancel := context.WithTimeout(ctx, featuredeps.Timeout)
-	deps := ensure(dctx, featuredeps.L7SNI)
+	deps := featureEnsureRequired(dctx, featuredeps.L7SNI)
 	dcancel()
 	for _, line := range deps.Lines("", "") {
 		logf("l7sni: %s", line)
@@ -209,6 +202,7 @@ func l7SNIClassifySession(ctx context.Context, logf func(string, ...any)) (start
 		logf("l7sni: not starting: %v", err)
 		return false, err
 	}
+	ensureOptionalInBackground(featuredeps.L7SNI, "l7sni", logf)
 
 	wan, err := l7capture.ResolveWANInterface("")
 	if err != nil {

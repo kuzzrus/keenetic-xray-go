@@ -111,9 +111,20 @@ func TestWaitFor(t *testing.T) {
 	if got <= depsInstallTimeout {
 		t.Errorf("wait for an installing action = %v, must exceed the router's own budget %v or the answer is lost", got, depsInstallTimeout)
 	}
+	// An operator who shortens ResultTimeout (a quicker "router did not answer"
+	// for ordinary buttons) must not cut the wait for an install that is still
+	// running: it never drops below the router's budget plus the margin.
 	short := &TelegramBot{ResultTimeout: 100 * time.Millisecond}
-	if short.waitFor(ActionL7SNIOn) != time.Second {
-		t.Errorf("a shortened ResultTimeout must shorten the install wait too: %v", short.waitFor(ActionL7SNIOn))
+	if got := short.waitFor(ActionL7SNIOn); got < depsInstallTimeout+installWaitMargin {
+		t.Errorf("install wait with a short ResultTimeout = %v, want at least %v", got, depsInstallTimeout+installWaitMargin)
+	}
+	if got := short.waitFor(ActionStatus); got != 100*time.Millisecond {
+		t.Errorf("an ordinary button must keep the short wait: %v", got)
+	}
+	// ...and a long one still scales
+	long := &TelegramBot{ResultTimeout: 2 * time.Minute}
+	if got := long.waitFor(ActionL7SNIOn); got != 20*time.Minute {
+		t.Errorf("install wait with a 2 min ResultTimeout = %v, want ten times", got)
 	}
 }
 

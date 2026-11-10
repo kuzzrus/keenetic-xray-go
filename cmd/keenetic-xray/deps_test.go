@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 	"github.com/kuzzrus/keenetic-xray-go/internal/featuredeps"
@@ -383,5 +384,57 @@ func TestOfferWatchdog_SilentWhenArmedOrOffARouter(t *testing.T) {
 	offerWatchdog(&out, bufio.NewReader(strings.NewReader("\n")))
 	if out.Len() != 0 || *calls != 0 {
 		t.Errorf("off a router: output %q, %d enables", out.String(), *calls)
+	}
+}
+
+// --- optional tools in the background -----------------------------------------------
+
+func TestEnsureOptionalInBackground_OncePerProcessAndPerFeature(t *testing.T) {
+	optionalTried.Delete(featuredeps.L7SNI)
+	optionalTried.Delete(featuredeps.AdaptiveRouting)
+	t.Cleanup(func() {
+		optionalTried.Delete(featuredeps.L7SNI)
+		optionalTried.Delete(featuredeps.AdaptiveRouting)
+	})
+	calls := make(chan featuredeps.Feature, 8)
+	orig := featureEnsure
+	featureEnsure = func(_ context.Context, f featuredeps.Feature) featuredeps.Result {
+		calls <- f
+		return featuredeps.Result{Failed: []featuredeps.Failure{{
+			Need: featuredeps.Need{Name: "conntrack", Pkg: "conntrack", Without: "потеря"}, Err: errors.New("нет связи"),
+		}}}
+	}
+	t.Cleanup(func() { featureEnsure = orig })
+
+	logs := make(chan string, 8)
+	logf := func(f string, a ...any) { logs <- fmt.Sprintf(f, a...) }
+	ensureOptionalInBackground(featuredeps.L7SNI, "l7sni", logf)
+	ensureOptionalInBackground(featuredeps.L7SNI, "l7sni", logf) // a session restart: nothing
+	ensureOptionalInBackground(featuredeps.AdaptiveRouting, "adaptive-route", logf)
+
+	got := map[featuredeps.Feature]int{}
+	for i := 0; i < 2; i++ {
+		select {
+		case f := <-calls:
+			got[f]++
+		case <-time.After(3 * time.Second):
+			t.Fatal("the background ensure did not run")
+		}
+	}
+	select {
+	case f := <-calls:
+		t.Errorf("a third ensure ran for %s", f)
+	case <-time.After(150 * time.Millisecond):
+	}
+	if got[featuredeps.L7SNI] != 1 || got[featuredeps.AdaptiveRouting] != 1 {
+		t.Errorf("calls = %v, want one per feature", got)
+	}
+	select {
+	case line := <-logs:
+		if !strings.Contains(line, "conntrack не поставился") {
+			t.Errorf("log line = %q", line)
+		}
+	case <-time.After(3 * time.Second):
+		t.Error("nothing was logged")
 	}
 }

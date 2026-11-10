@@ -31,11 +31,20 @@ func installsPackages(action string) bool {
 }
 
 // installResultTimeout is how long the bot waits for the answer to an action
-// that installs packages: more than the agent's own budget for it, which in turn
-// is more than a poll interval -- the answer cannot arrive sooner than the work
-// ends. Ten times the ordinary wait, so a test that shortens ResultTimeout
-// shortens this too.
-func (b *TelegramBot) installResultTimeout() time.Duration { return b.resultTimeout() * 10 }
+// that installs packages: the router's own budget for it (depsInstallTimeout)
+// plus a margin for the poll that fetches the command and the post that returns
+// the result -- the answer cannot arrive sooner than the work ends. Never less
+// than ten times the ordinary wait either, so a large ResultTimeout still scales.
+// Not derived from ResultTimeout alone: an operator who shortens it to get a
+// quicker "router did not answer" for ordinary buttons must not also cut the
+// wait for an install that is still running.
+func (b *TelegramBot) installResultTimeout() time.Duration {
+	return max(b.resultTimeout()*10, depsInstallTimeout+installWaitMargin)
+}
+
+// installWaitMargin is the slack on top of depsInstallTimeout: one poll interval
+// to fetch the command, one result post to return its answer, and some air.
+const installWaitMargin = 30 * time.Second
 
 // waitFor is how long the bot waits for the router's answer to action.
 func (b *TelegramBot) waitFor(action string) time.Duration {

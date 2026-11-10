@@ -186,22 +186,32 @@ func l7sniQUICLine(cfg *config.Config) string {
 
 // l7sniQUICHints lists what would make the chosen mode more useful, one line
 // each; nothing for a mode that is off.
+//
+// They follow the mode the capture really runs with (l7sniQUICLine has just
+// said which that is), not the one that was asked for: first what has to be
+// switched on for the chosen mode to work at all, then what the running mode
+// does. An "act" that only observes must not warn about what redirecting does
+// to an app, and a capture that is not running has no counters to point at.
 func l7sniQUICHints(cfg *config.Config) []string {
+	set, eff := cfg.L7SNI.QUICMode(), cfg.EffectiveL7SNIQUIC()
+	if set == config.L7SNIQUICOff {
+		return nil
+	}
 	var out []string
-	switch cfg.L7SNI.QUICMode() {
-	case config.L7SNIQUICObserve:
-		out = append(out, "что насчиталось: keenetic-xray transport l7sni stats")
-	case config.L7SNIQUICAct:
+	if !cfg.L7SNI.Enabled {
+		out = append(out, "включить определение имён: keenetic-xray transport l7sni on")
+	}
+	if set == config.L7SNIQUICAct && !cfg.AdaptiveRoute.Enabled {
+		out = append(out, "чтобы совпавшие имена переправлялись, включи адаптивную маршрутизацию: keenetic-xray transport adaptive on")
+	}
+	if eff == config.L7SNIQUICAct {
 		if len(l7sniDomainsFrom(cfg)) == 0 {
 			out = append(out, "в списках маршрутов (Proxy0) нет ни одного домена — переправлять нечего")
 		}
 		out = append(out, "браузеры сами уходят на TCP, когда QUIC к адресу отбит; приложение без запасного пути на TCP останется без QUIC к этому адресу")
-		out = append(out, "что насчиталось: keenetic-xray transport l7sni stats")
-	default:
-		return nil
 	}
-	if !cfg.L7SNI.Enabled {
-		out = append(out, "включить определение имён: keenetic-xray transport l7sni on")
+	if eff != config.L7SNIQUICOff {
+		out = append(out, "что насчиталось: keenetic-xray transport l7sni stats")
 	}
 	return out
 }

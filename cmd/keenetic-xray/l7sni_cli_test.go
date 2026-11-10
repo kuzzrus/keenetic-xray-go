@@ -323,3 +323,43 @@ func TestReconcileL7SNIFromDisk(t *testing.T) {
 		t.Errorf("l7sni off: %v", err)
 	}
 }
+
+// The hints describe what the capture really does (Config.EffectiveL7SNIQUIC),
+// not what was asked for: an "act" that only observes must not warn about what
+// redirecting does to apps, and a mode that is not running has no counters to
+// point at -- it says what to switch on instead.
+func TestL7SNIQUICHints_FollowTheEffectiveMode(t *testing.T) {
+	const (
+		warn    = "без запасного пути на TCP"
+		noList  = "нет ни одного домена"
+		stats   = "transport l7sni stats"
+		l7on    = "transport l7sni on"
+		adaptOn = "transport adaptive on"
+	)
+	cases := []struct {
+		name          string
+		cfg           *config.Config
+		want, wantNot []string
+	}{
+		{"act in effect", l7sniTestConfig(true, true, "act"), []string{warn, noList, stats}, []string{l7on, adaptOn}},
+		{"act, adaptive routing off: it only observes", l7sniTestConfig(true, false, "act"), []string{adaptOn, stats}, []string{warn, noList, l7on}},
+		{"act, l7sni off: nothing runs", l7sniTestConfig(false, true, "act"), []string{l7on}, []string{warn, noList, stats, adaptOn}},
+		{"act, both off", l7sniTestConfig(false, false, "act"), []string{l7on, adaptOn}, []string{warn, noList, stats}},
+		{"observe in effect", l7sniTestConfig(true, true, "observe"), []string{stats}, []string{warn, l7on, adaptOn}},
+		{"observe needs no adaptive routing", l7sniTestConfig(true, false, "observe"), []string{stats}, []string{warn, l7on, adaptOn}},
+		{"observe, l7sni off: nothing is counted", l7sniTestConfig(false, true, "observe"), []string{l7on}, []string{stats, warn, adaptOn}},
+	}
+	for _, tc := range cases {
+		got := strings.Join(l7sniQUICHints(tc.cfg), "|")
+		for _, w := range tc.want {
+			if !strings.Contains(got, w) {
+				t.Errorf("%s: hints %q lack %q", tc.name, got, w)
+			}
+		}
+		for _, w := range tc.wantNot {
+			if strings.Contains(got, w) {
+				t.Errorf("%s: hints %q should not contain %q", tc.name, got, w)
+			}
+		}
+	}
+}

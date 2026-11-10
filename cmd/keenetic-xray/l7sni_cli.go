@@ -206,13 +206,16 @@ func l7sniQUICHints(cfg *config.Config) []string {
 	return out
 }
 
+// noL7SNIStatsMessage is what a missing stats file means to the operator.
+const noL7SNIStatsMessage = "l7sni: статистики пока нет — l7sni выключен, демон только что запущен или ещё ничего не перехватил (файл обновляется раз в ~10 с)"
+
 // printL7SNIStats is `transport l7sni stats`: what the daemon's capture has
 // counted since it started, read from the file it publishes.
 func printL7SNIStats(w io.Writer, now time.Time) error {
 	f, err := readL7SNIStats(l7sniStatsPath())
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			fmt.Fprintln(w, "l7sni: статистики пока нет — l7sni выключен, демон только что запущен или ещё ничего не перехватил (файл обновляется раз в ~10 с)")
+			fmt.Fprintln(w, noL7SNIStatsMessage)
 			return nil
 		}
 		return fmt.Errorf("не удалось прочитать статистику l7sni: %w", err)
@@ -221,11 +224,32 @@ func printL7SNIStats(w io.Writer, now time.Time) error {
 	return nil
 }
 
-// l7sniStatsText is `transport l7sni stats` as a string, for the bot.
+// writeL7SNICounters is the stats without the list of most-seen names, for
+// the places that get pasted or relayed: the diag bundle and the bot's chat
+// (router -> control server -> Telegram). That list is the household's
+// browsing history -- every site any client opened, not only the ones on a
+// routes list -- and the stats file is private for exactly that reason; the
+// counters say what is needed to judge the capture, the names stay on the
+// CLI. The error is readL7SNIStats's, so a caller can tell a missing file.
+func writeL7SNICounters(w io.Writer, now time.Time) error {
+	f, err := readL7SNIStats(l7sniStatsPath())
+	if err != nil {
+		return err
+	}
+	f.Top = nil
+	renderL7SNIStats(w, f, now)
+	fmt.Fprintln(w, "(самые частые имена здесь не показываются — это история посещений; они есть в `transport l7sni stats` по SSH)")
+	return nil
+}
+
+// l7sniStatsText is the counters as a string, for the bot.
 func l7sniStatsText(now time.Time) (string, error) {
 	var b strings.Builder
-	if err := printL7SNIStats(&b, now); err != nil {
-		return "", err
+	if err := writeL7SNICounters(&b, now); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return noL7SNIStatsMessage, nil
+		}
+		return "", fmt.Errorf("не удалось прочитать статистику l7sni: %w", err)
 	}
 	return b.String(), nil
 }

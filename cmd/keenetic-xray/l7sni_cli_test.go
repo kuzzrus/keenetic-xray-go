@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"os/signal"
@@ -262,5 +263,63 @@ func TestTransportL7SNIQUIC_ReloadsTheDaemon(t *testing.T) {
 	case <-got:
 	case <-time.After(2 * time.Second):
 		t.Fatal("no SIGHUP reached the daemon: it and the bot would keep the old mode and write it back")
+	}
+}
+
+// The bot shows the counters in a chat that is relayed through the control
+// server and Telegram: no list of visited hostnames there, and a missing file
+// is "no statistics yet", not an error the bot would show as a failure.
+func TestL7SNIStatsText_CountersWithoutNames(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "stats.json")
+	t.Setenv("KEENETIC_XRAY_L7SNI_STATS", path)
+	now := time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)
+
+	got, err := l7sniStatsText(now)
+	if err != nil || got != noL7SNIStatsMessage {
+		t.Fatalf("no file: %q, %v, want the 'no statistics yet' message and no error", got, err)
+	}
+
+	s := newL7SNIStats(now.Add(-time.Hour))
+	s.inc(statTLSHello)
+	s.seenName("tls", "private-site.example", false)
+	if err := writeL7SNIStats(path, s.snapshot(now, "observe")); err != nil {
+		t.Fatal(err)
+	}
+	got, err = l7sniStatsText(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "TLS (TCP/443): ClientHello разобрано 1") || !strings.Contains(got, "по SSH") {
+		t.Errorf("counters text:\n%s", got)
+	}
+	if strings.Contains(got, "private-site.example") {
+		t.Errorf("the bot's counters list a hostname a LAN client visited:\n%s", got)
+	}
+
+	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l7sniStatsText(now); err == nil {
+		t.Error("an unreadable stats file must reach the operator as an error")
+	}
+}
+
+func TestReconcileL7SNIFromDisk(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "c.json")
+	t.Setenv("KEENETIC_XRAY_CONFIG", cfgPath)
+	logf := func(string, ...any) {}
+
+	if err := os.WriteFile(cfgPath, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileL7SNIFromDisk(context.Background(), logf); err == nil {
+		t.Error("an unreadable config must be an error, not a reconcile against defaults")
+	}
+
+	if err := config.Default().Save(cfgPath); err != nil { // l7sni off: nothing to do, on or off a router
+		t.Fatal(err)
+	}
+	if err := reconcileL7SNIFromDisk(context.Background(), logf); err != nil {
+		t.Errorf("l7sni off: %v", err)
 	}
 }

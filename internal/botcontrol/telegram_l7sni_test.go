@@ -141,3 +141,24 @@ func TestTelegramBot_L7SNIBadButtonsDoNotCrash(t *testing.T) {
 	fake.pushCallback(1, msgID, "adxS:nope")
 	fake.waitForEditContaining(t, 3*time.Second, "нет такого роутера: nope")
 }
+
+// Telegram refuses a keyboard with callback_data over 64 bytes; the longest
+// router ID ValidRouterID lets through must still fit every button of the
+// L7 screens (like the list screens' test in telegram_adaptive_test.go).
+func TestL7SNIScreens_CallbackDataFitsTelegram(t *testing.T) {
+	id := strings.Repeat("a", maxRouterIDLen)
+	if !ValidRouterID(id) {
+		t.Fatalf("setup: %q is not a valid router ID", id)
+	}
+	for name, kb := range map[string]inlineKeyboard{
+		"adaptive": adaptiveRouteScreenKB(id), "l7": l7sniScreenKB(id), "stats": l7sniStatsKB(id),
+	} {
+		for _, row := range kb.InlineKeyboard {
+			for _, b := range row {
+				if len(b.CallbackData) > 64 {
+					t.Errorf("%s screen: callback_data %q is %d bytes, over Telegram's 64", name, b.CallbackData, len(b.CallbackData))
+				}
+			}
+		}
+	}
+}

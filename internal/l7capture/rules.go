@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // The points below are the only places this file touches the system --
@@ -217,6 +218,15 @@ func ruleSpecs(o RuleOptions) []ruleSpec {
 	return specs
 }
 
+// rulesMu serialises the in-process changers of our rules. EnsureRules is
+// clear-then-add, a handful of iptables runs, and three goroutines of the
+// daemon reach it: the capture session at its start, the reconcile loop, and
+// the bot (a QUIC mode button). Two of them interleaving leave the chain with
+// duplicated rules -- every packet captured and processed twice -- until the
+// next reconcile counts them. (The CLI is another process and cannot share
+// this; its worst case is the same self-healing duplicate.)
+var rulesMu sync.Mutex
+
 // EnsureRules installs opts' NFLOG rules in filter/FORWARD, removing any
 // stale copy of ours first (a different WAN interface or group) --
 // same clear-then-add idempotency as internal/adaptiveroute's own
@@ -227,6 +237,8 @@ func EnsureRules(ctx context.Context, opts RuleOptions) error {
 	if err := opts.validate(); err != nil {
 		return err
 	}
+	rulesMu.Lock()
+	defer rulesMu.Unlock()
 	clearOurRules(ctx)
 	add := func(withComment bool) error {
 		for _, spec := range ruleSpecs(opts) {
@@ -334,6 +346,8 @@ func isOurRule(line, comment string) bool {
 
 // ClearRules removes this file's NFLOG rules. A no-op when none exist.
 func ClearRules(ctx context.Context) error {
+	rulesMu.Lock()
+	defer rulesMu.Unlock()
 	return clearOurRules(ctx)
 }
 

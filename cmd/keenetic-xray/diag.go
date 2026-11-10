@@ -229,14 +229,9 @@ func writeDiag(w io.Writer) {
 func writeDiagL7SNI(w io.Writer, cfg *config.Config, now time.Time) {
 	fmt.Fprintln(w, "\n---- l7sni ----")
 	fmt.Fprintln(w, l7sniQUICLine(cfg))
-	f, err := readL7SNIStats(l7sniStatsPath())
-	if err != nil {
+	if err := writeL7SNICounters(w, now); err != nil {
 		fmt.Fprintf(w, "статистика: %v\n", err)
-		return
 	}
-	f.Top = nil
-	renderL7SNIStats(w, f, now)
-	fmt.Fprintln(w, "(самые частые имена в diag не выводятся — это история посещений; они есть в `transport l7sni stats`)")
 }
 
 // diagPortListening reports whether something accepts TCP on

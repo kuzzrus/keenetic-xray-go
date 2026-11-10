@@ -70,16 +70,23 @@ func (h *RouterHandler) l7sniOff(ctx context.Context) (string, error) {
 // the CLI sends the daemon a reload after `quic`: a copy that never heard of
 // the new mode would write the old one back.
 func (h *RouterHandler) l7sniQUIC(ctx context.Context, mode string) (string, error) {
+	previous := h.Config.L7SNI.QUIC
 	if mode == config.L7SNIQUICOff {
 		h.Config.L7SNI.QUIC = "" // off is the default; keep the config file free of it
 	} else {
 		h.Config.L7SNI.QUIC = mode
 	}
 	if err := h.Config.Save(h.ConfigPath); err != nil {
+		// Not saved, so not chosen: left in memory it would be reported by
+		// the next "show" although the capture (which reads the file) is
+		// not running it, and written out by the next unrelated save.
+		h.Config.L7SNI.QUIC = previous
 		return "", err
 	}
 	out := l7sniQUICStatusRU(h.Config)
-	if mode == config.L7SNIQUICAct {
+	if h.Config.EffectiveL7SNIQUIC() == config.L7SNIQUICAct {
+		// only when "act" really is in effect: with l7sni or adaptive routing
+		// off the status line says it observes, and nothing is redirected
 		out += "\nБраузеры сами уходят на TCP, когда QUIC к адресу отбит; приложению без запасного пути на TCP QUIC к такому адресу не достанется."
 	}
 	if mode != config.L7SNIQUICOff && !h.Config.L7SNI.Enabled {

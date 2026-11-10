@@ -3,6 +3,7 @@ package botcontrol
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -177,5 +178,61 @@ func TestRouterHandler_AdaptiveRouteShow_IncludesQUICMode(t *testing.T) {
 	out, _ = h.Handle(context.Background(), Command{Action: ActionAdaptiveRouteShow})
 	if !strings.Contains(out, "но L7 SNI выключен") {
 		t.Errorf("a saved QUIC mode with l7sni off should be shown as inactive: %q", out)
+	}
+}
+
+// The warning about apps that have no TCP fallback describes what redirecting
+// does; with act not in effect nothing is redirected and the status line says
+// the capture only observes, so the two must not appear together.
+func TestRouterHandler_L7SNIQUIC_ActWarningOnlyWhenActIsInEffect(t *testing.T) {
+	const warn = "без запасного пути на TCP"
+	for _, tc := range []struct {
+		name               string
+		l7sni, adaptive    bool
+		wantWarn, wantNote string
+	}{
+		{"in effect", true, true, "yes", "действие — совпавшие"},
+		{"adaptive routing off: it only observes", true, false, "", "работает как «наблюдение»"},
+		{"l7sni off: nothing runs", false, true, "", "но L7 SNI выключен"},
+	} {
+		h := newL7Handler(t)
+		h.Config.L7SNI.Enabled, h.Config.AdaptiveRoute.Enabled = tc.l7sni, tc.adaptive
+		out, err := h.Handle(context.Background(), Command{Action: ActionL7SNIQUICAct})
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if !strings.Contains(out, tc.wantNote) {
+			t.Errorf("%s: output %q lacks %q", tc.name, out, tc.wantNote)
+		}
+		if got := strings.Contains(out, warn); got != (tc.wantWarn != "") {
+			t.Errorf("%s: warning present = %v, want %v: %q", tc.name, got, tc.wantWarn != "", out)
+		}
+	}
+}
+
+// A mode that could not be saved was not chosen: it must not stay in memory,
+// where "show" would report it and the next unrelated save would write it.
+func TestRouterHandler_L7SNIQUIC_FailedSaveLeavesTheModeAlone(t *testing.T) {
+	h := newL7Handler(t)
+	h.Config.L7SNI.QUIC = config.L7SNIQUICObserve
+	// Save creates a missing directory, so make the "directory" a file: the
+	// write cannot succeed.
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.ConfigPath = filepath.Join(blocker, "c.json")
+
+	if _, err := h.Handle(context.Background(), Command{Action: ActionL7SNIQUICAct}); err == nil {
+		t.Fatal("a save below a regular file should fail")
+	}
+	if h.Config.L7SNI.QUIC != config.L7SNIQUICObserve {
+		t.Errorf("after a failed save the in-memory mode is %q, want the previous %q", h.Config.L7SNI.QUIC, config.L7SNIQUICObserve)
+	}
+	if _, err := h.Handle(context.Background(), Command{Action: ActionL7SNIQUICOff}); err == nil {
+		t.Fatal("a save below a regular file should fail")
+	}
+	if h.Config.L7SNI.QUIC != config.L7SNIQUICObserve {
+		t.Errorf("after a failed off the in-memory mode is %q, want the previous %q", h.Config.L7SNI.QUIC, config.L7SNIQUICObserve)
 	}
 }

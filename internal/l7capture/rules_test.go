@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func testOpts() RuleOptions {
@@ -462,5 +465,79 @@ func TestRulesInPlace_RealQUICLine(t *testing.T) {
 	f.lines = append(realForwardLines("eth1", "41:65535"), realQUICLine("eth1"))
 	if !RulesInPlace(context.Background(), quicOpts()) {
 		t.Errorf("not in place for the rules as iptables prints them: %v", f.lines)
+	}
+}
+
+// lockedFakeIptables is fakeIptables for tests that run EnsureRules from
+// several goroutines: the chain is guarded, and every run yields so that two
+// calls really do interleave their iptables commands.
+type lockedFakeIptables struct {
+	mu    sync.Mutex
+	inner fakeIptables
+}
+
+func installLockedFakeIptables(t *testing.T) *lockedFakeIptables {
+	t.Helper()
+	f := &lockedFakeIptables{}
+	origRun, origList := iptablesRun, iptablesListFORWARD
+	iptablesRun = func(_ context.Context, args ...string) error {
+		runtime.Gosched()
+		time.Sleep(200 * time.Microsecond)
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return f.inner.apply(args)
+	}
+	iptablesListFORWARD = func(context.Context) (string, error) {
+		runtime.Gosched()
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return strings.Join(f.inner.lines, "\n"), nil
+	}
+	t.Cleanup(func() { iptablesRun, iptablesListFORWARD = origRun, origList })
+	return f
+}
+
+// TestEnsureRules_ConcurrentCallsLeaveExactlyTheWantedRules: the capture
+// session, the reconcile loop and the bot all reach EnsureRules, which is
+// clear-then-add; interleaved, two calls leave duplicated rules behind.
+func TestEnsureRules_ConcurrentCallsLeaveExactlyTheWantedRules(t *testing.T) {
+	f := installLockedFakeIptables(t)
+	opts := RuleOptions{WANInterface: "eth1", Group: 4210, QUIC: true}
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = EnsureRules(context.Background(), opts)
+		}()
+	}
+	wg.Wait()
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if want := len(ruleSpecs(opts)); len(f.inner.lines) != want {
+		t.Errorf("the chain holds %d rules after four concurrent EnsureRules calls, want %d:\n%s",
+			len(f.inner.lines), want, strings.Join(f.inner.lines, "\n"))
+	}
+}
+
+// ClearRules goes through the same lock, so it cannot cut an EnsureRules in
+// half: after any mix of the two the chain holds either nothing or the whole
+// wanted set, never a part of it.
+func TestClearRulesAndEnsureRulesNeverLeaveAPartialSet(t *testing.T) {
+	f := installLockedFakeIptables(t)
+	opts := RuleOptions{WANInterface: "eth1", Group: 4210, QUIC: true}
+	var wg sync.WaitGroup
+	for i := 0; i < 3; i++ {
+		wg.Add(2)
+		go func() { defer wg.Done(); _ = EnsureRules(context.Background(), opts) }()
+		go func() { defer wg.Done(); _ = ClearRules(context.Background()) }()
+	}
+	wg.Wait()
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if n, want := len(f.inner.lines), len(ruleSpecs(opts)); n != 0 && n != want {
+		t.Errorf("the chain holds %d rules, want none or all %d:\n%s", n, want, strings.Join(f.inner.lines, "\n"))
 	}
 }

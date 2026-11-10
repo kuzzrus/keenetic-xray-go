@@ -45,7 +45,7 @@ func reconcileL7SNI(ctx context.Context, cfg *config.Config, logf func(string, .
 		logf("l7sni: reconcile WAN detection failed: %v", err)
 		return err
 	}
-	opts := l7capture.RuleOptions{WANInterface: wan, Group: l7sniNflogGroup, QUIC: l7sniQUICModeFor(cfg) != config.L7SNIQUICOff}
+	opts := l7capture.RuleOptions{WANInterface: wan, Group: l7sniNflogGroup, QUIC: cfg.EffectiveL7SNIQUIC() != config.L7SNIQUICOff}
 	if l7capture.RulesInPlace(cctx, opts) {
 		return nil
 	}
@@ -196,7 +196,7 @@ func l7SNIClassifySession(ctx context.Context, logf func(string, ...any)) (start
 		return false, err
 	}
 
-	cfgQUIC := l7sniQUICModeFor(cfg)
+	cfgQUIC := cfg.EffectiveL7SNIQUIC()
 	ruleOpts := l7capture.RuleOptions{WANInterface: wan, Group: l7sniNflogGroup, QUIC: cfgQUIC != config.L7SNIQUICOff}
 
 	logf("l7sni: installing NFLOG rules on %s (QUIC %s)", wan, cfgQUIC)

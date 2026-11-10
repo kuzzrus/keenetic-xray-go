@@ -263,10 +263,9 @@ func adaptiveRouteScreenText(id string) string {
 		"пределы обычной /24-догадки; /16 — разрешает забрать весь крупный провайдерский блок. " +
 		"Не отключает укрупнение (для этого — порог выше), только ограничивает, насколько широко " +
 		"оно может зайти — кнопки ниже.\n\n" +
-		"🔍 L7 SNI — отдельная, независимо включаемая надстройка: читает TLS SNI/HTTP Host " +
-		"прямо с провода (NFLOG) и досылает в тот же список адресов совпадения с твоими routes, " +
-		"даже если DNS-запрос сам роутер не видел (DoH/DoT-клиенты, приложения с зашитым IP). " +
-		"Переключение всегда перезапускает демон — живого применения тут нет.\n\n" +
+		"🔍 L7 SNI и QUIC — отдельная надстройка: читает имена TLS/HTTP (и QUIC) прямо с провода " +
+		"и досылает в тот же список адресов совпадения с твоими routes, даже если DNS-запрос сам " +
+		"роутер не видел. Включение, режимы QUIC и счётчики — на своём экране, кнопка ниже.\n\n" +
 		"Состояние — 📊 Показать."
 }
 
@@ -279,7 +278,7 @@ func adaptiveRouteScreenKB(id string) inlineKeyboard {
 			{Text: "8", CallbackData: "adblk:" + id + ":8"}, {Text: "16", CallbackData: "adblk:" + id + ":16"}},
 		{{Text: "Потолок: /24", CallbackData: "adwid:" + id + ":24"}, {Text: "/20", CallbackData: "adwid:" + id + ":20"},
 			{Text: "/18 (по умолч.)", CallbackData: "adwid:" + id + ":18"}, {Text: "/16", CallbackData: "adwid:" + id + ":16"}},
-		{{Text: "🔍 L7 SNI вкл", CallbackData: "act:l7sni_on:" + id}, {Text: "🔍 L7 SNI выкл", CallbackData: "act:l7sni_off:" + id}},
+		{{Text: "🔍 L7 SNI и QUIC", CallbackData: "adxQ:" + id}},
 		{{Text: "📋 Что перенаправлено", CallbackData: "adxO:" + id}, {Text: "🚫 Исключения", CallbackData: "adxX:" + id}},
 		{{Text: "🧹 Очистить список", CallbackData: "act:adrt_flush:" + id}},
 		{{Text: "📊 Показать", CallbackData: "act:adrt_show:" + id}, {Text: "⬅️ Назад", CallbackData: "ptm:" + id}},
@@ -381,6 +380,14 @@ func callbackAction(name string) string {
 		return ActionL7SNIOn
 	case "l7sni_off":
 		return ActionL7SNIOff
+	case "l7q_off":
+		return ActionL7SNIQUICOff
+	case "l7q_obs":
+		return ActionL7SNIQUICObserve
+	case "l7q_act":
+		return ActionL7SNIQUICAct
+	case "l7sni_stats":
+		return ActionL7SNIStats
 	case "wd_show":
 		return ActionWatchdogShow
 	case "wd_enable":
@@ -529,6 +536,7 @@ func (b *TelegramBot) handleCallback(ctx context.Context, cb tgCallbackQuery) {
 		b.editCB(ctx, cb, adaptiveRouteScreenText(id), adaptiveRouteScreenKB(id))
 	case strings.HasPrefix(data, "adx") && b.handleAdaptiveCallback(ctx, cb, data):
 		// the 🎯 lists: что перенаправлено / исключения (adxO/adxL/adxI/adxE/adxX/adxP/adxR)
+		// and the 🔍 L7 SNI и QUIC screen (adxQ/adxS)
 	case strings.HasPrefix(data, "diagf:"):
 		go b.sendDiagFile(ctx, cb.Message.Chat.ID, strings.TrimPrefix(data, "diagf:"))
 	case strings.HasPrefix(data, "ptwiz:"):

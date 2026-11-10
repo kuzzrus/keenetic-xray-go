@@ -119,7 +119,7 @@ func l7sniLoadSnapshot() l7sniSnapshot {
 		enabled: l7sniEnabled(cfg),
 		ttl:     cfg.AdaptiveRoute.EffectiveOKTTL(),
 		domains: l7sniDomainsFrom(cfg),
-		quic:    l7sniQUICModeFor(cfg),
+		quic:    cfg.EffectiveL7SNIQUIC(),
 	}
 }
 

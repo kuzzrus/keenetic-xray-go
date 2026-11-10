@@ -157,10 +157,10 @@ func l7sniQUICWord(mode string) string {
 // l7sniQUICLine says what the QUIC mode is and what it amounts to. The
 // configured mode and the one the capture runs with can differ -- l7sni
 // itself off silences it, and "act" with adaptive routing off only observes
-// (l7sniQUICModeFor) -- and the line says so rather than leaving the
+// (Config.EffectiveL7SNIQUIC) -- and the line says so rather than leaving the
 // operator to wonder why nothing happens.
 func l7sniQUICLine(cfg *config.Config) string {
-	set, eff := cfg.L7SNI.QUICMode(), l7sniQUICModeFor(cfg)
+	set, eff := cfg.L7SNI.QUICMode(), cfg.EffectiveL7SNIQUIC()
 	line := "QUIC (UDP/443): " + l7sniQUICWord(set)
 	switch {
 	case set == config.L7SNIQUICOff:
@@ -206,17 +206,61 @@ func l7sniQUICHints(cfg *config.Config) []string {
 	return out
 }
 
+// noL7SNIStatsMessage is what a missing stats file means to the operator.
+const noL7SNIStatsMessage = "l7sni: статистики пока нет — l7sni выключен, демон только что запущен или ещё ничего не перехватил (файл обновляется раз в ~10 с)"
+
 // printL7SNIStats is `transport l7sni stats`: what the daemon's capture has
 // counted since it started, read from the file it publishes.
 func printL7SNIStats(w io.Writer, now time.Time) error {
 	f, err := readL7SNIStats(l7sniStatsPath())
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			fmt.Fprintln(w, "l7sni: статистики пока нет — l7sni выключен, демон только что запущен или ещё ничего не перехватил (файл обновляется раз в ~10 с)")
+			fmt.Fprintln(w, noL7SNIStatsMessage)
 			return nil
 		}
 		return fmt.Errorf("не удалось прочитать статистику l7sni: %w", err)
 	}
 	renderL7SNIStats(w, f, now)
 	return nil
+}
+
+// writeL7SNICounters is the stats without the list of most-seen names, for
+// the places that get pasted or relayed: the diag bundle and the bot's chat
+// (router -> control server -> Telegram). That list is the household's
+// browsing history -- every site any client opened, not only the ones on a
+// routes list -- and the stats file is private for exactly that reason; the
+// counters say what is needed to judge the capture, the names stay on the
+// CLI. The error is readL7SNIStats's, so a caller can tell a missing file.
+func writeL7SNICounters(w io.Writer, now time.Time) error {
+	f, err := readL7SNIStats(l7sniStatsPath())
+	if err != nil {
+		return err
+	}
+	f.Top = nil
+	renderL7SNIStats(w, f, now)
+	fmt.Fprintln(w, "(самые частые имена здесь не показываются — это история посещений; они есть в `transport l7sni stats` по SSH)")
+	return nil
+}
+
+// l7sniStatsText is the counters as a string, for the bot.
+func l7sniStatsText(now time.Time) (string, error) {
+	var b strings.Builder
+	if err := writeL7SNICounters(&b, now); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return noL7SNIStatsMessage, nil
+		}
+		return "", fmt.Errorf("не удалось прочитать статистику l7sni: %w", err)
+	}
+	return b.String(), nil
+}
+
+// reconcileL7SNIFromDisk is reconcileL7SNI against the config as it is on
+// disk right now -- for the bot, which has just saved a new QUIC mode and
+// wants the NFLOG rule to follow it at once.
+func reconcileL7SNIFromDisk(ctx context.Context, logf func(string, ...any)) error {
+	cfg, err := config.Load(configPath())
+	if err != nil {
+		return err
+	}
+	return reconcileL7SNI(ctx, cfg, logf)
 }

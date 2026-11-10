@@ -154,6 +154,17 @@ type RouterHandler struct {
 	// to delete, or the path genuinely isn't configured).
 	AdaptiveRouteStatePath string
 
+	// ReconcileL7SNI places or removes the NFLOG rules of the L7 capture so
+	// they match the saved config (cmd/keenetic-xray's reconcileL7SNI, which
+	// does nothing off a router or with l7sni off). nil -> the QUIC mode
+	// actions only save, and say the daemon's own reconcile will follow.
+	ReconcileL7SNI func(ctx context.Context) error
+
+	// L7SNIStatsText renders what the L7 capture has counted, from the file
+	// the daemon publishes (cmd/keenetic-xray's printL7SNIStats). nil -> the
+	// l7sni_stats action returns an error.
+	L7SNIStatsText func() (string, error)
+
 	// SelfUpdateEvents, if set, receives one Event when the detached
 	// install.sh run started by selfUpdate fails outright (before ever
 	// reaching a daemon restart). Logf already records the same failure
@@ -302,6 +313,14 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 		return h.l7sniOn(ctx)
 	case ActionL7SNIOff:
 		return h.l7sniOff(ctx)
+	case ActionL7SNIQUICOff:
+		return h.l7sniQUIC(ctx, config.L7SNIQUICOff)
+	case ActionL7SNIQUICObserve:
+		return h.l7sniQUIC(ctx, config.L7SNIQUICObserve)
+	case ActionL7SNIQUICAct:
+		return h.l7sniQUIC(ctx, config.L7SNIQUICAct)
+	case ActionL7SNIStats:
+		return h.l7sniStats()
 	case ActionRCIShow:
 		return h.rciShow(ctx), nil
 	case ActionRCIOn:

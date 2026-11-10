@@ -576,6 +576,8 @@ func (b *TelegramBot) handleAdaptiveCallback(ctx context.Context, cb tgCallbackQ
 			return true
 		}
 		b.adaptiveMutate(ctx, chatID, msgID, id, ActionAdaptiveRouteInclude, []string{m.excluded[idx]}, b.showAdaptiveExcluded)
+	case strings.HasPrefix(data, "adxQ:"), strings.HasPrefix(data, "adxS:"): // the 🔍 L7 SNI и QUIC screen
+		return b.handleL7SNICallback(ctx, cb, data)
 	default:
 		return false
 	}

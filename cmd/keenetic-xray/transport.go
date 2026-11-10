@@ -118,7 +118,7 @@ func printTransport(cfg *config.Config) {
 	}
 
 	if cfg.L7SNI.Enabled {
-		fmt.Printf("l7sni (определение домена по TLS SNI/HTTP Host): вкл, QUIC: %s\n", l7sniQUICWord(l7sniQUICModeFor(cfg)))
+		fmt.Printf("l7sni (определение домена по TLS SNI/HTTP Host): вкл, QUIC: %s\n", l7sniQUICWord(cfg.EffectiveL7SNIQUIC()))
 	} else {
 		fmt.Println("l7sni (определение домена по TLS SNI/HTTP Host): выкл")
 	}

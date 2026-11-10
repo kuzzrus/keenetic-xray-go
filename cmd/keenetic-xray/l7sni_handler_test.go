@@ -470,31 +470,3 @@ func TestHandler_QUICUnparseableDatagramsAreCountedByReason(t *testing.T) {
 			r.count(statQUICAuthFailed), r.count(statQUICNotInitial), r.count(statQUICBadVersion), r.count(statQUICMalformed))
 	}
 }
-
-// --- snapshot / mode ---------------------------------------------------
-
-func TestL7SNIQUICModeFor(t *testing.T) {
-	mk := func(l7, adaptive bool, quic string) *config.Config {
-		c := config.Default()
-		c.L7SNI = config.L7SNIConfig{Enabled: l7, QUIC: quic}
-		c.AdaptiveRoute.Enabled = adaptive
-		return c
-	}
-	cases := []struct {
-		name string
-		cfg  *config.Config
-		want string
-	}{
-		{"l7sni off beats everything", mk(false, true, "act"), config.L7SNIQUICOff},
-		{"unset is off", mk(true, true, ""), config.L7SNIQUICOff},
-		{"observe stands without adaptive routing", mk(true, false, "observe"), config.L7SNIQUICObserve},
-		{"act with adaptive routing", mk(true, true, "act"), config.L7SNIQUICAct},
-		{"act without adaptive routing degrades to observe", mk(true, false, "act"), config.L7SNIQUICObserve},
-		{"a typo is off", mk(true, true, "Act"), config.L7SNIQUICOff},
-	}
-	for _, tc := range cases {
-		if got := l7sniQUICModeFor(tc.cfg); got != tc.want {
-			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
-		}
-	}
-}

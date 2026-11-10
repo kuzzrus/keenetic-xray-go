@@ -363,3 +363,61 @@ func TestL7SNIQUICHints_FollowTheEffectiveMode(t *testing.T) {
 		}
 	}
 }
+
+// The capture matches Proxy0 lists only. An operator whose lists go through the
+// WG transport used to see a running capture, zero matches and no reason; the
+// note names the interfaces the capture does not look at.
+func TestL7SNINoListsNote(t *testing.T) {
+	cfg := l7sniTestConfig(true, true, "")
+	cfg.Routing.Lists = []config.RouteList{
+		{Name: "telegram", Entries: []string{"t.me"}, Interface: "Wireguard0"},
+		{Name: "telegram-ip", Entries: []string{"149.154.160.0/20"}, Interface: "Wireguard0"},
+	}
+	note := l7sniNoListsNote(cfg)
+	for _, want := range []string{"через Proxy0 нет ни одного домена", "имена только считаются", "твои списки идут через Wireguard0"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("note %q lacks %q", note, want)
+		}
+	}
+
+	cfg.Routing.Lists = nil
+	if note := l7sniNoListsNote(cfg); !strings.Contains(note, "нет ни одного домена") || strings.Contains(note, "твои списки") {
+		t.Errorf("no lists at all: %q", note)
+	}
+
+	cfg.Routing.Lists = []config.RouteList{{Name: "ru", Entries: []string{"youtube.com"}}}
+	if note := l7sniNoListsNote(cfg); note != "" {
+		t.Errorf("a Proxy0 list with a domain: the note should be silent, got %q", note)
+	}
+	cfg.Routing.Lists = nil
+	cfg.L7SNI.Enabled = false
+	if note := l7sniNoListsNote(cfg); note != "" {
+		t.Errorf("L7 SNI off: the note should be silent, got %q", note)
+	}
+}
+
+func TestPrintL7SNIState_SaysWhyThereIsNothingToMatch(t *testing.T) {
+	cfg := l7sniTestConfig(true, true, "")
+	cfg.Routing.Lists = []config.RouteList{{Name: "telegram", Entries: []string{"t.me"}, Interface: "Wireguard0"}}
+	var b bytes.Buffer
+	printL7SNIState(&b, cfg)
+	if !strings.Contains(b.String(), "твои списки идут через Wireguard0") {
+		t.Errorf("show does not say why nothing is matched:\n%s", b.String())
+	}
+
+	// the "act" hints carry the same sentence: it must not be printed twice
+	act := l7sniTestConfig(true, true, "act")
+	act.Routing.Lists = cfg.Routing.Lists
+	b.Reset()
+	printL7SNIState(&b, act)
+	if n := strings.Count(b.String(), "нет ни одного домена"); n != 1 {
+		t.Errorf("the no-lists sentence is printed %d times, want once:\n%s", n, b.String())
+	}
+
+	cfg.Routing.Lists = []config.RouteList{{Name: "ru", Entries: []string{"youtube.com"}}}
+	b.Reset()
+	printL7SNIState(&b, cfg)
+	if strings.Contains(b.String(), "нет ни одного домена") {
+		t.Errorf("show warns about empty lists although a Proxy0 list has a domain:\n%s", b.String())
+	}
+}

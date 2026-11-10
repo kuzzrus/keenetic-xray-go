@@ -161,6 +161,18 @@ func (h *RouterHandler) l7sniShow() string {
 	if !cfg.AdaptiveRoute.Enabled {
 		b.WriteString("\n⚠️ Адаптивная маршрутизация выключена — включи её на экране выше (⬅️ Назад): без неё L7 SNI ничего не переправляет, только считает. Выключать её ради L7 не нужно.")
 	}
+	if cfg.L7SNI.Enabled {
+		// The capture matches names against the lists routed through Proxy0
+		// only; an operator whose lists go through Wireguard0 saw it run, count
+		// and never match, with nothing to say why.
+		if domains, others := cfg.L7SNIListSummary(); domains == 0 {
+			b.WriteString("\nℹ️ В списках маршрутов через Proxy0 нет ни одного домена — переправлять нечего, имена только считаются")
+			if len(others) > 0 {
+				b.WriteString(" (твои списки идут через " + strings.Join(others, ", ") + ", а их захват не смотрит)")
+			}
+			b.WriteString(".")
+		}
+	}
 	return b.String()
 }
 

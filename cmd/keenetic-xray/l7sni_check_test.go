@@ -184,3 +184,13 @@ func TestCountersShowTheRuleCheck(t *testing.T) {
 	mustContain(t, "bot, with a file", bot, "TLS (TCP/443)", "таблица mangle")
 	mustNotContain(t, "bot, with a file", bot, "private-site.example")
 }
+
+// A fresh restart: 105 TCP packets and no QUIC is under a minute of traffic, not
+// evidence about the UDP rule -- the remark appeared exactly there on his router.
+func TestRenderL7SNICaptureCheck_NoQUICRemarkAfterOnlyAFewPackets(t *testing.T) {
+	out := checkText(mangleRules("eth2.4", 90, 15, 0), nil, "eth2.4", &l7sniStatsFile{Messages: 95})
+	mustNotContain(t, "105 packets", out, "QUIC: правило")
+
+	enough := checkText(mangleRules("eth2.4", 450, 50, 0), nil, "eth2.4", &l7sniStatsFile{Messages: 500})
+	mustContain(t, "500 packets", enough, "QUIC: правило UDP/443 не сработало ни разу при 500")
+}

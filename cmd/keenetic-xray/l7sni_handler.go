@@ -171,14 +171,22 @@ func (h *l7sniHandler) expire(now time.Time) {
 // logs a match", something hardware testing needs to notice directly, not
 // a log line per uninteresting packet).
 func (h *l7sniHandler) handle(ctx context.Context, raw []byte, snap l7sniSnapshot, logf func(string, ...any)) {
-	tcpOn := snap.enabled && len(snap.domains) > 0
+	// TLS/HTTP names are read whenever L7 SNI is really on -- matching needs
+	// route lists, counting does not. The parse used to be skipped without
+	// lists, "since every packet would be parsed just to be discarded at the
+	// match step", and on a router whose lists all go through Wireguard0 (the
+	// capture only looks at Proxy0 lists, see l7sniDomainsFrom) the counters
+	// then sat at zero next to a capture that was receiving packets -- the
+	// same blind spot QUIC "observe" was built to avoid. The price is one
+	// ClientHello parse per captured packet of a new connection (the
+	// kernel-side filter keeps that to its first few packets), measured at
+	// microseconds.
+	tcpOn := snap.enabled
 	quicOn := snap.quic == config.L7SNIQUICObserve || snap.quic == config.L7SNIQUICAct
 	if !tcpOn && !quicOn {
 		// Nothing this packet could possibly be used for -- checked before
-		// any parsing at all, since with no route lists configured (the
-		// common case for an operator who hasn't set any up) every
-		// captured packet would otherwise be fully parsed just to be
-		// discarded at the match step.
+		// any parsing at all: with L7 SNI (or adaptive routing) off the
+		// capture has no business parsing anything.
 		return
 	}
 	proto, src, dst, sport, dport, seq, payload, ok := l7sni.ParseIPv4(raw)
@@ -227,6 +235,13 @@ func (h *l7sniHandler) handleTCP(ctx context.Context, src, dst [4]byte, sport, d
 		h.stats.seenName("http", name, false)
 		host, matchStat, actedStat = name, statHTTPMatch, statHTTPActed
 	default:
+		return
+	}
+
+	if len(snap.domains) == 0 {
+		// Nothing to match against: the sighting is counted, and that is all
+		// -- not worth a place in the shared-address table either, which only
+		// serves the TTL of a match.
 		return
 	}
 

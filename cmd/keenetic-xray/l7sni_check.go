@@ -53,6 +53,14 @@ func l7sniCaptureCheck(f *l7sniStatsFile) string {
 	return strings.Join(renderL7SNICaptureCheck(stats, err, wan, wanErr, f), "\n")
 }
 
+// l7sniQUICSilentMinTCP is how many TCP packets the rules must have counted
+// before a silent UDP/443 rule is worth a remark: the counters restart with
+// every reinstall of the rules (a firewall rebuild, a daemon restart), and
+// fifty packets are under a minute of an ordinary household -- the remark
+// appeared on his router 46 seconds after a restart, when no client had had a
+// reason to open QUIC yet.
+const l7sniQUICSilentMinTCP = 500
+
 // l7sniRuleName is how a rule reads in the listing.
 func l7sniRuleName(r l7capture.RuleStat) string {
 	if r.Proto == "udp" && r.DPort == 443 {
@@ -119,7 +127,7 @@ func renderL7SNICaptureCheck(stats []l7capture.RuleStat, statsErr error, wan str
 		out = append(out, fmt.Sprintf("⚠️ Правила срабатывают (%d пакетов), а демон не получил из NFLOG ни одного — сокет захвата не принимает группу %d. Смотрите: keenetic-xray logs 100 | grep l7sni",
 			total, l7capture.DefaultGroup))
 	}
-	if haveQUIC && quic == 0 && tcp >= 50 {
+	if haveQUIC && quic == 0 && tcp >= l7sniQUICSilentMinTCP {
 		out = append(out, fmt.Sprintf("QUIC: правило UDP/443 не сработало ни разу при %d срабатываниях TCP — клиенты не шлют QUIC наружу напрямую (браузер мог перейти на TCP) "+
 			"либо окно connbytes 0:3 этой прошивке не подходит.", tcp))
 	}

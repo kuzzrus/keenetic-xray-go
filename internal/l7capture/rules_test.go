@@ -73,6 +73,9 @@ func (f *fakeIptables) apply(args []string) error {
 		*chain = append(*chain, "-A "+strings.Join(args[1:], " "))
 		return nil
 	case "-I": // -I FORWARD <position> spec...
+		if len(args) < 4 {
+			return fmt.Errorf("fakeIptables: -I needs a chain, a position and a rule: %v", args)
+		}
 		pos, err := strconv.Atoi(args[2])
 		if err != nil || pos < 1 || pos-1 > len(*chain) {
 			return fmt.Errorf("fakeIptables: bad insert position in %v", args)

@@ -463,6 +463,7 @@ func (b *TelegramBot) handleCallback(ctx context.Context, cb tgCallbackQuery) {
 		return
 	}
 	b.answerCallback(ctx, cb.ID, "")
+	b.screens.touch(cb.Message.Chat.ID, cb.Message.MessageID)
 
 	data := cb.Data
 	switch {

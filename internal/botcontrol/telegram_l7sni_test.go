@@ -128,6 +128,47 @@ func TestTelegramBot_L7SNIScreenSurvivesAnAgentWithoutTheStateAction(t *testing.
 	}
 }
 
+// The state is drawn by a goroutine that waits for the router. An operator who
+// has gone Back by then must keep the screen they are on.
+func TestTelegramBot_LateL7SNIStateDoesNotRedrawAScreenTheOperatorLeft(t *testing.T) {
+	srv, fake := newFakeTelegram(t)
+	store := newBotStore(t)
+	mustRegister(t, store, "home")
+	bot := &TelegramBot{Token: "t", AllowedChats: map[int64]bool{1: true}, Store: store, APIBase: srv.URL, ResultTimeout: 5 * time.Second}
+	runBotInBackground(t, bot)
+
+	fake.push(1, "/menu")
+	fake.waitForReply(t, 3*time.Second)
+	msgID := fake.lastSent(t).MessageID
+
+	fake.pushCallback(1, msgID, "adxQ:home")
+	fake.waitForEditContaining(t, 3*time.Second, "🔍 L7 SNI и QUIC — home")
+	// the operator does not wait for the router and goes Back
+	fake.pushCallback(1, msgID, "adrt:home")
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && strings.Contains(fake.lastEdit(t).Text, "🔍 L7 SNI и QUIC — home") {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if strings.Contains(fake.lastEdit(t).Text, "🔍 L7 SNI и QUIC — home") {
+		t.Fatal("setup: the Back button did not leave the L7 screen")
+	}
+
+	// now the router answers the state request
+	var cmd *Command
+	for i := 0; i < 100 && cmd == nil; i++ {
+		cmd, _ = store.Dequeue("home")
+		time.Sleep(20 * time.Millisecond)
+	}
+	if cmd == nil || cmd.Action != ActionL7SNIShow {
+		t.Fatalf("no l7sni_show request reached the router: %+v", cmd)
+	}
+	_ = store.RecordResult("home", Result{CommandID: cmd.ID, Output: "🎯 Адаптивная маршрутизация: вкл"})
+	time.Sleep(400 * time.Millisecond)
+	if text := fake.lastEdit(t).Text; strings.Contains(text, "🔍 L7 SNI и QUIC — home") {
+		t.Errorf("the late answer redrew the L7 screen over the one the operator was on:\n%s", text)
+	}
+}
+
 func TestTelegramBot_L7SNIStatsScreen(t *testing.T) {
 	srv, fake := newFakeTelegram(t)
 	store := newBotStore(t)

@@ -3,6 +3,7 @@ package botcontrol
 import (
 	"context"
 	"strings"
+	"sync"
 )
 
 // The 🔍 L7 SNI и QUIC screen: a child of the adaptive-routing screen (the L7
@@ -96,22 +97,57 @@ func (b *TelegramBot) l7sniMutate(ctx context.Context, chatID int64, msgID int, 
 // router -- it is a menu -- and must not fail without one: an agent that does
 // not know l7sni_show (older than the control server) or does not answer leaves
 // the static screen as it was.
+//
+// Nothing the operator pressed asks for the state to be drawn, so it is drawn
+// only while the message is still on the tap that opened the screen: an
+// operator who has already gone Back (or to the counters) must not have that
+// screen replaced by this one when the router finally answers.
 func (b *TelegramBot) openL7SNIScreen(ctx context.Context, cb tgCallbackQuery, id string) {
 	b.editCB(ctx, cb, l7sniScreenText(id, ""), l7sniScreenKB(id))
 	chatID, msgID := cb.Message.Chat.ID, cb.Message.MessageID
+	tap := b.screens.current(chatID, msgID)
 	cmdID, err := b.Store.Enqueue(id, ActionL7SNIShow, nil)
 	if err != nil {
 		return
 	}
 	go func() {
 		res, ok := b.Store.AwaitResult(ctx, id, cmdID, b.resultTimeout())
-		if !ok || res.Err != "" {
+		if !ok || res.Err != "" || b.screens.current(chatID, msgID) != tap {
 			return
 		}
 		if head := strings.TrimSpace(res.Output); head != "" {
 			b.editMessageText(ctx, chatID, msgID, l7sniScreenText(id, head), l7sniScreenKB(id))
 		}
 	}()
+}
+
+// screenSeq counts the taps on each message, so a goroutine that was started by
+// one tap can tell that another has come since. Bounded: past a thousand
+// messages the table is dropped, which only makes an old goroutine skip its
+// edit -- the safe side.
+type screenSeq struct {
+	mu sync.Mutex
+	n  map[screenKey]uint64
+}
+
+type screenKey struct {
+	chat int64
+	msg  int
+}
+
+func (s *screenSeq) touch(chat int64, msg int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.n == nil || len(s.n) > 1024 {
+		s.n = map[screenKey]uint64{}
+	}
+	s.n[screenKey{chat, msg}]++
+}
+
+func (s *screenSeq) current(chat int64, msg int) uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.n[screenKey{chat, msg}]
 }
 
 // showL7SNIStats fetches what the L7 capture has counted and shows it in place

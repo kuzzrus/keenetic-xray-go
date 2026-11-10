@@ -55,12 +55,10 @@ func l7sniCaptureCheck(f *l7sniStatsFile) string {
 
 // l7sniRuleName is how a rule reads in the listing.
 func l7sniRuleName(r l7capture.RuleStat) string {
-	switch {
-	case r.Proto == "udp" && r.DPort == 443:
+	if r.Proto == "udp" && r.DPort == 443 {
 		return "UDP/443 (QUIC)"
-	default:
-		return fmt.Sprintf("%s/%d", strings.ToUpper(r.Proto), r.DPort)
 	}
+	return fmt.Sprintf("%s/%d", strings.ToUpper(r.Proto), r.DPort)
 }
 
 // renderL7SNICaptureCheck lists the rules with their packet counts and says what

@@ -18,6 +18,7 @@ import (
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/adaptiveroute"
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
+	"github.com/kuzzrus/keenetic-xray-go/internal/featuredeps"
 	"github.com/kuzzrus/keenetic-xray-go/internal/keenetic"
 	"github.com/kuzzrus/keenetic-xray-go/internal/l7capture"
 )
@@ -176,19 +177,32 @@ func l7SNIClassifySession(ctx context.Context, logf func(string, ...any)) (start
 		return false, nil
 	}
 
-	// Found live (2026-09-15): EnsureRules below fails outright with
-	// "iptables: No chain/target/match by that name" until the kernel
-	// modules NFLOG needs are actually loaded -- this project's opkg
-	// feed doesn't carry a separate installable package for either one,
-	// see EnsureNFLOGModule's own doc comment for the full story.
-	logf("l7sni: loading NFLOG kernel modules")
-	mctx, mcancel := context.WithTimeout(ctx, l7sniStartupTimeout)
-	err = l7capture.EnsureNFLOGModule(mctx)
-	mcancel()
-	if err != nil {
-		logf("l7sni: loading NFLOG kernel modules failed: %v", err)
+	// What the capture needs, before it tries to use it: iptables (the rules
+	// below are its first call -- without it the session used to die right
+	// there, once, with a line in this log and no second attempt) and the NFLOG
+	// kernel modules. Found live (2026-09-15) that EnsureRules fails outright
+	// with "iptables: No chain/target/match by that name" until the modules
+	// are loaded; the opkg feed has no package for them, so loading is all
+	// there is to do -- see EnsureNFLOGModule's doc comment. The same call
+	// brings back a tool that /opt lost since L7 SNI was switched on.
+	//
+	// Only what the capture cannot run without, and synchronously: an optional
+	// tool (conntrack) must never delay the start -- offline at boot, `opkg update`
+	// can hang for minutes -- nor be retried by every restart of the session
+	// (every few seconds while the socket keeps failing). It is tried once per
+	// process, in the background, after the required ones are known to be there.
+	logf("l7sni: checking iptables and the NFLOG kernel modules")
+	dctx, dcancel := context.WithTimeout(ctx, featuredeps.Timeout)
+	deps := featureEnsureRequired(dctx, featuredeps.L7SNI)
+	dcancel()
+	for _, line := range deps.Lines("", "") {
+		logf("l7sni: %s", line)
+	}
+	if err = deps.Err(); err != nil {
+		logf("l7sni: not starting: %v", err)
 		return false, err
 	}
+	ensureOptionalInBackground(featuredeps.L7SNI, "l7sni", logf)
 
 	wan, err := l7capture.ResolveWANInterface("")
 	if err != nil {

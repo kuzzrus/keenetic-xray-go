@@ -12,6 +12,7 @@ import (
 	"github.com/kuzzrus/keenetic-xray-go/internal/adaptiveroute"
 	"github.com/kuzzrus/keenetic-xray-go/internal/addons"
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
+	"github.com/kuzzrus/keenetic-xray-go/internal/featuredeps"
 	"github.com/kuzzrus/keenetic-xray-go/internal/keenetic"
 )
 
@@ -153,17 +154,16 @@ func (h *RouterHandler) adaptiveRouteOn(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("ndmc не найден — адаптивная маршрутизация работает только на роутере Keenetic")
 	}
 
-	if err := adaptiveroute.EnsureIPSetTool(ctx); err != nil {
+	// iptables and ipset are required (an error here stops the switch, with
+	// what to type by hand); conntrack is a warning -- without it the redirect
+	// still works for new connection attempts, only an already-established
+	// flow's immediate re-route degrades to "wait for the client's own retry".
+	// See internal/featuredeps and internal/keenetic/conntrack.go.
+	deps := h.ensureDeps(ctx, featuredeps.AdaptiveRouting)
+	if err := deps.Err(); err != nil {
 		return "", err
 	}
-	// Best-effort, not fatal: without conntrack, the redirect itself
-	// still works for new connection attempts -- only an already-
-	// established flow's immediate re-route degrades to "wait for the
-	// client's own retry". See internal/keenetic/conntrack.go.
-	var warn string
-	if err := keenetic.EnsureConntrackTool(ctx); err != nil {
-		warn = fmt.Sprintf("\n⚠️ conntrack недоступен (%v) — уже открытые соединения не будут сразу перенаправляться, только новые попытки", err)
-	}
+	warn := depsNotes(deps)
 	iface, subnet, err := adaptiveRouteLAN(ctx, h.Config)
 	if err != nil {
 		return "", err

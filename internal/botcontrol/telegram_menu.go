@@ -696,11 +696,14 @@ func (b *TelegramBot) enqueueCardArgs(ctx context.Context, cb tgCallbackQuery, i
 		b.rememberSelfUpdateMsg(id, chatID, msgID)
 	}
 	b.editMessageText(ctx, chatID, msgID, b.routerCardText(id)+"\n\n⏳ команда в очереди…", routerCardKB(id))
-	go b.awaitActionResult(ctx, chatID, msgID, id, cmdID)
+	go b.awaitActionResult(ctx, chatID, msgID, id, cmdID, b.waitFor(action))
 }
 
-func (b *TelegramBot) awaitActionResult(ctx context.Context, chatID int64, msgID int, routerID, cmdID string) {
-	result, ok := b.Store.AwaitResult(ctx, routerID, cmdID, b.resultTimeout())
+// awaitActionResult waits up to wait for the router's answer and puts it on the
+// card; wait is longer for an action that may have to install a package
+// (TelegramBot.waitFor).
+func (b *TelegramBot) awaitActionResult(ctx context.Context, chatID int64, msgID int, routerID, cmdID string, wait time.Duration) {
+	result, ok := b.Store.AwaitResult(ctx, routerID, cmdID, wait)
 	var extra string
 	switch {
 	case !ok:

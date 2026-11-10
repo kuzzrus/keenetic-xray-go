@@ -210,9 +210,15 @@ const coreUpdateTimeout = 5 * time.Minute
 // default for ordinary (fast) commands, coreUpdateTimeout for the two
 // genuinely slow ones. See coreUpdateTimeout's own doc comment.
 func commandTimeout(action string, def time.Duration) time.Duration {
-	switch action {
-	case ActionEnsureCore, ActionUpdateCore:
+	switch {
+	case action == ActionEnsureCore || action == ActionUpdateCore:
 		return coreUpdateTimeout
+	case installsPackages(action):
+		// May run `opkg update` + `opkg install`: see depsInstallTimeout.
+		if def > depsInstallTimeout {
+			return def
+		}
+		return depsInstallTimeout
 	default:
 		return def
 	}

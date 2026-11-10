@@ -7,12 +7,14 @@ import (
 	"time"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
+	"github.com/kuzzrus/keenetic-xray-go/internal/featuredeps"
 	"github.com/kuzzrus/keenetic-xray-go/internal/keenetic"
 	"github.com/kuzzrus/keenetic-xray-go/internal/l7capture"
 )
 
-// l7sniOn mirrors cmd/keenetic-xray's own `transport l7sni on`: it only
-// ever flips Config.L7SNI.Enabled and saves. Unlike adaptiveRouteOn,
+// l7sniOn mirrors cmd/keenetic-xray's own `transport l7sni on`: it makes sure
+// what the capture needs is on the router (iptables, the NFLOG kernel modules,
+// conntrack), then flips Config.L7SNI.Enabled and saves. Unlike adaptiveRouteOn,
 // there's no live-apply path to try first -- l7SNIClassifyLoop
 // (cmd/keenetic-xray/l7sni_linux.go) reads this flag once at its own
 // startup and then blocks in a socket read for the rest of the
@@ -20,19 +22,31 @@ import (
 // start or stop capture either way. The CLI falls back to an
 // interactive "restart now? y/n" prompt for the same reason; a bot
 // button has no prompt to fall back on, so this restarts directly.
+//
+// The tools come first, and a missing one stops the switch: the button used to
+// answer "включается, демон перезапускается…" and the capture then died on its
+// first iptables call, with the reason only in the daemon's log.
 func (h *RouterHandler) l7sniOn(ctx context.Context) (string, error) {
 	if !keenetic.Available() {
 		return "", fmt.Errorf("ndmc не найден — l7sni работает только на роутере Keenetic")
+	}
+	deps := h.ensureDeps(ctx, featuredeps.L7SNI)
+	if err := deps.Err(); err != nil {
+		return "", fmt.Errorf("L7 SNI не включён: %w", err)
 	}
 	h.Config.L7SNI.Enabled = true
 	if err := h.Config.Save(h.ConfigPath); err != nil {
 		return "", err
 	}
-	var warn string
-	if err := h.restartDaemonDetached(); err != nil {
-		warn = fmt.Sprintf("\n⚠️ автоматический перезапуск не удался (%v) — перезапустите вручную: ♻️ Рестарт демона", err)
+	notes := depsNotes(deps)
+	if !h.Config.AdaptiveRoute.Enabled {
+		notes += "\n⚠️ Адаптивная маршрутизация выключена: имена TLS/HTTP не используются и ничего не переправляется " +
+			"(QUIC в режиме наблюдения считает и так). Включить — на экране 🎯 Адаптивная маршрутизация."
 	}
-	return "L7 SNI включается, демон перезапускается…" + warn, nil
+	if err := h.restartDaemonDetached(); err != nil {
+		notes += fmt.Sprintf("\n⚠️ автоматический перезапуск не удался (%v) — перезапустите вручную: ♻️ Рестарт демона", err)
+	}
+	return "L7 SNI включается, демон перезапускается…" + notes, nil
 }
 
 // l7sniOff mirrors cmd/keenetic-xray's own `transport l7sni off`:
@@ -94,6 +108,16 @@ func (h *RouterHandler) l7sniQUIC(ctx context.Context, mode string) (string, err
 	}
 	if !h.Config.L7SNI.Enabled {
 		return out, nil // nothing was installed, so nothing to take away
+	}
+	if mode != config.L7SNIQUICOff && keenetic.Available() {
+		// L7 SNI may have been switched on by a version that did not check
+		// what it needs, or /opt may have been wiped since: say so here, in the
+		// answer to the button, not in a log nobody reads.
+		deps := h.ensureDeps(ctx, featuredeps.L7SNI)
+		out += depsNotes(deps)
+		if err := deps.Err(); err != nil {
+			return out + fmt.Sprintf("\n⚠️ %v\nРежим сохранён — поставь недостающее и нажми кнопку ещё раз.", err), nil
+		}
 	}
 	if h.ReconcileL7SNI == nil {
 		return out + "\nПравило перехвата UDP/443 поставит демон при ближайшей сверке (раз в 2 минуты).", nil

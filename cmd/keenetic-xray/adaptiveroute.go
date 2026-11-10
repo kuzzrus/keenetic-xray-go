@@ -12,6 +12,7 @@ import (
 	"github.com/kuzzrus/keenetic-xray-go/internal/adaptiveroute"
 	"github.com/kuzzrus/keenetic-xray-go/internal/classifier"
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
+	"github.com/kuzzrus/keenetic-xray-go/internal/featuredeps"
 	"github.com/kuzzrus/keenetic-xray-go/internal/georanges"
 	"github.com/kuzzrus/keenetic-xray-go/internal/keenetic"
 	"github.com/kuzzrus/keenetic-xray-go/internal/knownranges"
@@ -205,20 +206,17 @@ func adaptiveRouteOn(cfg *config.Config) error {
 	if !keenetic.Available() {
 		return fmt.Errorf("ndmc не найден — адаптивная маршрутизация работает только на роутере Keenetic")
 	}
+	// First, and with its own time budget: installing a package can take
+	// minutes, the rest of this function a few seconds. iptables and ipset are
+	// required; conntrack is a warning -- without it the redirect still works
+	// for new connections, only an already-open flow's immediate re-route
+	// degrades (see internal/keenetic/conntrack.go's doc comment).
+	if err := ensureFeatureDeps(featuredeps.AdaptiveRouting); err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := adaptiveroute.EnsureIPSetTool(ctx); err != nil {
-		return err
-	}
-	// Best-effort, not fatal like EnsureIPSetTool above: without
-	// conntrack, the redirect itself still works (new connection
-	// attempts are caught cleanly), it's only an already-established
-	// flow's immediate re-route that degrades to "wait for the client's
-	// own retry" -- see internal/keenetic/conntrack.go's doc comment.
-	if err := keenetic.EnsureConntrackTool(ctx); err != nil {
-		fmt.Printf("предупреждение: conntrack недоступен (%v) — уже открытые соединения не будут сразу перенаправляться, только новые попытки\n", err)
-	}
 	iface, subnet, err := adaptiveRouteLAN(ctx, cfg)
 	if err != nil {
 		return err
@@ -377,18 +375,26 @@ func applyAdaptiveRouteAtStartup(cfg *config.Config, logf func(string, ...any)) 
 	if !cfg.AdaptiveRoute.Enabled || !keenetic.Available() {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	if err := adaptiveroute.EnsureIPSetTool(ctx); err != nil {
-		logf("adaptive-route: ipset tool unavailable: %v", err)
+	// The required needs of adaptiveRouteOn, under their own 30 s: this runs on
+	// the daemon's startup path, which waits for it before the failover loop and
+	// the bot start, so an install that cannot finish in that time is given up on
+	// (the next explicit `transport adaptive on` retries it). A separate context
+	// from the dataplane's below: a slow opkg must not leave them an expired one.
+	// The optional conntrack is tried once, in the background, afterwards.
+	dctx, dcancel := context.WithTimeout(context.Background(), 30*time.Second)
+	deps := featureEnsureRequired(dctx, featuredeps.AdaptiveRouting)
+	dcancel()
+	for _, line := range deps.Lines("", "") {
+		logf("adaptive-route: %s", line)
+	}
+	if err := deps.Err(); err != nil {
+		logf("adaptive-route: not starting: %v", err)
 		return
 	}
-	// Best-effort, not fatal like EnsureIPSetTool above -- see
-	// adaptiveRouteOn's matching call for why.
-	if err := keenetic.EnsureConntrackTool(ctx); err != nil {
-		logf("adaptive-route: conntrack unavailable (%v) -- already-open flows won't be redirected immediately, only new attempts", err)
-	}
+	ensureOptionalInBackground(featuredeps.AdaptiveRouting, "adaptive-route", logf)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	iface, _, err := adaptiveRouteLAN(ctx, cfg)
 	if err != nil {
 		logf("adaptive-route: LAN detection failed: %v", err)

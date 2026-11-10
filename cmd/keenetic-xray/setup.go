@@ -257,7 +257,7 @@ func runSetupInteractive(reader *bufio.Reader, cfg *config.Config, o setupOpts) 
 	promptXrayCore(reader, o)
 
 	applyDaemonChange(reader, true)
-	printSetupSummary(cfg, haveBackup)
+	printSetupSummary(reader, cfg, haveBackup)
 	return nil
 }
 
@@ -593,8 +593,8 @@ func promptTransport(reader *bufio.Reader, cfg *config.Config, o setupOpts) {
 
 // printSetupSummary is the end-of-wizard recap: what got configured, a
 // quick TCP reachability check on the primary server (not a tunnel
-// test), and a watchdog warning when cron didn't install.
-func printSetupSummary(cfg *config.Config, haveBackup bool) {
+// test), and -- when the watchdog is not armed -- an offer to switch it on.
+func printSetupSummary(reader *bufio.Reader, cfg *config.Config, haveBackup bool) {
 	fmt.Print("\n── готово ──\n")
 	if p := cfg.Primary(); p != nil {
 		fmt.Printf("  профиль:   %s\n", p.Remark)
@@ -631,11 +631,39 @@ func printSetupSummary(cfg *config.Config, haveBackup bool) {
 		}
 	}
 
-	if !watchdogArmed() {
-		fmt.Println("\n⚠️ watchdog не активен — упавший демон не поднимется сам.")
-		fmt.Println("   поставь cron:  opkg install cron  &&  keenetic-xray internal postinst-setup")
-	}
+	offerWatchdog(os.Stdout, reader)
 	fmt.Println("\nдальше:  keenetic-xray status   ·   keenetic-xray doctor")
+}
+
+// watchdogEnableFn is watchdogEnable (cron installed and started if need be,
+// then the entry written), as a variable so offerWatchdog can be tested.
+var watchdogEnableFn = watchdogEnable
+
+// offerWatchdog is the end of the wizard for the watchdog: when it is not
+// armed -- the install-time attempt failed (no cron, no network at that moment)
+// or it was switched off -- the operator is asked, and "yes" does what the
+// hand-typed `opkg install cron && keenetic-xray internal postinst-setup` the
+// summary used to print did: install cron, start it, write the entry. Asking
+// rather than just doing it keeps a deliberate `watchdog disable` respected.
+// Without a Keenetic (a dev box) there is nothing to offer.
+func offerWatchdog(w io.Writer, reader *bufio.Reader) {
+	if watchdogArmed() || !keenetic.Available() {
+		return
+	}
+	fmt.Fprintln(w, "\n⚠️ watchdog не активен — упавший демон не поднимется сам.")
+	fmt.Fprint(w, "Включить сейчас (при необходимости поставит cron)? [Y/n]: ")
+	line, _ := reader.ReadString('\n')
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "n", "no", "н", "нет":
+		fmt.Fprintln(w, "  пропущено — позже:  keenetic-xray watchdog enable")
+		return
+	}
+	out, err := watchdogEnableFn()
+	if err != nil {
+		fmt.Fprintf(w, "  не вышло: %v\n  позже:  keenetic-xray watchdog enable\n", err)
+		return
+	}
+	fmt.Fprintf(w, "  %s\n", out)
 }
 
 func shortDialErr(err error) string {

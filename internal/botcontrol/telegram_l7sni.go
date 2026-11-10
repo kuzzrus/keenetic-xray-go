@@ -69,7 +69,9 @@ func (b *TelegramBot) l7sniMutate(ctx context.Context, chatID int64, msgID int, 
 	}
 	b.editMessageText(ctx, chatID, msgID, l7sniScreenText(id, "⏳ …"), l7sniScreenKB(id))
 	go func() {
-		res, ok := b.Store.AwaitResult(ctx, id, cmdID, b.resultTimeout())
+		// Switching on may install iptables and friends first: wait as long as
+		// the router may take (waitFor), not the 20 s of an ordinary button.
+		res, ok := b.Store.AwaitResult(ctx, id, cmdID, b.waitFor(action))
 		var head string
 		switch {
 		case !ok:

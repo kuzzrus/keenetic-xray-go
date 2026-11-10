@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
+	"github.com/kuzzrus/keenetic-xray-go/internal/featuredeps"
 	"github.com/kuzzrus/keenetic-xray-go/internal/keenetic"
 	"github.com/kuzzrus/keenetic-xray-go/internal/l7capture"
 )
@@ -47,7 +48,9 @@ func transportL7SNI(cfg *config.Config, args []string) error {
 		if !keenetic.Available() {
 			return fmt.Errorf("ndmc не найден — l7sni работает только на роутере Keenetic")
 		}
-		cfg.L7SNI.Enabled = true
+		if err := l7sniEnable(cfg); err != nil {
+			return err
+		}
 	case "off":
 		cfg.L7SNI.Enabled = false
 		// Found live the same day for adaptive-routing (#181): "off"
@@ -72,7 +75,31 @@ func transportL7SNI(cfg *config.Config, args []string) error {
 		return err
 	}
 	fmt.Println("l7sni: сохранено — нужен перезапуск демона, чтобы применилось")
+	if cfg.L7SNI.Enabled && !cfg.AdaptiveRoute.Enabled {
+		fmt.Println(l7sniNeedsAdaptiveNote)
+	}
 	offerDaemonRestart(bufio.NewReader(os.Stdin))
+	return nil
+}
+
+// l7sniNeedsAdaptiveNote is said when L7 SNI is on and adaptive routing is
+// not: TLS and HTTP names are only looked at to feed adaptive routing's address
+// set, so with it off they are ignored altogether, and a QUIC "act" only
+// observes. Switching adaptive routing on is a routing change, not a package
+// to install, so it is pointed at rather than done.
+const l7sniNeedsAdaptiveNote = "⚠️ адаптивная маршрутизация выключена: имена TLS/HTTP не используются и ничего не переправляется " +
+	"(QUIC в режиме наблюдения считает и так). Включить: keenetic-xray transport adaptive on"
+
+// l7sniEnable switches L7 SNI on in cfg -- after making sure what its capture
+// needs is on the router. The capture used to be left to find out for itself:
+// without iptables it died on its first rule, with a line in the daemon's log
+// and no second attempt. Not saving the setting when a tool is missing is the
+// point: an L7 SNI that is "on" but cannot start only looks like it works.
+func l7sniEnable(cfg *config.Config) error {
+	if err := ensureFeatureDeps(featuredeps.L7SNI); err != nil {
+		return fmt.Errorf("L7 SNI не включён: %w", err)
+	}
+	cfg.L7SNI.Enabled = true
 	return nil
 }
 
@@ -110,9 +137,20 @@ func transportL7SNIQUIC(cfg *config.Config, args []string) error {
 	applyDaemonChange(bufio.NewReader(os.Stdin), true)
 
 	if cfg.L7SNI.Enabled && keenetic.Available() {
-		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-		defer cancel()
-		err := reconcileL7SNI(ctx, cfg, func(format string, a ...any) { fmt.Printf(format+"\n", a...) })
+		var err error
+		if cfg.L7SNI.QUICMode() != config.L7SNIQUICOff {
+			// The tools may be missing here too: L7 SNI can have been switched
+			// on by a version that did not check, or /opt can have been wiped
+			// since. Turning the mode off installs nothing.
+			if err = ensureFeatureDeps(featuredeps.L7SNI); err != nil {
+				fmt.Println("предупреждение: " + err.Error())
+			}
+		}
+		if err == nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+			defer cancel()
+			err = reconcileL7SNIHook(ctx, cfg, func(format string, a ...any) { fmt.Printf(format+"\n", a...) })
+		}
 		fmt.Println(l7sniQUICApplyMessage(err))
 	}
 	return nil
@@ -272,5 +310,9 @@ func reconcileL7SNIFromDisk(ctx context.Context, logf func(string, ...any)) erro
 	if err != nil {
 		return err
 	}
-	return reconcileL7SNI(ctx, cfg, logf)
+	return reconcileL7SNIHook(ctx, cfg, logf)
 }
+
+// reconcileL7SNIHook is reconcileL7SNI, as a variable so the commands that call
+// it can be tested without a router's iptables behind them.
+var reconcileL7SNIHook = reconcileL7SNI

@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"github.com/kuzzrus/keenetic-xray-go/internal/opkg"
 )
 
 // Conntrack caches each flow's routing decision on its first packet. When
@@ -28,35 +30,29 @@ import (
 // different: an already-established flow that just got promoted to
 // "route through the tunnel" has no other way to move over besides this
 // -- without it, that specific flow just sits there until the client's
-// own retry/timeout eventually opens a fresh one. So adaptive routing
-// calls EnsureConntrackTool explicitly (see cmd/keenetic-xray's
-// adaptiveRouteOn/applyAdaptiveRouteAtStartup), the same shape as
-// internal/adaptiveroute.EnsureIPSetTool for its own ipset dependency,
-// rather than silently accepting the gap the way routes does.
+// own retry/timeout eventually opens a fresh one. So adaptive routing and
+// L7 SNI ask for it explicitly when they are switched on (as an optional need
+// of internal/featuredeps, which installs it together with the rest and warns
+// when it cannot), rather than silently accepting the gap the way routes does.
 
 var (
 	conntrackRun = func(ctx context.Context, args ...string) error {
 		return exec.CommandContext(ctx, "conntrack", args...).Run()
 	}
-	conntrackPresent     = func() bool { return exec.Command("conntrack", "--version").Run() == nil }
-	opkgInstallConntrack = func(ctx context.Context) error {
-		// `opkg update` first, best-effort -- same reasoning as
-		// internal/addons' own opkgInstall helper and this project's
-		// other opkg-install call sites: a stale/empty local package
-		// index makes `opkg install <name>` fail as "not found" even
-		// when the package genuinely exists in the feed.
-		_ = exec.CommandContext(ctx, "opkg", "update").Run()
-		return exec.CommandContext(ctx, "opkg", "install", "conntrack").Run()
-	}
+	conntrackPresent = func() bool { return exec.Command("conntrack", "--version").Run() == nil }
+	// opkg.Install runs `opkg update` first (a stale index makes the install
+	// fail as "not found") and turns a failure into a reason an operator can
+	// act on instead of a bare exit status.
+	opkgInstallConntrack = func(ctx context.Context) error { return opkg.Install(ctx, "conntrack") }
 )
 
 // ConntrackPresent reports whether the `conntrack` CLI is runnable.
 func ConntrackPresent() bool { return conntrackPresent() }
 
 // EnsureConntrackTool makes sure the `conntrack` CLI is runnable,
-// installing the Entware package if not. See the comment above for why
-// adaptive routing needs this guaranteed rather than accepting
-// FlushConntrack's silent-degradation default.
+// installing the Entware package if not. The enabling paths no longer call it:
+// internal/featuredeps installs conntrack in the same opkg run as the other
+// tools a feature needs. Kept for a caller that needs only this one.
 func EnsureConntrackTool(ctx context.Context) error {
 	if conntrackPresent() {
 		return nil

@@ -18,6 +18,7 @@ import (
 	"github.com/kuzzrus/keenetic-xray-go/internal/depscan"
 	"github.com/kuzzrus/keenetic-xray-go/internal/diskspace"
 	"github.com/kuzzrus/keenetic-xray-go/internal/failover"
+	"github.com/kuzzrus/keenetic-xray-go/internal/featuredeps"
 	"github.com/kuzzrus/keenetic-xray-go/internal/health"
 	"github.com/kuzzrus/keenetic-xray-go/internal/install"
 	"github.com/kuzzrus/keenetic-xray-go/internal/keenetic"
@@ -159,6 +160,11 @@ type RouterHandler struct {
 	// does nothing off a router or with l7sni off). nil -> the QUIC mode
 	// actions only save, and say the daemon's own reconcile will follow.
 	ReconcileL7SNI func(ctx context.Context) error
+
+	// EnsureDeps provides what a feature needs before it is switched on
+	// (featuredeps.Ensure). nil -> the real one; a test sets it so the
+	// enabling actions can run without opkg or a router.
+	EnsureDeps func(ctx context.Context, f featuredeps.Feature) featuredeps.Result
 
 	// L7SNIStatsText renders what the L7 capture has counted, from the file
 	// the daemon publishes (cmd/keenetic-xray's printL7SNIStats). nil -> the

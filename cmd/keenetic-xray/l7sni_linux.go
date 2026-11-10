@@ -243,6 +243,12 @@ func l7SNIClassifySession(ctx context.Context, logf func(string, ...any)) (start
 	sctx, endSession := context.WithCancel(ctx)
 	defer endSession()
 
+	// The router's own DNS-routing lists are a source of names too (see
+	// l7sni_native.go); read now and every couple of minutes, off the packet
+	// path. Until the first reading lands -- a second or so -- only the config's
+	// lists are matched.
+	go l7sniRouterNamesLoop(sctx, logf)
+
 	// capture.Read below is a raw blocking syscall with no context
 	// awareness at all -- ctx.Err() is only checked *between* reads, so
 	// on a quiet NFLOG group (nothing matching the capture rule right

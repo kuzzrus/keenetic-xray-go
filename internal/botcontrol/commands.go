@@ -171,6 +171,12 @@ type RouterHandler struct {
 	// l7sni_stats action returns an error.
 	L7SNIStatsText func() (string, error)
 
+	// L7SNINames is the sentence about what the L7 capture matches the names it
+	// reads against -- the config's lists, the router's own -- and whether that is
+	// nothing (cmd/keenetic-xray's l7sniNamesLine). nil -> the L7 screen does not
+	// say.
+	L7SNINames func(ctx context.Context) (line string, none bool)
+
 	// SelfUpdateEvents, if set, receives one Event when the detached
 	// install.sh run started by selfUpdate fails outright (before ever
 	// reaching a daemon restart). Logf already records the same failure
@@ -328,7 +334,7 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 	case ActionL7SNIStats:
 		return h.l7sniStats()
 	case ActionL7SNIShow:
-		return h.l7sniShow(), nil
+		return h.l7sniShow(ctx), nil
 	case ActionRCIShow:
 		return h.rciShow(ctx), nil
 	case ActionRCIOn:

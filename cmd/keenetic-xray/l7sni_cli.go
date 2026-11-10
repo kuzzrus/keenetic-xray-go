@@ -202,7 +202,7 @@ func l7sniQUICHints(cfg *config.Config) []string {
 		out = append(out, "включить определение имён: keenetic-xray transport l7sni on")
 	}
 	if set == config.L7SNIQUICAct && !cfg.AdaptiveRoute.Enabled {
-		out = append(out, "чтобы совпавшие имена переправлялись, включи адаптивную маршрутизацию: keenetic-xray transport adaptive on")
+		out = append(out, "включить адаптивную маршрутизацию (иначе совпавшие имена не переправляются): keenetic-xray transport adaptive on")
 	}
 	if eff == config.L7SNIQUICAct {
 		if len(l7sniDomainsFrom(cfg)) == 0 {

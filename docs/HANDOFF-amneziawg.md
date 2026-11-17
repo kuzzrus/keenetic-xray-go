@@ -941,6 +941,63 @@ for it). The real `xray-core/v26.10.31` is built by dispatching
 `xray_version=v26.10.31` without `awg_dev`, and the app release follows right
 after it (the bot offers a published `xray-core/` release at once).
 
+## 2026-11-17 -- `v26.11.9`: patch carried over (go.mod / go.sum context only), dev build staged
+
+Upstream `v26.11.9` (2026-11-09, marked **Latest**, 24 commits / 60 files after
+`v26.10.31`) is an ordinary release, not an emergency one: its notes point at the
+XDRIVE (Google Drive) transport and at the new default uTLS fingerprint. What in it
+touches this project:
+
+- **uTLS: `hellochrome_155` is registered and is the new default** (#7135). The
+  `chrome` preset -- which ECH uses too -- resolves through `HelloChrome_Auto` to
+  Chrome 155 instead of the 133-class ClientHello. `internal/config` emits
+  `fingerprint` only when the profile has one (the link's `fp=`), so a `fp=chrome`
+  profile and a profile without `fp` both follow the new default, while an
+  explicit `edge`, `firefox` or `hellochrome_133` keeps its old hello. The release
+  notes say the Russian DPI does not target this fingerprint yet.
+- WireGuard proxy: the endpoint-name lookup gives up at the connection's deadline
+  (#7323: `bind.resolveFunc` takes a context, new `lookupIPContext`) -- the same
+  two files our patch edits, in other regions.
+- An inbound that fails to start is closed and removed from the manager (#7223).
+- VLESS Multiplex defaults (`maxConcurrency` 128, `maxReuseTimes` 1024) and a
+  `MutexWriter`; we do not enable mux.
+- Freedom `finalRules`: `blockDelay` -> `delay` and a `logLevel` (not emitted by
+  our generator); the TUN inbound changes are Windows-only; XDRIVE optimisations;
+  dependency bumps (x/net 0.62.0, grpc 1.85.0, cpuid 2.4.2, utls, reality).
+
+What moved under the patch -- very little: upstream touched four of its 16 files.
+`go.mod` / `go.sum` (dependency bumps only: the patch's go.mod hunk lost one
+context line, `google.golang.org/grpc` 1.84.0 -> 1.85.0, and its go.sum hunks moved
+by two lines) and `proxy/wireguard/{bind,client}.go` (#7323, regions the patch does
+not edit). The other 14 files apply unchanged and their hunks are byte-identical to
+`amneziawg-v26.10.31.patch`.
+
+Derivation: the old patch minus its go.mod / go.sum hunks
+(`git apply --exclude=go.mod --exclude=go.sum`) on a pristine `v26.11.9` clone
+(`git clone -c core.autocrlf=false`; its `go.mod` says `go 1.27`), then
+`go mod edit -require=github.com/amnezia-vpn/amneziawg-go/v3@v3.1.20260828
+-droprequire=golang.zx2c4.com/wireguard
+-replace=github.com/amnezia-vpn/amneziawg-go/v3=github.com/kuzzrus/amneziawg-go/v3@v3.1.20260829-0.20260922090841-9f614256e326`
+(the same fork commit as before, `9f61425`) and a real `go mod tidy`; `git diff` of
+the result is the new patch (795 lines, 16 files, the same counts as the old one).
+Against the pristine tag `go.mod` differs by exactly three lines: the added
+require, the dropped `golang.zx2c4.com/wireguard`, the replace.
+
+Verified without hardware: plain `git apply` of the new patch on a pristine
+`v26.11.9` checkout (what CI runs; the result is identical to the tree the patch
+was cut from); `gofmt -l` clean on every touched file; no leftover
+`golang.zx2c4.com/wireguard/{tun,device,conn}` imports; `go build ./...` for
+windows/amd64, `linux/arm64` and `linux/mipsle` softfloat (Go 1.27.0); `go vet` of
+`proxy/wireguard`, `proxy/masque` and `infra/conf` reports the same two findings
+on the pristine tag and on the patched tree (the `NewXmuxManager` lock copy in
+`proxy/masque/client.go`, unreachable code in `infra/conf/xray.go`).
+**Not run in this round:** upstream's `TestWireguard` / `TestMasque*`, the `proxy/*`
+and `infra/conf` unit tests, the loopback harness (`awgloop`), `xray run -test` of
+the project-generated configs, and `infra/vprotogen -mode check` for the patched
+`config.pb.go` (the workflow regenerates that file with its own protoc anyway). So
+the first execution of this build is CI's QEMU smoke test and then a router. Run
+those locally first if anything looks off on the router.
+
 ## How to resume
 
 Everything the original plan called for is now built (see "What's

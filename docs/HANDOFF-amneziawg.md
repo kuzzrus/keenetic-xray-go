@@ -998,6 +998,36 @@ the project-generated configs, and `infra/vprotogen -mode check` for the patched
 the first execution of this build is CI's QEMU smoke test and then a router. Run
 those locally first if anything looks off on the router.
 
+**Dev build** (`xray_version=v26.11.9 awg_dev=true`, run 44164019235 from the PR #328
+branch; publishes `xray-core-awg-dev/v26.11.9`): go1.27.4, UPX 4.2.2 `-9` (`--lzma`
+on arm64 only), provenance commit `676eaf6` = the upstream tag, all four checksums
+equal GitHub's asset digests, "Apply AmneziaWG patch" and "Smoke test under QEMU"
+green on both arches. mipsle is CGO-off (the production flavour): unpacked
+34,734,235 / UPX 10,656,192. arm64 is the CGO diagnostic flavour (dev builds only
+compare with dev builds): unpacked 30,984,616 / UPX 7,701,996. Against the
+`v26.10.31` dev build that is +0.7 % UPX on mipsle and +0.6 % on arm64.
+
+**Promoted the same day, on a go-ahead rather than on a report, and made the
+default.** The user said to release (no per-check report, as on 2026-10-31) and then
+that `v26.11.9` is to be the default too. So `v26.11.9` is in `AWG_CONFIRMED_TAGS`
+(workflow *and* `xraycore.AWGConfirmedTags`; a test now keeps the two lists equal),
+it is `xraycore.DefaultTag` and `packaging/xray-core/version`, and `PrereleaseTag`
+is empty (the bot still offers a newer mirrored tag live; the setup wizard skips
+its core question). What that means:
+
+- the default core now carries the AmneziaWG patch, so the "core not
+  AWG-confirmed" warning only fires for a router pinned to an old tag;
+- a router with no tag pinned takes the new core at its next `ensure-xray-core`
+  (the `.ipk`'s postinst runs it on every update) -- the real
+  `xray-core/v26.11.9` therefore has to be published and verified *before* the
+  `keenetic-xray` release that carries the new default;
+- a router pinned to `v26.10.31` (the earlier opt-in) keeps it until the bot's
+  "✅ Стабильное" or `ensure-xray-core --tag=stable`;
+- the TUN-speed texts (wizard, bot, docs) no longer call the default a gVisor core;
+- not reported working on hardware: the *production* arm64 flavour (CGO off) -- the
+  arm64 dev build a router owner tests is the CGO diagnostic one. mipsle has always
+  been CGO-off.
+
 ## How to resume
 
 Everything the original plan called for is now built (see "What's

@@ -79,7 +79,11 @@ func cmdEnsureXrayCore(args []string) error {
 			tag = "" // clear the pin, back to the default
 		}
 		if !config.ValidXrayCoreTag(tag) {
-			return fmt.Errorf("--tag %q: want a release tag like %s, or \"stable\"", tagArg, xraycore.PrereleaseTag)
+			example := xraycore.PrereleaseTag
+			if example == "" { // nothing newer than the default on offer
+				example = xraycore.DefaultTag
+			}
+			return fmt.Errorf("--tag %q: want a release tag like %s, or \"stable\"", tagArg, example)
 		}
 		if tag != cfg.XrayCoreTag {
 			cfg.XrayCoreTag = tag

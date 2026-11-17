@@ -472,20 +472,29 @@ func TestTelegramBot_CoreScreen(t *testing.T) {
 	msgID := fake.lastSent(t).MessageID
 
 	fake.pushCallback(1, msgID, "corem:r1")
-	fake.waitForEditContaining(t, 3*time.Second, "Ядро xray")
+	edit := fake.waitForEditContaining(t, 3*time.Second, "Ядро xray")
 
-	// "Пререлиз" button -> update_core carrying the prerelease tag.
-	fake.pushCallback(1, msgID, "corepre:r1")
+	// With no prerelease compiled in (the default is upstream's latest) the
+	// screen must not advertise one.
+	if xraycore.PrereleaseTag == "" && strings.Contains(edit, "пререлиз upstream") {
+		t.Errorf("no prerelease is compiled in, yet the core screen offers one:\n%s", edit)
+	}
+
+	// "Пререлиз" button -> update_core carrying the prerelease tag (only
+	// while one is compiled in; the live-tag path has its own test below).
 	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if cmd, _ := store.Dequeue("r1"); cmd != nil {
-			if cmd.Action != ActionUpdateCore || len(cmd.Args) != 1 || cmd.Args[0] != xraycore.PrereleaseTag {
-				t.Errorf("dequeued = %q %v, want update_core [%s]", cmd.Action, cmd.Args, xraycore.PrereleaseTag)
+	if xraycore.PrereleaseTag != "" {
+		fake.pushCallback(1, msgID, "corepre:r1")
+		for time.Now().Before(deadline) {
+			if cmd, _ := store.Dequeue("r1"); cmd != nil {
+				if cmd.Action != ActionUpdateCore || len(cmd.Args) != 1 || cmd.Args[0] != xraycore.PrereleaseTag {
+					t.Errorf("dequeued = %q %v, want update_core [%s]", cmd.Action, cmd.Args, xraycore.PrereleaseTag)
+				}
+				_ = store.RecordResult("r1", Result{CommandID: cmd.ID, Output: "xray-core обновлён"})
+				break
 			}
-			_ = store.RecordResult("r1", Result{CommandID: cmd.ID, Output: "xray-core обновлён"})
-			break
+			time.Sleep(20 * time.Millisecond)
 		}
-		time.Sleep(20 * time.Millisecond)
 	}
 
 	// "Стабильное" button -> update_core stable.

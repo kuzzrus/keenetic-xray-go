@@ -13,26 +13,30 @@ repo's releases.
 installer fetches — currently:
 
 ```
-v26.3.27
+v26.11.9
 ```
 
-It's the last non-prerelease upstream release at the time of writing, and
+It's upstream's latest non-prerelease release at the time of writing, and
 it must match `xraycore.DefaultTag` (a test enforces this). Bump it
-together with a `keenetic-xray` release, then run the build (below) for
-the new tag.
+together with a `keenetic-xray` release, and run the build (below) for the
+new tag **first**: a router that updates fetches `xray-core/<tag>` on its
+next `ensure-xray-core`, and a release that is not there yet 404s.
 
 A **second**, newer tag can be built and offered as an explicit opt-in
-without becoming the default — `xraycore.PrereleaseTag` (currently
-`v26.10.31`, newer than the default pin and not yet promoted to it). A router runs it only if asked:
+without becoming the default — `xraycore.PrereleaseTag` (currently empty:
+the default is already upstream's latest, and the bot also offers the
+newest mirrored tag live when one is newer than the default). A router
+runs such a tag, or an older one, only if asked:
 
-- at install: `curl … | sh -s -- --xray-core-tag=v26.10.31`
-- later, over SSH: `keenetic-xray internal ensure-xray-core --tag=v26.10.31`
+- at install: `curl … | sh -s -- --xray-core-tag=vX.Y.Z`
+- later, over SSH: `keenetic-xray internal ensure-xray-core --tag=vX.Y.Z`
 - from the bot: `🧩 Ядро xray` on the router card, or `/update_core
-  <router> v26.10.31`
+  <router> vX.Y.Z`
 
-`v26.9.9`, `v26.9.30`, `v26.10.21` and `v26.10.31` are built with the AmneziaWG patch
-(`xraycore.AWGConfirmedTags`, mirrored by `AWG_CONFIRMED_TAGS` in the
-build workflow; see `docs/HANDOFF-amneziawg.md`); the default
+`v26.9.9`, `v26.9.30`, `v26.10.21`, `v26.10.31` and `v26.11.9` are built
+with the AmneziaWG patch (`xraycore.AWGConfirmedTags`, mirrored by
+`AWG_CONFIRMED_TAGS` in the build workflow; see
+`docs/HANDOFF-amneziawg.md`), so the default carries it; the older
 `v26.3.27` is plain upstream.
 
 The choice is stored in `config.json` as `xray_core_tag`, so a package

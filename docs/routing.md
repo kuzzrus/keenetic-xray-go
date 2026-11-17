@@ -378,7 +378,7 @@ round trip ~65 ms against ~20 ms. Enable it with `keenetic-xray setup`
 (option 5), the bot, or `transport tun on`.
 
 **Throughput depends on the xray core.** On the cores up to `v26.9.30` --
-gVisor inside xray's `tun` inbound, the default `v26.3.27` included -- it is
+gVisor inside xray's `tun` inbound, the former default `v26.3.27` included -- it is
 the price of the TUN. Measured with `v26.9.30` on the same router (2 cores,
 497 MB) with a LAN client downloading one large file for 20 s per path, the
 same client and the same xray each time:
@@ -409,6 +409,7 @@ number comes from a speed test he ran himself, not from the harness behind the
 table, so it is only roughly comparable; everything above this paragraph,
 including "~3x slower than SOCKS" and the MTU run, was measured on gVisor
 cores. Not measured on the new stack: CPU and memory under load, the gate under
-load, the MTU, IPv6. Install the core from the bot (router card, "🧩 Ядро
-xray", "Пререлиз") or with `keenetic-xray internal ensure-xray-core
---tag=v26.10.31`.
+load, the MTU, IPv6. `v26.11.9` is the default core now, so a router without
+a pinned tag has it; one pinned to an older tag returns to it from the bot
+(router card, "🧩 Ядро xray", "✅ Стабильное") or with `keenetic-xray
+internal ensure-xray-core --tag=stable`.

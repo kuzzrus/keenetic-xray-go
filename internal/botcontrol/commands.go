@@ -1835,13 +1835,27 @@ func (h *RouterHandler) setSlotSource(ctx context.Context, primary bool, args []
 		if tag == "" {
 			tag = xraycore.DefaultTag
 		}
-		msg += fmt.Sprintf("\n⚠️ текущий тег ядра (%s) не подтверждён как AmneziaWG-patched — обфускация может незаметно не работать. Переключитесь на пререлиз (%s) через ⚙️ Ядро, если ещё не на нём.",
-			tag, xraycore.PrereleaseTag)
+		msg += fmt.Sprintf("\n⚠️ текущий тег ядра (%s) не подтверждён как AmneziaWG-patched — обфускация может незаметно не работать.%s",
+			tag, awgCoreAdvice())
 	}
 	if !otherSet {
 		msg += fmt.Sprintf(" (⚠️ %s не задан — демон простаивает, пока не зададите и его)", other)
 	}
 	return msg, nil
+}
+
+// awgCoreAdvice is the "what to switch to" half of the unconfirmed-AWG-core
+// warning: the default core when it carries the patch (it does since
+// v26.11.9), else the prerelease when that does, else nothing -- never a
+// sentence with an empty tag in it.
+func awgCoreAdvice() string {
+	switch {
+	case xraycore.SupportsAWG(xraycore.DefaultTag):
+		return fmt.Sprintf(" Переключитесь на стабильное ядро (%s) через ⚙️ Ядро (кнопка «Стабильное»).", xraycore.DefaultTag)
+	case xraycore.PrereleaseTag != "" && xraycore.SupportsAWG(xraycore.PrereleaseTag):
+		return fmt.Sprintf(" Переключитесь на пререлиз (%s) через ⚙️ Ядро, если ещё не на нём.", xraycore.PrereleaseTag)
+	}
+	return ""
 }
 
 func (h *RouterHandler) slotSet(idx int) bool {

@@ -27,19 +27,22 @@ import (
 // DefaultTag is the pinned XTLS/Xray-core release the vendored builds
 // track by default -- the last non-prerelease upstream tag we've built
 // and smoke-tested. Keep it in sync with packaging/xray-core/version
-// (enforced by a test).
-const DefaultTag = "v26.3.27"
+// (enforced by a test). A bump reaches every router that has no tag pinned
+// on its next `ensure-xray-core` (the .ipk's postinst runs it on every
+// update), so the real xray-core/<tag> release must be published BEFORE the
+// keenetic-xray release that carries the new value.
+const DefaultTag = "v26.11.9"
 
 // PrereleaseTag is a tag newer than DefaultTag -- usually an upstream
-// *pre-release*; v26.10.31 is upstream's Latest, kept off the default
-// until it has had its time on real routers -- that we've also built for
-// the router arches and offer as an explicit opt-in (install.sh
-// --xray-core-tag=, `internal ensure-xray-core --tag=`, the bot's
-// update_core action). It is never the default; a router only runs it if
-// someone asked for it, and the choice is persisted in config.XrayCoreTag
-// so a later self-update keeps it. Empty -> no such tag is currently
-// offered.
-const PrereleaseTag = "v26.10.31"
+// *pre-release* -- that we've also built for the router arches and offer as
+// an explicit opt-in (install.sh --xray-core-tag=, `internal
+// ensure-xray-core --tag=`, the bot's update_core action). It is never the
+// default; a router only runs it if someone asked for it, and the choice is
+// persisted in config.XrayCoreTag so a later self-update keeps it. Empty ->
+// no such tag is compiled in: v26.11.9, upstream's Latest, is the default
+// now, and the bot still offers whatever newer tag is mirrored, live (see
+// TelegramBot.livePrereleaseTag).
+const PrereleaseTag = ""
 
 // AWGConfirmedTags lists the exact xray-core release tags whose normally-
 // published vendored build is known to carry the AmneziaWG patch --
@@ -51,7 +54,7 @@ const PrereleaseTag = "v26.10.31"
 // instead -- an explicit opt-in the bot/CLI never install by default.
 // Update this alongside that workflow file whenever a tag is promoted
 // (see docs/HANDOFF-amneziawg.md and the amneziawg-plan memory file).
-var AWGConfirmedTags = []string{"v26.9.9", "v26.9.30", "v26.10.21", "v26.10.31"}
+var AWGConfirmedTags = []string{"v26.9.9", "v26.9.30", "v26.10.21", "v26.10.31", "v26.11.9"}
 
 // SupportsAWG reports whether tag's normally-published vendored build is
 // known to carry the AmneziaWG patch (AWG-01). This is a static claim

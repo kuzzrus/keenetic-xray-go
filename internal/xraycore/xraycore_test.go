@@ -9,7 +9,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -52,17 +54,54 @@ func TestTags_Sane(t *testing.T) {
 // convention every other tag-consuming function in this package already
 // uses.
 func TestSupportsAWG(t *testing.T) {
-	if !SupportsAWG(PrereleaseTag) {
-		t.Errorf("SupportsAWG(%q) = false, want true -- this is the one tag known to carry the patch", PrereleaseTag)
+	// An AWG profile has to work on a router that never touched the core
+	// settings, so the default must carry the patch -- true since v26.11.9.
+	if !SupportsAWG(DefaultTag) {
+		t.Errorf("SupportsAWG(%q) = false, want true -- DefaultTag must carry the AmneziaWG patch", DefaultTag)
 	}
-	if SupportsAWG(DefaultTag) {
-		t.Errorf("SupportsAWG(%q) = true, want false -- DefaultTag is not (yet) in AWGConfirmedTags", DefaultTag)
+	if !SupportsAWG("") {
+		t.Error(`SupportsAWG("") = false, want true -- "" means DefaultTag`)
 	}
-	if SupportsAWG("") {
-		t.Error(`SupportsAWG("") = true, want false -- "" means DefaultTag, which isn't confirmed`)
+	// The bot's warning tells the operator to switch to the prerelease when
+	// there is one, so what is offered as the opt-in must carry the patch.
+	if PrereleaseTag != "" && !SupportsAWG(PrereleaseTag) {
+		t.Errorf("SupportsAWG(%q) = false, want true -- the opt-in tag must carry the patch", PrereleaseTag)
+	}
+	// The old default never did (its patch was only ever staged as a dev build).
+	if SupportsAWG("v26.3.27") {
+		t.Error(`SupportsAWG("v26.3.27") = true, want false -- its published build is plain upstream`)
 	}
 	if SupportsAWG("v0.0.0-not-a-real-tag") {
 		t.Error("SupportsAWG of an unrelated tag = true, want false")
+	}
+}
+
+// TestAWGConfirmedTags_MatchWorkflow keeps the two copies of the list in
+// step: the Go slice (what the bot and the CLI believe) and the workflow's
+// AWG_CONFIRMED_TAGS (what actually decides whether a tag's build gets the
+// patch). Every promotion so far edited both by hand.
+func TestAWGConfirmedTags_MatchWorkflow(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "xray-core.yml"))
+	if err != nil {
+		t.Fatalf("reading the xray-core workflow: %v", err)
+	}
+	var fromYAML []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if v, ok := strings.CutPrefix(line, "AWG_CONFIRMED_TAGS:"); ok {
+			fromYAML = strings.Fields(strings.Trim(strings.TrimSpace(v), `"`))
+			break
+		}
+	}
+	if len(fromYAML) == 0 {
+		t.Fatal("AWG_CONFIRMED_TAGS not found in .github/workflows/xray-core.yml")
+	}
+	want := append([]string(nil), fromYAML...)
+	got := append([]string(nil), AWGConfirmedTags...)
+	sort.Strings(want)
+	sort.Strings(got)
+	if !reflect.DeepEqual(want, got) {
+		t.Errorf("workflow AWG_CONFIRMED_TAGS = %v, xraycore.AWGConfirmedTags = %v -- keep them in sync", want, got)
 	}
 }
 

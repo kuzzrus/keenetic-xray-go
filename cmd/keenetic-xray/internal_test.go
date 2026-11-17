@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
@@ -219,8 +220,13 @@ func TestCmdEnsureXrayCore_TagPersistsBeforeDownload(t *testing.T) {
 		t.Errorf("XrayCoreTag = %q, want cleared by --tag=stable", cfg.XrayCoreTag)
 	}
 
-	// A malformed tag is rejected and nothing is written.
-	if err := run([]string{"internal", "ensure-xray-core", "--tag=nightly"}); err == nil {
-		t.Error("expected an error for --tag=nightly")
+	// A malformed tag is rejected and nothing is written -- and the message
+	// shows a real example tag even when no prerelease is on offer.
+	err := run([]string{"internal", "ensure-xray-core", "--tag=nightly"})
+	if err == nil {
+		t.Fatal("expected an error for --tag=nightly")
+	}
+	if !strings.Contains(err.Error(), "like v") {
+		t.Errorf("error = %q, want it to name an example tag (like vX.Y.Z)", err)
 	}
 }

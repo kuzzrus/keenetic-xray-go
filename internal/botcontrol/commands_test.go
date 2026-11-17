@@ -1131,7 +1131,8 @@ func testAWGLink() string {
 // the operator would have no way to know their obfuscation might not
 // actually be active.
 func TestRouterHandler_SetSlotSource_WarnsWhenCoreDoesNotConfirmAWG(t *testing.T) {
-	cfg := config.Default() // XrayCoreTag == "" -> DefaultTag, not AWG-confirmed
+	cfg := config.Default()
+	cfg.XrayCoreTag = "v26.3.27" // pinned to the old default, whose published build is plain upstream
 	h := &RouterHandler{Config: cfg, ConfigPath: filepath.Join(t.TempDir(), "c.json")}
 
 	out, err := h.Handle(context.Background(), Command{
@@ -1144,25 +1145,36 @@ func TestRouterHandler_SetSlotSource_WarnsWhenCoreDoesNotConfirmAWG(t *testing.T
 	if !strings.Contains(out, "не подтверждён как AmneziaWG-patched") {
 		t.Errorf("out = %q, want a warning about the unconfirmed core tag", out)
 	}
+	// The warning must say what to switch to -- the default core carries the
+	// patch -- and never end in a sentence with an empty tag.
+	if want := "(" + xraycore.DefaultTag + ")"; !strings.Contains(out, want) {
+		t.Errorf("out = %q, want the advice to name the default core %s", out, want)
+	}
+	if strings.Contains(out, "()") {
+		t.Errorf("out = %q, an empty tag leaked into the advice", out)
+	}
 }
 
 // TestRouterHandler_SetSlotSource_NoWarningWithConfirmedAWGCore is the
-// negative case: the same profile with a confirmed tag already set must
-// not warn.
+// negative case: the same profile on an AWG-confirmed core must not warn --
+// the default (no pin: it carries the patch since v26.11.9) and an older
+// confirmed tag a router may still be pinned to.
 func TestRouterHandler_SetSlotSource_NoWarningWithConfirmedAWGCore(t *testing.T) {
-	cfg := config.Default()
-	cfg.XrayCoreTag = xraycore.PrereleaseTag
-	h := &RouterHandler{Config: cfg, ConfigPath: filepath.Join(t.TempDir(), "c.json")}
+	for _, tag := range []string{"", "v26.10.31"} {
+		cfg := config.Default()
+		cfg.XrayCoreTag = tag
+		h := &RouterHandler{Config: cfg, ConfigPath: filepath.Join(t.TempDir(), "c.json")}
 
-	out, err := h.Handle(context.Background(), Command{
-		Action: ActionSetPrimarySource,
-		Args:   []string{testAWGLink()},
-	})
-	if err != nil {
-		t.Fatalf("set_primary_source (awg): %v", err)
-	}
-	if strings.Contains(out, "не подтверждён") {
-		t.Errorf("out = %q, want no warning -- the configured tag is AWG-confirmed", out)
+		out, err := h.Handle(context.Background(), Command{
+			Action: ActionSetPrimarySource,
+			Args:   []string{testAWGLink()},
+		})
+		if err != nil {
+			t.Fatalf("set_primary_source (awg, core %q): %v", tag, err)
+		}
+		if strings.Contains(out, "не подтверждён") {
+			t.Errorf("core %q: out = %q, want no warning -- the configured tag is AWG-confirmed", tag, out)
+		}
 	}
 }
 
@@ -1170,7 +1182,8 @@ func TestRouterHandler_SetSlotSource_NoWarningWithConfirmedAWGCore(t *testing.T)
 // warning is specific to amneziawg profiles -- an ordinary vless profile
 // must never mention AWG at all, regardless of the configured core tag.
 func TestRouterHandler_SetSlotSource_NoWarningForNonAWGProfile(t *testing.T) {
-	cfg := config.Default() // XrayCoreTag == "" -> DefaultTag, not AWG-confirmed
+	cfg := config.Default()
+	cfg.XrayCoreTag = "v26.3.27" // an unconfirmed core, where an AWG profile WOULD warn
 	h := &RouterHandler{Config: cfg, ConfigPath: filepath.Join(t.TempDir(), "c.json")}
 
 	out, err := h.Handle(context.Background(), Command{

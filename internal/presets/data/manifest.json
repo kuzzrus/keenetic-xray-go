@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated": "2026-11-17",
+  "generated": "2026-11-18",
   "categories": [
     "Мессенджеры",
     "Видео",
@@ -356,8 +356,8 @@
       "title": "ElevenLabs",
       "category": "Искусственный интеллект",
       "kind": "domains",
-      "count": 2,
-      "rev": "547e05bf2c47",
+      "count": 3,
+      "rev": "4df849be8b0b",
       "sources": [
         "Geo-Aggregator: elevenlabs"
       ]
@@ -392,8 +392,8 @@
       "title": "Facebook",
       "category": "Соцсети",
       "kind": "cidr",
-      "count": 25,
-      "rev": "1145b894073b",
+      "count": 26,
+      "rev": "a38e5be30ee8",
       "sources": [
         "lord-alfred/ipranges: facebook"
       ]
@@ -584,8 +584,8 @@
       "title": "Instagram",
       "category": "Соцсети",
       "kind": "cidr",
-      "count": 25,
-      "rev": "1145b894073b",
+      "count": 26,
+      "rev": "a38e5be30ee8",
       "sources": [
         "lord-alfred/ipranges: facebook"
       ]
@@ -680,8 +680,8 @@
       "title": "Facebook Messenger",
       "category": "Мессенджеры",
       "kind": "cidr",
-      "count": 25,
-      "rev": "1145b894073b",
+      "count": 26,
+      "rev": "a38e5be30ee8",
       "sources": [
         "lord-alfred/ipranges: facebook"
       ]
@@ -1125,8 +1125,8 @@
       "title": "Threads",
       "category": "Соцсети",
       "kind": "cidr",
-      "count": 25,
-      "rev": "1145b894073b",
+      "count": 26,
+      "rev": "a38e5be30ee8",
       "sources": [
         "lord-alfred/ipranges: facebook"
       ]
@@ -1257,8 +1257,8 @@
       "title": "WhatsApp",
       "category": "Мессенджеры",
       "kind": "cidr",
-      "count": 25,
-      "rev": "1145b894073b",
+      "count": 26,
+      "rev": "a38e5be30ee8",
       "sources": [
         "lord-alfred/ipranges: facebook"
       ]

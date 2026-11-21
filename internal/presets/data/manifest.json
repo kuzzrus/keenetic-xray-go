@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated": "2026-11-18",
+  "generated": "2026-11-21",
   "categories": [
     "Мессенджеры",
     "Видео",
@@ -81,7 +81,7 @@
       "category": "Работа и инструменты",
       "kind": "domains",
       "count": 200,
-      "rev": "dbfb375047f2",
+      "rev": "32458088c5c8",
       "sources": [
         "Geo-Aggregator: apple"
       ]

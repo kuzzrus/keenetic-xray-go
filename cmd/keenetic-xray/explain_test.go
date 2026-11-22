@@ -443,3 +443,59 @@ func TestExplain_DNSCaveatOnlyForNameEntries(t *testing.T) {
 	mustHave(t, out, "Итог: в туннель по списку «domain-list2» → Wireguard0")
 	mustNotHave(t, out, "DNS-маршрут работает")
 }
+
+// Go's LookupCNAME gives the first target only; the router follows the whole
+// chain, so explain has to as well.
+func TestFollowCNAME_WalksToTheEndOfTheChain(t *testing.T) {
+	chain := map[string]string{"www.a.com": "x.cdn1.net.", "x.cdn1.net": "Y.cdn2.net.", "y.cdn2.net": "y.cdn2.net."}
+	calls := 0
+	got, err := followCNAME(context.Background(), "www.a.com", func(_ context.Context, n string) (string, error) {
+		calls++
+		return chain[n], nil
+	})
+	if err != nil || got != "y.cdn2.net" {
+		t.Fatalf("followCNAME = %q, %v; want y.cdn2.net", got, err)
+	}
+	if calls != 3 {
+		t.Errorf("%d lookups, want 3 (stops when a name is its own canonical name)", calls)
+	}
+
+	// No chain at all, and a failure on the first hop is the caller's error.
+	if got, err := followCNAME(context.Background(), "plain.example", func(context.Context, string) (string, error) { return "plain.example.", nil }); err != nil || got != "plain.example" {
+		t.Errorf("no chain: %q, %v", got, err)
+	}
+	if _, err := followCNAME(context.Background(), "x.example", func(context.Context, string) (string, error) { return "", errors.New("SERVFAIL") }); err == nil {
+		t.Error("a failing first lookup must be reported")
+	}
+	// A failure further along keeps what was found; a loop is cut off.
+	n := 0
+	got, err = followCNAME(context.Background(), "a.example", func(context.Context, string) (string, error) {
+		n++
+		if n == 2 {
+			return "", errors.New("timeout")
+		}
+		return "b.example", nil
+	})
+	if err != nil || got != "b.example" {
+		t.Errorf("failure mid-chain: %q, %v; want b.example", got, err)
+	}
+	loops := 0
+	if _, err := followCNAME(context.Background(), "a.example", func(_ context.Context, n string) (string, error) {
+		loops++
+		return "z" + n, nil // never ends
+	}); err != nil || loops != explainMaxCNAMEHops {
+		t.Errorf("a runaway chain: %d lookups (err %v), want exactly %d", loops, err, explainMaxCNAMEHops)
+	}
+}
+
+// A config list whose group IS on the router but routes nowhere is a different
+// problem from one that was never applied.
+func TestExplain_UnroutedGroupIsNotReportedAsNotApplied(t *testing.T) {
+	env := explainTestEnv()
+	env.cfg.Routing.Lists = []config.RouteList{{Name: "tg", Entries: []string{"x.com"}}}
+	env.resolve = resolvesTo("203.0.113.9")
+	env.routes = func(context.Context) ([]keenetic.LiveRoute, error) {
+		return []keenetic.LiveRoute{{Group: keenetic.RouteGroupPrefix + "tg", Iface: "", Entries: []string{"x.com"}}}, nil
+	}
+	mustNotHave(t, explainText(t, env, "x.com"), "не применён")
+}

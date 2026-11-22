@@ -190,6 +190,21 @@ func hitOf(l explainList, entry string) explainHit {
 	return explainHit{List: l.name, Ours: l.ours, Iface: l.iface, ToUs: l.toUs, Reject: l.reject, Entry: entry}
 }
 
+// firstHits picks, in order, the first hit routed into our own xray and the
+// first routed to another interface (either may be nil).
+func firstHits(hits []explainHit) (toUs, elsewhere *explainHit) {
+	for i := range hits {
+		h := &hits[i]
+		switch {
+		case h.ToUs && toUs == nil:
+			toUs = h
+		case !h.ToUs && h.Iface != "" && elsewhere == nil:
+			elsewhere = h
+		}
+	}
+	return toUs, elsewhere
+}
+
 // nameHit reports whether l covers name -- or, the way the router matches, the
 // canonical name at the end of its CNAME chain (cname, "" when there is none).
 func nameHit(l explainList, name, cname string) (explainHit, bool) {
@@ -319,7 +334,7 @@ func buildExplain(ctx context.Context, env explainEnv, query string) (*explainRe
 		Query: strings.TrimSpace(query), Name: name,
 		OnRouter:   env.routes != nil,
 		AdaptiveOn: env.cfg.AdaptiveRoute.Enabled,
-		L7On:       env.cfg.L7SNI.Enabled && env.cfg.AdaptiveRoute.Enabled,
+		L7On:       l7sniEnabled(env.cfg),
 	}
 
 	var ips []net.IP
@@ -349,14 +364,16 @@ func buildExplain(ctx context.Context, env explainEnv, query string) (*explainRe
 	cfgLists := explainListsFromConfig(env.cfg)
 	lists := cfgLists
 	r.Source = "конфиг"
-	var routerLists []explainList
+	routerGroups := map[string]bool{} // every group on the router, routed or not
 	if env.routes != nil {
 		routes, rerr := env.routes(ctx)
 		if rerr != nil {
 			r.RoutesErr = rerr
 		} else {
-			routerLists = explainListsFromRoutes(env.cfg, routes)
-			lists, r.Source = routerLists, "роутер"
+			for _, lr := range routes {
+				routerGroups[lr.Group] = true
+			}
+			lists, r.Source = explainListsFromRoutes(env.cfg, routes), "роутер"
 		}
 	}
 
@@ -401,12 +418,8 @@ func buildExplain(ctx context.Context, env explainEnv, query string) (*explainRe
 	// A list of this config that covers the question but is not on the router:
 	// the commonest reason for "it is in my list, and it does not work".
 	if r.Source == "роутер" {
-		onRouter := map[string]bool{}
-		for _, l := range routerLists {
-			onRouter[l.group] = true
-		}
 		for _, l := range cfgLists {
-			if onRouter[l.group] {
+			if routerGroups[l.group] { // there; whether it routes is another matter
 				continue
 			}
 			covers := false
@@ -440,17 +453,7 @@ const (
 // xray wins; then the adaptive set (its REDIRECT is the first thing a new
 // connection meets); then a list routed elsewhere.
 func (r *explainReport) pathOf(a explainAddr) (explainPath, string) {
-	hits := append(append([]explainHit(nil), r.NameHits...), a.Lists...)
-	var toUs, elsewhere *explainHit
-	for i := range hits {
-		h := &hits[i]
-		switch {
-		case h.ToUs && toUs == nil:
-			toUs = h
-		case !h.ToUs && h.Iface != "" && elsewhere == nil:
-			elsewhere = h
-		}
-	}
+	toUs, elsewhere := firstHits(append(append([]explainHit(nil), r.NameHits...), a.Lists...))
 	var adaptive *adaptiveroute.Entry
 	if r.AdaptiveOn && len(a.Adaptive) > 0 {
 		adaptive = &a.Adaptive[0]
@@ -623,20 +626,15 @@ func renderExplain(r *explainReport) string {
 		// L7 reads the name out of the connection (ClientHello, HTTP Host) and
 		// compares that with the lists; it knows nothing of CNAME chains.
 		b.WriteString("\nL7 (по имени): ")
-		var toUs, elsewhere, viaOnly *explainHit
-		for i := range r.NameHits {
-			h := &r.NameHits[i]
-			switch {
-			case h.Via != "":
-				if viaOnly == nil {
-					viaOnly = h
-				}
-			case h.ToUs && toUs == nil:
-				toUs = h
-			case !h.ToUs && h.Iface != "" && elsewhere == nil:
-				elsewhere = h
+		var direct, viaOnly []explainHit
+		for _, h := range r.NameHits {
+			if h.Via != "" {
+				viaOnly = append(viaOnly, h)
+			} else {
+				direct = append(direct, h)
 			}
 		}
+		toUs, elsewhere := firstHits(direct)
 		switch {
 		case elsewhere != nil:
 			fmt.Fprintf(&b, "не трогает — имя в списке «%s» через %s\n", elsewhere.List, elsewhere.Iface)
@@ -644,8 +642,8 @@ func renderExplain(r *explainReport) string {
 			b.WriteString("увидит имя (ClientHello, HTTP Host) и положит адрес в адаптивный набор\n")
 		case toUs != nil:
 			b.WriteString("выключен (нужны L7 SNI и адаптивная маршрутизация) — по имени не ловится\n")
-		case viaOnly != nil:
-			fmt.Fprintf(&b, "самого имени в списках нет (список «%s» покрывает его CNAME %s) — по имени из соединения не ловится\n", viaOnly.List, viaOnly.Via)
+		case len(viaOnly) > 0:
+			fmt.Fprintf(&b, "самого имени в списках нет (список «%s» покрывает его CNAME %s) — по имени из соединения не ловится\n", viaOnly[0].List, viaOnly[0].Via)
 		default:
 			b.WriteString("имени нет в списках — не ловится\n")
 		}
@@ -773,11 +771,39 @@ func explainResolve(ctx context.Context, name string) ([]string, error) {
 	return out, nil
 }
 
-// explainCNAME is the canonical name behind name, through the system resolver.
+// explainMaxCNAMEHops bounds the chain followed.
+const explainMaxCNAMEHops = 8
+
+// followCNAME walks name's CNAME chain to its end with lookup (one hop per
+// call: Go's LookupCNAME returns the first target, not the last). The error is
+// the first lookup's; a failure further along ends the walk where it stands.
+func followCNAME(ctx context.Context, name string, lookup func(context.Context, string) (string, error)) (string, error) {
+	cur := name
+	for i := 0; i < explainMaxCNAMEHops; i++ {
+		next, err := lookup(ctx, cur)
+		if err != nil {
+			if i == 0 {
+				return "", err
+			}
+			break
+		}
+		next = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(next)), ".")
+		if next == "" || next == cur {
+			break
+		}
+		cur = next
+	}
+	return cur, nil
+}
+
+// explainCNAME is the canonical name at the end of name's CNAME chain, through
+// the system resolver.
 func explainCNAME(ctx context.Context, name string) (string, error) {
-	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	return net.DefaultResolver.LookupCNAME(rctx, name)
+	return followCNAME(ctx, name, func(ctx context.Context, n string) (string, error) {
+		rctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		return net.DefaultResolver.LookupCNAME(rctx, n)
+	})
 }
 
 // explainNow explains query against this machine: the config on disk, the

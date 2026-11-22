@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -38,6 +39,30 @@ type Preset struct {
 	Count    int      `json:"count"`
 	Rev      string   `json:"rev"`
 	Sources  []string `json:"sources"`
+
+	// SourceCount is how many entries the upstream had before the generator cut
+	// the list down to Count so that it fits a router's group; 0 when it was not
+	// cut (or an older manifest does not say). See Capped.
+	SourceCount int `json:"source_count,omitempty"`
+}
+
+// Capped reports whether the list was cut: the upstream had more entries than
+// the list holds, so a name or a subnet that is missing from it may simply not
+// have made the cut.
+func (p Preset) Capped() bool { return p.SourceCount > p.Count }
+
+// CountText is the entry count as every screen shows it: "200", or "200 из 540"
+// when the list was cut -- the silent cut is what this exists to end.
+func (p Preset) CountText() string { return CountText(p.Count, p.SourceCount) }
+
+// CountText formats a count with the number the upstream had when it differs
+// (source 0 = not cut or unknown). Kept apart from Preset so the bot, which
+// receives the two numbers over its protocol, words it the same way.
+func CountText(count, source int) string {
+	if source > count {
+		return strconv.Itoa(count) + " из " + strconv.Itoa(source)
+	}
+	return strconv.Itoa(count)
 }
 
 type manifest struct {

@@ -21,7 +21,11 @@ import (
 // button order:
 //
 //	#cats\tМессенджеры\tВидео\t...
-//	name\tservice\ttitle\tcategory\tkind\tcount\tinstalled(0|1)\tdriftAdded\tdriftRemoved
+//	name\tservice\ttitle\tcategory\tkind\tcount\tinstalled(0|1)\tdriftAdded\tdriftRemoved\tsourceCount
+//
+// sourceCount (0 = not cut, or an older manifest) is how many entries the
+// upstream had before the list was cut to count; a bot that does not know the
+// column ignores it, and one that gets a row without it reads 0.
 //
 // installed/drift are evaluated against THIS agent build's embedded
 // presets and this router's live config.
@@ -42,8 +46,8 @@ func (h *RouterHandler) routesPresetList() string {
 			installed = 1
 			dA, dR, _, _ = presets.Drift(*l)
 		}
-		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\t%d\t%d\t%d\t%d\n",
-			p.Name, p.Service, p.Title, p.Category, p.Kind, p.Count, installed, dA, dR)
+		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\n",
+			p.Name, p.Service, p.Title, p.Category, p.Kind, p.Count, installed, dA, dR, p.SourceCount)
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

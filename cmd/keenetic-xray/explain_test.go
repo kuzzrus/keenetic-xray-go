@@ -108,7 +108,7 @@ func TestExplain_ListRoutedIntoOurXrayCoversNameAndParents(t *testing.T) {
 		"Имя → 157.240.1.60",
 		"Списки (роутер)",
 		"«domain-list3» → Wireguard0 (в наш xray): whatsapp.com",
-		"L7 (по имени): увидит имя (ClientHello, HTTP Host)",
+		"L7 (по имени): если соединение пойдёт мимо DNS-маршрута (DoH, зашитый адрес), увидит имя (ClientHello, HTTP Host)",
 		"Итог: в туннель по списку «domain-list3» → Wireguard0",
 		"DNS-маршрут работает, пока клиент спрашивает имя у DNS роутера")
 	mustNotHave(t, out, "Сайт не открывается?")
@@ -385,7 +385,7 @@ func TestExplain_L7NeedsBothSwitches(t *testing.T) {
 	env.cfg.L7SNI.Enabled = false
 	mustHave(t, explainText(t, env, "example.org"), "L7 (по имени): выключен (нужны L7 SNI и адаптивная маршрутизация)")
 	env.cfg.L7SNI.Enabled = true
-	mustHave(t, explainText(t, env, "example.org"), "L7 (по имени): увидит имя (ClientHello, HTTP Host)")
+	mustHave(t, explainText(t, env, "example.org"), "L7 (по имени): если соединение пойдёт мимо DNS-маршрута (DoH, зашитый адрес), увидит имя (ClientHello, HTTP Host)")
 	env.cfg.AdaptiveRoute.Enabled = false
 	mustHave(t, explainText(t, env, "example.org"), "L7 (по имени): выключен")
 }

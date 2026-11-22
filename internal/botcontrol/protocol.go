@@ -74,7 +74,7 @@ const (
 	ActionRoutesAddIP      = "routes_add_ip"   // args[0]=list, args[1]=IPv4 addresses/subnets -> into its IP companion "<list>-ip" (created like the list; config.AddCompanionIPs)
 	// Built-in curated preset lists (internal/presets), refreshed daily in
 	// the repo. See cmd/keenetic-xray/routes_preset.go.
-	ActionRoutesPresetList   = "routes_preset_list"   // no args -> TSV: name, service, title, category, kind, count, installed(0|1), driftAdded, driftRemoved; first lines are "#gen\t<date>" and "#cats\t<cat>\t<cat>..."
+	ActionRoutesPresetList   = "routes_preset_list"   // no args -> TSV: name, service, title, category, kind, count, installed(0|1), driftAdded, driftRemoved, sourceCount; first lines are "#gen\t<date>" and "#cats\t<cat>\t<cat>..."
 	ActionRoutesPresetAdd    = "routes_preset_add"    // args[0]=preset name; optional "ip", "iface=<IfaceN>", "exclusive"
 	ActionRoutesPresetSync   = "routes_preset_sync"   // args[0]=preset name or "all"
 	ActionRoutesPresetUpdate = "routes_preset_update" // no args -> pull the latest preset lists from the repo now (the daemon also does this daily)

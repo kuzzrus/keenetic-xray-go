@@ -74,6 +74,16 @@ type manifestRow struct {
 	Count    int      `json:"count"`
 	Rev      string   `json:"rev"`
 	Sources  []string `json:"sources"`
+
+	// SourceCount is how many entries the upstream had before the cap cut the
+	// list down to Count -- set only when it did cut (CIDR lists: after the
+	// siblings were merged), so the row of an uncapped preset never moves with
+	// its source. 0 = not cut, or not known (a sanity-gate hold).
+	SourceCount int `json:"source_count,omitempty"`
+
+	// keptPrev marks a row whose file the sanity gate kept as it was: buildFile
+	// saw no usable count of its own, carrySourceCounts brings the old one back.
+	keptPrev bool
 }
 
 type manifestFile struct {
@@ -188,7 +198,9 @@ func run(dir string, dryRun bool) error {
 	cats := categoryOrder(src.CategoryOrder, rows)
 	mfPath := filepath.Join(dir, "manifest.json")
 	generated := time.Now().UTC().Format("2006-01-02")
-	if old := loadManifest(mfPath); old != nil && sameRows(old.Presets, rows) &&
+	old := loadManifest(mfPath)
+	carrySourceCounts(rows, old)
+	if old != nil && sameRows(old.Presets, rows) &&
 		strings.Join(old.Categories, "|") == strings.Join(cats, "|") {
 		generated = old.Generated // nothing changed -> keep the old stamp, no diff
 	}
@@ -280,12 +292,14 @@ func buildFile(dir, name, service, title, category, kind string,
 	}
 
 	capped := false
+	total := 0 // what the upstream held (merged, for CIDRs) before the cap
 	if kind == "cidr" {
 		// Provider CIDR dumps are huge and highly fragmented (github ~6k,
 		// google ~1k). Collapse siblings / contained blocks first, then --
 		// if still over budget -- keep the largest blocks, which covers
 		// the most address space per object-group entry.
 		got = aggregateCIDRs(got)
+		total = len(got)
 		if len(got) > cap {
 			sort.Slice(got, func(i, j int) bool {
 				pi, pj := prefixLen(got[i]), prefixLen(got[j])
@@ -302,6 +316,7 @@ func buildFile(dir, name, service, title, category, kind string,
 		// Domains: rank apex/short names above regional ccTLD spam so a
 		// cap never drops "paypal.com" in favour of "paypal.com.hk".
 		sort.Slice(got, func(i, j int) bool { return domainRank(got[i]) < domainRank(got[j]) })
+		total = len(got)
 		if len(got) > cap {
 			got = got[:cap]
 			capped = true
@@ -338,7 +353,11 @@ func buildFile(dir, name, service, title, category, kind string,
 	}
 
 	if keepPrev {
+		row.keptPrev = true
 		return row, reason
+	}
+	if capped {
+		row.SourceCount = total
 	}
 
 	// Entry set unchanged -> leave the file byte-for-byte as it is (its
@@ -628,11 +647,38 @@ func sameRows(a, b []manifestRow) bool {
 		x, y := a[i], b[i]
 		if x.Name != y.Name || x.Service != y.Service || x.Title != y.Title ||
 			x.Category != y.Category || x.Kind != y.Kind || x.Count != y.Count ||
+			x.SourceCount != y.SourceCount ||
 			x.Rev != y.Rev || strings.Join(x.Sources, "|") != strings.Join(y.Sources, "|") {
 			return false
 		}
 	}
 	return true
+}
+
+// carrySourceCounts keeps a capped preset's recorded SourceCount from the
+// previous manifest for as long as its list is unchanged (same Rev). The number
+// follows the upstream, which grows and shrinks every day; written afresh each
+// time it would turn the daily refresh into a commit a day over a figure nobody
+// reads that closely. It is recorded anew whenever the list itself changes, and
+// it is also what survives a sanity-gate hold, where buildFile has no count of
+// its own. A first run (no old count) records what it measured.
+func carrySourceCounts(rows []manifestRow, old *manifestFile) {
+	if old == nil {
+		return
+	}
+	prev := make(map[string]manifestRow, len(old.Presets))
+	for _, r := range old.Presets {
+		prev[r.Name] = r
+	}
+	for i := range rows {
+		o, ok := prev[rows[i].Name]
+		if !ok || o.Rev != rows[i].Rev || o.SourceCount == 0 {
+			continue
+		}
+		if rows[i].SourceCount > 0 || rows[i].keptPrev {
+			rows[i].SourceCount = o.SourceCount
+		}
+	}
 }
 
 func fetchCatalog(url string) (*catalog, error) {

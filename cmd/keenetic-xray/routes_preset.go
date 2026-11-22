@@ -54,7 +54,7 @@ func presetList(cfg *config.Config) error {
 			if presets.HasCIDR(p.Name) {
 				ip = " +IP"
 			}
-			fmt.Printf("    %-16s %4d дом.%-5s %s\n", p.Name, p.Count, ip, mark)
+			fmt.Printf("    %-16s %11s дом.%-5s %s\n", p.Name, p.CountText(), ip, mark)
 		}
 	}
 	fmt.Println("\nдобавить: keenetic-xray routes preset add <name> [--ip]")
@@ -68,14 +68,20 @@ func presetShow(cfg *config.Config, name string) error {
 	}
 	fmt.Printf("%s — %s\n", p.Name, p.Title)
 	fmt.Printf("  категория:  %s\n", p.Category)
-	fmt.Printf("  вид:        %s, записей: %d\n", p.Kind, p.Count)
+	fmt.Printf("  вид:        %s, записей: %s\n", p.Kind, p.CountText())
+	if p.Capped() {
+		fmt.Printf("  урезан:     %s\n", presetCutNote(p))
+	}
 	fmt.Printf("  версия:     %s\n", p.Rev)
 	if len(p.Sources) > 0 {
 		fmt.Printf("  источники:  %s\n", strings.Join(p.Sources, ", "))
 	}
 	if p.Kind == "domains" && presets.HasCIDR(p.Name) {
 		if ipp, ok := presets.Find(p.Name + "-ip"); ok {
-			fmt.Printf("  +IP-список: %s-ip (%d подсетей)\n", p.Name, ipp.Count)
+			fmt.Printf("  +IP-список: %s-ip (%s подсетей)\n", p.Name, ipp.CountText())
+			if ipp.Capped() {
+				fmt.Printf("  урезан:     %s\n", presetCutNote(ipp))
+			}
 		}
 	}
 	if l := presets.BoundList(cfg, p.Name); l != nil {
@@ -145,4 +151,14 @@ func presetSyncCmd(cfg *config.Config, args []string) error {
 		return nil
 	}
 	return routesApply(cfg, fmt.Sprintf("синхронизировано списков: %d", changed))
+}
+
+// presetCutNote says what a list that was cut to fit a router's group lacks and
+// how to make up for it. Domains are ranked apex-first by the generator (so
+// "paypal.com" survives where "paypal.com.hk" does not), subnets by block size.
+func presetCutNote(p presets.Preset) string {
+	if p.Kind == "cidr" {
+		return fmt.Sprintf("в источнике %d подсетей (после объединения соседних), оставлены %d самых крупных — остальных в списке нет", p.SourceCount, p.Count)
+	}
+	return fmt.Sprintf("в источнике %d доменов, оставлены %d самых общих (корневые раньше поддоменов и региональных зон) — остальных в списке нет; нужный можно добавить руками: routes add <список> <домен>", p.SourceCount, p.Count)
 }

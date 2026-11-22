@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/kuzzrus/keenetic-xray-go/internal/presets"
 )
 
 // The 📦 Готовые списки screen sits under 📍 Маршруты. Opening it fetches
@@ -29,7 +31,14 @@ type presetItem struct {
 	count                                int
 	installed                            bool
 	driftAdd, driftRemove                int
+	sourceCount                          int // what the upstream had before the list was cut to count; 0 = not cut / unknown
 }
+
+// countText is the entry count the way presets.Preset.CountText words it:
+// "200", or "200 из 540" when the list was cut.
+func (it presetItem) countText() string { return presets.CountText(it.count, it.sourceCount) }
+
+func (it presetItem) capped() bool { return it.sourceCount > it.count }
 
 func (b *TelegramBot) setPresetMenu(chatID int64, pm presetMenu) {
 	b.presetMenuMu.Lock()
@@ -79,9 +88,13 @@ func parsePresetList(out string) presetMenu {
 		count, _ := strconv.Atoi(f[5])
 		dA, _ := strconv.Atoi(f[7])
 		dR, _ := strconv.Atoi(f[8])
+		src := 0 // an agent older than the column sends nine fields
+		if len(f) > 9 {
+			src, _ = strconv.Atoi(f[9])
+		}
 		pm.items = append(pm.items, presetItem{
 			name: f[0], service: f[1], title: f[2], category: f[3], kind: f[4],
-			count: count, installed: f[6] == "1", driftAdd: dA, driftRemove: dR,
+			count: count, installed: f[6] == "1", driftAdd: dA, driftRemove: dR, sourceCount: src,
 		})
 	}
 	return pm
@@ -215,7 +228,7 @@ func (b *TelegramBot) openPresetCategoryScreen(ctx context.Context, cb tgCallbac
 			}
 		}
 		rows = append(rows, []inlineButton{{
-			Text:         fmt.Sprintf("%s · %d%s", e.item.title, e.item.count, mark),
+			Text:         fmt.Sprintf("%s · %s%s", e.item.title, e.item.countText(), mark),
 			CallbackData: fmt.Sprintf("rtps:%s:%d", id, e.idx),
 		}})
 	}
@@ -232,21 +245,7 @@ func (b *TelegramBot) openPresetScreen(ctx context.Context, cb tgCallbackQuery, 
 	}
 	pm, _ := b.presetSnapshot(cb.Message.Chat.ID, id)
 	hasIP := pm.hasCompanion(it.name)
-
-	var b2 strings.Builder
-	fmt.Fprintf(&b2, "📦 %s\n%s · %d доменов", it.title, it.category, it.count)
-	if hasIP {
-		b2.WriteString(" (+ список IP-диапазонов)")
-	}
-	if it.installed {
-		if it.driftAdd+it.driftRemove > 0 {
-			fmt.Fprintf(&b2, "\n\n⬆ применён, есть обновление: +%d −%d", it.driftAdd, it.driftRemove)
-		} else {
-			b2.WriteString("\n\n✓ применён, актуально")
-		}
-	} else {
-		b2.WriteString("\n\nещё не применён")
-	}
+	text := presetScreenText(it, hasIP)
 
 	var rows [][]inlineButton
 	addLabel := "➕ Добавить (домены)"
@@ -261,7 +260,31 @@ func (b *TelegramBot) openPresetScreen(ctx context.Context, cb tgCallbackQuery, 
 		rows = append(rows, []inlineButton{{Text: fmt.Sprintf("🔄 Синхронизировать (+%d −%d)", it.driftAdd, it.driftRemove), CallbackData: fmt.Sprintf("rtpy:%s:%d", id, idx)}})
 	}
 	rows = append(rows, []inlineButton{{Text: "⬅️ Назад", CallbackData: fmt.Sprintf("rtpc:%s:%d", id, pm.catIndex(it.category))}})
-	b.editCB(ctx, cb, b2.String(), inlineKeyboard{InlineKeyboard: rows})
+	b.editCB(ctx, cb, text, inlineKeyboard{InlineKeyboard: rows})
+}
+
+// presetScreenText is the body of one preset's screen: what it holds (and, when the
+// generator cut it to fit a router's group, how much it left out), and whether it is
+// applied.
+func presetScreenText(it presetItem, hasIP bool) string {
+	var b2 strings.Builder
+	fmt.Fprintf(&b2, "📦 %s\n%s · %s доменов", it.title, it.category, it.countText())
+	if hasIP {
+		b2.WriteString(" (+ список IP-диапазонов)")
+	}
+	if it.capped() {
+		fmt.Fprintf(&b2, "\n\n✂️ Список урезан: в источнике %d, оставлены %d самых общих (корневые домены раньше поддоменов) — остальных в нём нет. Нужный можно добавить руками в 📍 Маршруты.", it.sourceCount, it.count)
+	}
+	if it.installed {
+		if it.driftAdd+it.driftRemove > 0 {
+			fmt.Fprintf(&b2, "\n\n⬆ применён, есть обновление: +%d −%d", it.driftAdd, it.driftRemove)
+		} else {
+			b2.WriteString("\n\n✓ применён, актуально")
+		}
+	} else {
+		b2.WriteString("\n\nещё не применён")
+	}
+	return b2.String()
 }
 
 // enqueuePresetAction runs one preset mutation then re-fetches the preset

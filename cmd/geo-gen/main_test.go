@@ -10,7 +10,123 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 )
+
+// listServer serves one plain-text list, one entry per line.
+func listServer(t *testing.T, entries []string) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, strings.Join(entries, "\n"))
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+func nDomains(n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = fmt.Sprintf("d%04d.example.com", i)
+	}
+	return out
+}
+
+func buildDomains(t *testing.T, dir string, entries []string, cap int) *manifestRow {
+	t.Helper()
+	s := &sourcesFile{}
+	s.applyDefaults()
+	row, _ := buildFile(dir, "svc", "svc", "Svc", "Cat", "domains", []string{listServer(t, entries)}, []string{"src"}, config.RouteDomain, cap, s, false)
+	if row == nil {
+		t.Fatal("buildFile produced no row")
+	}
+	return row
+}
+
+// A list the cap cut says how many the upstream really had; one that fit says
+// nothing (its row must not move with the source).
+func TestBuildFile_SourceCountOnlyWhenTheCapCut(t *testing.T) {
+	row := buildDomains(t, t.TempDir(), nDomains(300), 200)
+	if row.Count != 200 || row.SourceCount != 300 {
+		t.Errorf("capped list: count %d source_count %d, want 200 and 300", row.Count, row.SourceCount)
+	}
+
+	row = buildDomains(t, t.TempDir(), nDomains(150), 200)
+	if row.Count != 150 || row.SourceCount != 0 {
+		t.Errorf("list that fit: count %d source_count %d, want 150 and 0", row.Count, row.SourceCount)
+	}
+	// Exactly at the cap is not a cut either.
+	if row = buildDomains(t, t.TempDir(), nDomains(200), 200); row.SourceCount != 0 {
+		t.Errorf("list of exactly the cap: source_count %d, want 0", row.SourceCount)
+	}
+}
+
+// CIDR lists are counted after sibling blocks were merged: that is what the cap
+// is applied to.
+func TestBuildFile_SourceCountOfACIDRListIsAfterMerging(t *testing.T) {
+	var entries []string
+	for i := 0; i < 100; i++ {
+		entries = append(entries, fmt.Sprintf("203.0.%d.0/24", i*2)) // even third octets: no two are siblings
+	}
+	entries = append(entries, "198.51.100.0/25", "198.51.100.128/25") // these two merge into one /24
+	s := &sourcesFile{}
+	s.applyDefaults()
+	row, _ := buildFile(t.TempDir(), "svc-ip", "svc", "Svc", "Cat", "cidr", []string{listServer(t, entries)}, []string{"src"}, config.RouteSubnet, 48, s, false)
+	if row == nil || row.Count != 48 || row.SourceCount != 101 {
+		t.Errorf("row = %+v, want count 48 and source_count 101 (100 + the merged pair)", row)
+	}
+}
+
+// The sanity gate keeps the previous file when the fresh data collapses: the row
+// then has no count of its own and must say so.
+func TestBuildFile_SanityHoldHasNoCountOfItsOwn(t *testing.T) {
+	dir := t.TempDir()
+	buildDomains(t, dir, nDomains(100), 200) // establishes svc.lst
+	row := buildDomains(t, dir, nDomains(10), 200)
+	if !row.keptPrev || row.Count != 100 || row.SourceCount != 0 {
+		t.Errorf("row = %+v, want the previous 100 kept, keptPrev set, no source_count", row)
+	}
+}
+
+func TestCarrySourceCounts(t *testing.T) {
+	old := &manifestFile{Presets: []manifestRow{
+		{Name: "same", Rev: "r1", SourceCount: 540},
+		{Name: "changed", Rev: "r1", SourceCount: 540},
+		{Name: "held", Rev: "r1", SourceCount: 540},
+		{Name: "nowfits", Rev: "r1", SourceCount: 540},
+		{Name: "firsttime", Rev: "r1"},
+	}}
+	rows := []manifestRow{
+		{Name: "same", Rev: "r1", SourceCount: 561},      // the source drifted, the list did not: keep the old figure
+		{Name: "changed", Rev: "r2", SourceCount: 561},   // the list changed: the new figure
+		{Name: "held", Rev: "r1", keptPrev: true},        // a sanity hold has no figure: bring the old one back
+		{Name: "nowfits", Rev: "r1"},                     // no longer cut: nothing to say
+		{Name: "firsttime", Rev: "r1", SourceCount: 300}, // the old row had none: record what was measured
+		{Name: "brandnew", Rev: "r9", SourceCount: 250},
+	}
+	carrySourceCounts(rows, old)
+	want := map[string]int{"same": 540, "changed": 561, "held": 540, "nowfits": 0, "firsttime": 300, "brandnew": 250}
+	for _, r := range rows {
+		if r.SourceCount != want[r.Name] {
+			t.Errorf("%s: source_count %d, want %d", r.Name, r.SourceCount, want[r.Name])
+		}
+	}
+	carrySourceCounts(rows, nil) // no old manifest: nothing to do, nothing to panic about
+}
+
+// The daily refresh commits only when the manifest moved: a figure that is kept
+// must compare equal, one that changed must not.
+func TestSameRows_SourceCount(t *testing.T) {
+	a := []manifestRow{{Name: "x", Rev: "aaa", Count: 200, SourceCount: 540, Sources: []string{"s"}}}
+	b := []manifestRow{{Name: "x", Rev: "aaa", Count: 200, SourceCount: 540, Sources: []string{"s"}}}
+	if !sameRows(a, b) {
+		t.Fatal("identical rows reported different")
+	}
+	b[0].SourceCount = 541
+	if sameRows(a, b) {
+		t.Fatal("a changed source_count was not noticed: the manifest would not be rewritten")
+	}
+}
 
 func TestAggregateCIDRs(t *testing.T) {
 	cases := []struct {

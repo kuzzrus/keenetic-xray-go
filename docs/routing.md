@@ -226,6 +226,18 @@ absent from manifests written by an older generator). A name or subnet that
 is missing from a cut list may simply not have made the cut — add it by hand
 with `routes add <list> <name>`.
 
+**Public DNS inside an IP list.** A provider's published ranges include its
+public resolver: `google-ip`, `youtube-ip` and `google-ai-ip` carry Google Public
+DNS (`8.8.8.0/24`, `8.8.4.0/24`). Bound to the tunnel, such a list sends the DNS
+of every LAN device that has a resolver hard-coded (a Chromecast, a TV, an app
+doing DoT/DoH on its own) into the tunnel too. That keeps the provider from
+spoofing the answers and opens DoT/DoH to a resolver that is blocked direct,
+but a device is left without name resolution if the tunnel carries no UDP/53.
+The lists are **not** changed; `routes preset show`, `routes preset add --ip` and
+the bot's preset screen name the services a list covers (Google, Cloudflare,
+Quad9, OpenDNS — `presets.ResolversIn`), and a list you do not want them in can
+be edited with `routes del <list> 8.8.8.0/24 8.8.4.0/24`.
+
 **Where the lists come from at runtime.** The embedded copy is the
 baseline. The daemon also keeps a live overlay at
 `<config dir>/presets/` and refreshes it from the repo's

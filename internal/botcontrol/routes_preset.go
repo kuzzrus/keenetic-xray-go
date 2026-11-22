@@ -21,11 +21,17 @@ import (
 // button order:
 //
 //	#cats\tМессенджеры\tВидео\t...
-//	name\tservice\ttitle\tcategory\tkind\tcount\tinstalled(0|1)\tdriftAdded\tdriftRemoved\tsourceCount
+//	name\tservice\ttitle\tcategory\tkind\tcount\tinstalled(0|1)\tdriftAdded\tdriftRemoved\tsourceCount\tresolvers
 //
 // sourceCount (0 = not cut, or an older manifest) is how many entries the
 // upstream had before the list was cut to count; a bot that does not know the
 // column ignores it, and one that gets a row without it reads 0.
+//
+// resolvers is, for a subnet preset, the public DNS services its ranges cover
+// ("; "-separated, see presets.ResolversIn), "" for the rest; the bot shows it on
+// the screen of the domain preset whose "-ip" companion this is. Same
+// compatibility as sourceCount: an older bot ignores the column, a newer one
+// reads "" from an older agent.
 //
 // installed/drift are evaluated against THIS agent build's embedded
 // presets and this router's live config.
@@ -46,8 +52,9 @@ func (h *RouterHandler) routesPresetList() string {
 			installed = 1
 			dA, dR, _, _ = presets.Drift(*l)
 		}
-		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\n",
-			p.Name, p.Service, p.Title, p.Category, p.Kind, p.Count, installed, dA, dR, p.SourceCount)
+		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%s\n",
+			p.Name, p.Service, p.Title, p.Category, p.Kind, p.Count, installed, dA, dR, p.SourceCount,
+			strings.Join(p.Resolvers(), "; "))
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

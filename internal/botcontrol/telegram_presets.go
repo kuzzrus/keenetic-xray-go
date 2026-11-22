@@ -31,7 +31,8 @@ type presetItem struct {
 	count                                int
 	installed                            bool
 	driftAdd, driftRemove                int
-	sourceCount                          int // what the upstream had before the list was cut to count; 0 = not cut / unknown
+	sourceCount                          int      // what the upstream had before the list was cut to count; 0 = not cut / unknown
+	resolvers                            []string // public DNS services a subnet preset covers (presets.ResolversIn)
 }
 
 // countText is the entry count the way presets.Preset.CountText words it:
@@ -92,9 +93,14 @@ func parsePresetList(out string) presetMenu {
 		if len(f) > 9 {
 			src, _ = strconv.Atoi(f[9])
 		}
+		var resolvers []string // the column is absent from an older agent, and empty for most rows
+		if len(f) > 10 && strings.TrimSpace(f[10]) != "" {
+			resolvers = strings.Split(f[10], "; ")
+		}
 		pm.items = append(pm.items, presetItem{
 			name: f[0], service: f[1], title: f[2], category: f[3], kind: f[4],
 			count: count, installed: f[6] == "1", driftAdd: dA, driftRemove: dR, sourceCount: src,
+			resolvers: resolvers,
 		})
 	}
 	return pm
@@ -123,12 +129,18 @@ func (pm presetMenu) domainItemsInCategory(cat string) []struct {
 }
 
 func (pm presetMenu) hasCompanion(name string) bool {
+	_, ok := pm.companion(name)
+	return ok
+}
+
+// companion is the "<name>-ip" row of a domain preset.
+func (pm presetMenu) companion(name string) (presetItem, bool) {
 	for _, it := range pm.items {
 		if it.name == name+"-ip" {
-			return true
+			return it, true
 		}
 	}
-	return false
+	return presetItem{}, false
 }
 
 func (pm presetMenu) catIndex(cat string) int {
@@ -244,8 +256,8 @@ func (b *TelegramBot) openPresetScreen(ctx context.Context, cb tgCallbackQuery, 
 		return
 	}
 	pm, _ := b.presetSnapshot(cb.Message.Chat.ID, id)
-	hasIP := pm.hasCompanion(it.name)
-	text := presetScreenText(it, hasIP)
+	comp, hasIP := pm.companion(it.name)
+	text := presetScreenText(it, hasIP, comp.resolvers)
 
 	var rows [][]inlineButton
 	addLabel := "➕ Добавить (домены)"
@@ -266,11 +278,14 @@ func (b *TelegramBot) openPresetScreen(ctx context.Context, cb tgCallbackQuery, 
 // presetScreenText is the body of one preset's screen: what it holds (and, when the
 // generator cut it to fit a router's group, how much it left out), and whether it is
 // applied.
-func presetScreenText(it presetItem, hasIP bool) string {
+func presetScreenText(it presetItem, hasIP bool, ipResolvers []string) string {
 	var b2 strings.Builder
 	fmt.Fprintf(&b2, "📦 %s\n%s · %s доменов", it.title, it.category, it.countText())
 	if hasIP {
 		b2.WriteString(" (+ список IP-диапазонов)")
+	}
+	if hasIP && len(ipResolvers) > 0 {
+		fmt.Fprintf(&b2, "\n\n⚠️ %s", presets.ResolverNote(ipResolvers))
 	}
 	if it.capped() {
 		fmt.Fprintf(&b2, "\n\n✂️ Список урезан: %s", presets.CutNote(it.kind, it.count, it.sourceCount))

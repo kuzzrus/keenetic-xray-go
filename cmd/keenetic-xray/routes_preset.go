@@ -38,6 +38,7 @@ func routesPreset(cfg *config.Config, args []string) error {
 }
 
 func presetList(cfg *config.Config) error {
+	warned := false // some "-ip" list covers a public DNS service
 	fmt.Printf("встроенные списки (обновляются в репозитории, сборка от %s)\n\n", presets.Generated())
 	for _, cat := range presets.ByCategory() {
 		fmt.Printf("  %s\n", cat.Name)
@@ -53,9 +54,15 @@ func presetList(cfg *config.Config) error {
 			ip := ""
 			if presets.HasCIDR(p.Name) {
 				ip = " +IP"
+				if c, ok := presets.Find(p.Name + "-ip"); ok && len(c.Resolvers()) > 0 {
+					ip, warned = " +IP⚠", true
+				}
 			}
 			fmt.Printf("    %-16s %11s дом.%-5s %s\n", p.Name, p.CountText(), ip, mark)
 		}
+	}
+	if warned {
+		fmt.Println("\n⚠ — в IP-диапазонах есть публичный DNS (какой — routes preset show <имя>)")
 	}
 	fmt.Println("\nдобавить: keenetic-xray routes preset add <name> [--ip]")
 	return nil
@@ -82,8 +89,10 @@ func presetShow(cfg *config.Config, name string) error {
 			if ipp.Capped() {
 				fmt.Printf("  урезан:     %s\n", presets.CutNote(ipp.Kind, ipp.Count, ipp.SourceCount))
 			}
+			printResolverWarning(ipp)
 		}
 	}
+	printResolverWarning(p) // the subnet preset itself
 	if l := presets.BoundList(cfg, p.Name); l != nil {
 		a, r, _, _ := presets.Drift(*l)
 		state := "актуально"
@@ -121,7 +130,18 @@ func presetAdd(cfg *config.Config, args []string) error {
 	if err != nil {
 		return err
 	}
-	return routesApply(cfg, fmt.Sprintf("пресет применён: %s", strings.Join(names, ", ")))
+	if err := routesApply(cfg, fmt.Sprintf("пресет применён: %s", strings.Join(names, ", "))); err != nil {
+		return err
+	}
+	// Said after the apply, not instead of it: the list is as the generator made it.
+	for _, n := range names {
+		if p, ok := presets.Find(n); ok {
+			if r := p.Resolvers(); len(r) > 0 {
+				fmt.Printf("⚠️ %s: %s\n", n, presets.ResolverNote(r))
+			}
+		}
+	}
+	return nil
 }
 
 func presetSyncCmd(cfg *config.Config, args []string) error {
@@ -151,4 +171,12 @@ func presetSyncCmd(cfg *config.Config, args []string) error {
 		return nil
 	}
 	return routesApply(cfg, fmt.Sprintf("синхронизировано списков: %d", changed))
+}
+
+// printResolverWarning says, on `show`, which public DNS services a subnet preset
+// covers (nothing when it covers none).
+func printResolverWarning(p presets.Preset) {
+	if names := p.Resolvers(); len(names) > 0 {
+		fmt.Printf("  ⚠️ DNS:     %s\n", presets.ResolverNote(names))
+	}
 }

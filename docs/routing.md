@@ -212,6 +212,20 @@ Bot: `📍 Маршруты` → `📦 Готовые списки` → category
 `Добавить (домены)` / `Домены + IP‑диапазоны`; `🔄 Обновить из
 репозитория` on the category screen.
 
+**A list can be shorter than its source.** The generator caps a domain list
+at 200 entries and a CIDR list at 250 (`max_domains` / `max_cidrs` in
+`sources.json`: a router's object-group has a limited size, with room to
+spare), keeping apex domains before subdomains and
+regional zones (`paypal.com` survives where `paypal.com.hk` does not) and the
+largest subnets first. A list that was cut says so: `routes preset list` and
+the bot show `200 из 540` instead of `200`, `routes preset show` and the
+preset's screen say how much was left out, and `source_count` in
+`manifest.json` holds the figure (set only when the cut happened, kept while
+the list itself is unchanged so the daily refresh does not commit over it, and
+absent from manifests written by an older generator). A name or subnet that
+is missing from a cut list may simply not have made the cut — add it by hand
+with `routes add <list> <name>`.
+
 **Where the lists come from at runtime.** The embedded copy is the
 baseline. The daemon also keeps a live overlay at
 `<config dir>/presets/` and refreshes it from the repo's

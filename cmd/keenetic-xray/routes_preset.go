@@ -54,7 +54,7 @@ func presetList(cfg *config.Config) error {
 			if presets.HasCIDR(p.Name) {
 				ip = " +IP"
 			}
-			fmt.Printf("    %-16s %4d дом.%-5s %s\n", p.Name, p.Count, ip, mark)
+			fmt.Printf("    %-16s %11s дом.%-5s %s\n", p.Name, p.CountText(), ip, mark)
 		}
 	}
 	fmt.Println("\nдобавить: keenetic-xray routes preset add <name> [--ip]")
@@ -68,14 +68,20 @@ func presetShow(cfg *config.Config, name string) error {
 	}
 	fmt.Printf("%s — %s\n", p.Name, p.Title)
 	fmt.Printf("  категория:  %s\n", p.Category)
-	fmt.Printf("  вид:        %s, записей: %d\n", p.Kind, p.Count)
+	fmt.Printf("  вид:        %s, записей: %s\n", p.Kind, p.CountText())
+	if p.Capped() {
+		fmt.Printf("  урезан:     %s\n", presets.CutNote(p.Kind, p.Count, p.SourceCount))
+	}
 	fmt.Printf("  версия:     %s\n", p.Rev)
 	if len(p.Sources) > 0 {
 		fmt.Printf("  источники:  %s\n", strings.Join(p.Sources, ", "))
 	}
 	if p.Kind == "domains" && presets.HasCIDR(p.Name) {
 		if ipp, ok := presets.Find(p.Name + "-ip"); ok {
-			fmt.Printf("  +IP-список: %s-ip (%d подсетей)\n", p.Name, ipp.Count)
+			fmt.Printf("  +IP-список: %s-ip (%s подсетей)\n", p.Name, ipp.CountText())
+			if ipp.Capped() {
+				fmt.Printf("  урезан:     %s\n", presets.CutNote(ipp.Kind, ipp.Count, ipp.SourceCount))
+			}
 		}
 	}
 	if l := presets.BoundList(cfg, p.Name); l != nil {

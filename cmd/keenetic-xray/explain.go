@@ -639,7 +639,7 @@ func renderExplain(r *explainReport) string {
 		case elsewhere != nil:
 			fmt.Fprintf(&b, "не трогает — имя в списке «%s» через %s\n", elsewhere.List, elsewhere.Iface)
 		case toUs != nil && r.L7On:
-			b.WriteString("увидит имя (ClientHello, HTTP Host) и положит адрес в адаптивный набор\n")
+			b.WriteString("если соединение пойдёт мимо DNS-маршрута (DoH, зашитый адрес), увидит имя (ClientHello, HTTP Host) и положит адрес в адаптивный набор\n")
 		case toUs != nil:
 			b.WriteString("выключен (нужны L7 SNI и адаптивная маршрутизация) — по имени не ловится\n")
 		case len(viaOnly) > 0:

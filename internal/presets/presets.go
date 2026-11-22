@@ -14,9 +14,11 @@ package presets
 import (
 	"embed"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -38,6 +40,30 @@ type Preset struct {
 	Count    int      `json:"count"`
 	Rev      string   `json:"rev"`
 	Sources  []string `json:"sources"`
+
+	// SourceCount is how many entries the upstream had before the generator cut
+	// the list down to Count so that it fits a router's group; 0 when it was not
+	// cut (or an older manifest does not say). See Capped.
+	SourceCount int `json:"source_count,omitempty"`
+}
+
+// Capped reports whether the list was cut: the upstream had more entries than
+// the list holds, so a name or a subnet that is missing from it may simply not
+// have made the cut.
+func (p Preset) Capped() bool { return p.SourceCount > p.Count }
+
+// CountText is the entry count as every screen shows it: "200", or "200 из 540"
+// when the list was cut -- the silent cut is what this exists to end.
+func (p Preset) CountText() string { return CountText(p.Count, p.SourceCount) }
+
+// CountText formats a count with the number the upstream had when it differs
+// (source 0 = not cut or unknown). Kept apart from Preset so the bot, which
+// receives the two numbers over its protocol, words it the same way.
+func CountText(count, source int) string {
+	if source > count {
+		return strconv.Itoa(count) + " из " + strconv.Itoa(source)
+	}
+	return strconv.Itoa(count)
 }
 
 type manifest struct {
@@ -248,4 +274,15 @@ func Entries(name string) ([]string, bool) {
 		out = append(out, ln)
 	}
 	return out, true
+}
+
+// CutNote says what a list that was cut to fit a router's group lacks, in the
+// words the CLI and the bot share. The generator ranks domains apex-first
+// ("paypal.com" survives where "paypal.com.hk" does not) and subnets by block
+// size, so what is missing is the long tail.
+func CutNote(kind string, count, source int) string {
+	if kind == "cidr" {
+		return fmt.Sprintf("в источнике %d подсетей (после объединения соседних), оставлены %d самых крупных — остальных в списке нет", source, count)
+	}
+	return fmt.Sprintf("в источнике %d доменов, оставлены %d самых общих (корневые раньше поддоменов и региональных зон) — остальных в списке нет; нужный можно добавить руками: routes add <список> <домен>", source, count)
 }

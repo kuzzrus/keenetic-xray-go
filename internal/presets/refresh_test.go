@@ -87,6 +87,47 @@ func TestRefresh_WritesOverlayAndServesIt(t *testing.T) {
 	}
 }
 
+// The count of what the upstream had before the cut travels with the row: an
+// updated list keeps it, and the overlay's own Count is what was written.
+func TestRefresh_KeepsTheSourceCount(t *testing.T) {
+	dir := t.TempDir()
+	withOverlay(t, dir)
+
+	p, body := list("acme", "domains", "Acme", "alpha.example", "beta.example", "gamma.example")
+	p.SourceCount = 540
+	base := fakeRepo(t, map[string]string{"manifest.json": manifestJSON(p), "acme.lst": body})
+	if _, err := Refresh(context.Background(), base); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	got, ok := Find("acme")
+	if !ok || got.Count != 3 || got.SourceCount != 540 || !got.Capped() {
+		t.Fatalf("Find(acme) = %+v (%v), want count 3 of 540", got, ok)
+	}
+	if got.CountText() != "3 из 540" {
+		t.Errorf("CountText() = %q", got.CountText())
+	}
+}
+
+func TestCountText(t *testing.T) {
+	for _, c := range []struct {
+		count, source int
+		want          string
+	}{
+		{200, 540, "200 из 540"}, // cut
+		{150, 0, "150"},          // fits (or unknown)
+		{200, 200, "200"},        // exactly the cap is not a cut
+		{200, 120, "200"},        // a source smaller than the list is nonsense: say nothing
+	} {
+		if got := CountText(c.count, c.source); got != c.want {
+			t.Errorf("CountText(%d, %d) = %q, want %q", c.count, c.source, got, c.want)
+		}
+		p := Preset{Count: c.count, SourceCount: c.source}
+		if p.Capped() != (c.source > c.count) {
+			t.Errorf("Capped() for %d/%d = %v", c.count, c.source, p.Capped())
+		}
+	}
+}
+
 func TestRefresh_DropsInvalidLines(t *testing.T) {
 	dir := t.TempDir()
 	withOverlay(t, dir)

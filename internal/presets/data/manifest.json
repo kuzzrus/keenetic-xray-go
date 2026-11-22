@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated": "2026-11-21",
+  "generated": "2026-11-22",
   "categories": [
     "Мессенджеры",
     "Видео",
@@ -24,7 +24,8 @@
       "rev": "59b8a5991288",
       "sources": [
         "Geo-Aggregator: adobe"
-      ]
+      ],
+      "source_count": 259
     },
     {
       "name": "akamai",
@@ -84,7 +85,8 @@
       "rev": "32458088c5c8",
       "sources": [
         "Geo-Aggregator: apple"
-      ]
+      ],
+      "source_count": 1574
     },
     {
       "name": "apple-music",
@@ -312,7 +314,8 @@
       "rev": "a597424a911a",
       "sources": [
         "Geo-Aggregator: disney"
-      ]
+      ],
+      "source_count": 223
     },
     {
       "name": "docker",
@@ -384,7 +387,8 @@
       "rev": "017e8ef1b043",
       "sources": [
         "Geo-Aggregator: facebook"
-      ]
+      ],
+      "source_count": 397
     },
     {
       "name": "facebook-ip",
@@ -468,7 +472,8 @@
       "rev": "461299fab3cb",
       "sources": [
         "Geo-Aggregator: google"
-      ]
+      ],
+      "source_count": 1018
     },
     {
       "name": "google-ai",
@@ -696,7 +701,8 @@
       "rev": "3224f9ad43a5",
       "sources": [
         "Geo-Aggregator: microsoft"
-      ]
+      ],
+      "source_count": 648
     },
     {
       "name": "minecraft",
@@ -816,7 +822,8 @@
       "rev": "c8facf42edfd",
       "sources": [
         "Geo-Aggregator: paypal"
-      ]
+      ],
+      "source_count": 231
     },
     {
       "name": "perplexity",

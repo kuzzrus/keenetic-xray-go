@@ -96,6 +96,8 @@ func run(args []string) error {
 		return cmdRCI(rest)
 	case "georanges":
 		return cmdGeoranges(rest)
+	case "explain":
+		return cmdExplain(rest)
 	case "diag":
 		return cmdDiag(rest)
 	case "internal":
@@ -140,7 +142,8 @@ commands:
                                                   optional router-side components: unbound (local DNS), nfqws2 (DPI bypass), conntrack, cron
   rci {show|probe [url]|enable [url]|disable|token [<t>|clear]}  read the router config over the local RCI JSON API instead of ndmc (hedge for ndmc-sandboxed firmware); KeeneticOS 5.2+ needs an access token
   georanges {show|refresh}                        Russian IPv4 list behind adaptive routing's exclusion: cache vs built-in copy; fetch the latest now
-  diag                                            one-shot diagnostic bundle to stdout (config with secrets redacted + resolver/addon/rci/keenetic state + log tail)`)
+  explain <name|ip>                               does this site go through the tunnel, and why: router and config lists, adaptive set, exclusions, Russian ranges (changes nothing)
+  diag                                           one-shot diagnostic bundle to stdout (config with secrets redacted + resolver/addon/rci/keenetic state + log tail)`)
 }
 
 func cmdDaemon(args []string) (err error) {
@@ -427,6 +430,7 @@ func startAgent(ctx context.Context, cfg *config.Config, d *failover.Daemon, log
 		ReconcileL7SNI:         func(ctx context.Context) error { return reconcileL7SNIFromDisk(ctx, logf) },
 		L7SNIStatsText:         func() (string, error) { return l7sniStatsText(time.Now()) },
 		L7SNINames:             l7sniNamesFromDisk,
+		Explain:                explainNow,
 	}
 	opts.StatusFunc = func(ctx context.Context) string {
 		out, _ := handler.Handle(ctx, botcontrol.Command{Action: botcontrol.ActionStatus})

@@ -82,7 +82,13 @@ func presetShow(cfg *config.Config, name string) error {
 			if ipp.Capped() {
 				fmt.Printf("  урезан:     %s\n", presets.CutNote(ipp.Kind, ipp.Count, ipp.SourceCount))
 			}
+			if names := ipp.Resolvers(); len(names) > 0 {
+				fmt.Printf("  ⚠️ DNS:     %s\n", presets.ResolverNote(names))
+			}
 		}
+	}
+	if names := p.Resolvers(); len(names) > 0 { // the subnet preset itself
+		fmt.Printf("  ⚠️ DNS:     %s\n", presets.ResolverNote(names))
 	}
 	if l := presets.BoundList(cfg, p.Name); l != nil {
 		a, r, _, _ := presets.Drift(*l)
@@ -121,7 +127,18 @@ func presetAdd(cfg *config.Config, args []string) error {
 	if err != nil {
 		return err
 	}
-	return routesApply(cfg, fmt.Sprintf("пресет применён: %s", strings.Join(names, ", ")))
+	if err := routesApply(cfg, fmt.Sprintf("пресет применён: %s", strings.Join(names, ", "))); err != nil {
+		return err
+	}
+	// Said after the apply, not instead of it: the list is as the generator made it.
+	for _, n := range names {
+		if p, ok := presets.Find(n); ok {
+			if r := p.Resolvers(); len(r) > 0 {
+				fmt.Printf("⚠️ %s: %s\n", n, presets.ResolverNote(r))
+			}
+		}
+	}
+	return nil
 }
 
 func presetSyncCmd(cfg *config.Config, args []string) error {

@@ -19,9 +19,12 @@ func withCutPreset(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
 	manifest := `{"version":1,"generated":"2026-11-22","categories":["Тест"],"presets":[` +
-		`{"name":"acme","service":"acme","title":"Acme","category":"Тест","kind":"domains","count":3,"rev":"x","source_count":540,"sources":["s"]}]}`
-	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(manifest), 0o644); err != nil {
-		t.Fatal(err)
+		`{"name":"acme","service":"acme","title":"Acme","category":"Тест","kind":"domains","count":3,"rev":"x","source_count":540,"sources":["s"]},` +
+		`{"name":"acme-ip","service":"acme","title":"Acme","category":"Тест","kind":"cidr","count":2,"rev":"y","sources":["s"]}]}`
+	for name, body := range map[string]string{"manifest.json": manifest, "acme-ip.lst": "# Acme\n\n8.8.8.0/24\n203.0.113.0/24\n"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	presets.SetOverlay(dir)
 	t.Cleanup(func() { presets.SetOverlay("") })
@@ -40,7 +43,7 @@ func TestRoutesPresetList_CarriesTheSourceCount(t *testing.T) {
 	if row == "" {
 		t.Fatalf("no acme row in:\n%s", out)
 	}
-	if f := strings.Split(row, "\t"); len(f) != 10 || f[5] != "3" || f[9] != "540" {
+	if f := strings.Split(row, "\t"); len(f) != 11 || f[5] != "3" || f[9] != "540" {
 		t.Errorf("row = %q, want count 3 and source count 540 as the 10th field", row)
 	}
 }
@@ -67,20 +70,20 @@ func TestParsePresetList_SourceCountAndOlderAgents(t *testing.T) {
 
 func TestPresetScreenText_SaysWhenTheListWasCut(t *testing.T) {
 	cut := presetItem{title: "Acme", category: "Тест", kind: "domains", count: 200, sourceCount: 540}
-	text := presetScreenText(cut, true)
+	text := presetScreenText(cut, true, nil)
 	for _, want := range []string{"200 из 540 доменов", "(+ список IP-диапазонов)", "Список урезан: в источнике 540 доменов, оставлены 200", "ещё не применён"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("%q not in:\n%s", want, text)
 		}
 	}
 	fits := presetItem{title: "Acme", category: "Тест", kind: "domains", count: 150}
-	text = presetScreenText(fits, false)
+	text = presetScreenText(fits, false, nil)
 	if !strings.Contains(text, "150 доменов") || strings.Contains(text, "урезан") || strings.Contains(text, " из ") {
 		t.Errorf("a list that fit must not claim a cut:\n%s", text)
 	}
 	// The cut note and the applied state sit side by side.
 	cut.installed = true
-	if text = presetScreenText(cut, false); !strings.Contains(text, "урезан") || !strings.Contains(text, "применён, актуально") {
+	if text = presetScreenText(cut, false, nil); !strings.Contains(text, "урезан") || !strings.Contains(text, "применён, актуально") {
 		t.Errorf("applied and cut:\n%s", text)
 	}
 }
@@ -106,8 +109,8 @@ func TestRoutesPresetList_Shape(t *testing.T) {
 	sawYouTube := false
 	for _, ln := range lines[2:] {
 		f := strings.Split(ln, "\t")
-		if len(f) != 10 {
-			t.Fatalf("row %q has %d fields, want 10 (the last is the source count)", ln, len(f))
+		if len(f) != 11 {
+			t.Fatalf("row %q has %d fields, want 11 (source count, then the public DNS services)", ln, len(f))
 		}
 		if _, err := strconv.Atoi(f[9]); err != nil {
 			t.Errorf("row %q: source count %q is not a number", ln, f[9])
@@ -206,5 +209,73 @@ func TestParsePresetList(t *testing.T) {
 	}
 	if pm.catIndex("Соцсети") != 1 {
 		t.Errorf("catIndex(Соцсети) = %d", pm.catIndex("Соцсети"))
+	}
+}
+
+const googleDNSName = "Google Public DNS (8.8.8.8, 8.8.4.4)"
+
+// The public DNS services a subnet preset covers travel to the bot as the last
+// column: set for a list whose ranges hold Google Public DNS, empty for a domain
+// preset. (Overlay data: the embedded presets change with every daily refresh.)
+func TestRoutesPresetList_CarriesThePublicDNSServices(t *testing.T) {
+	withCutPreset(t)
+	out := presetTestHandler(t).routesPresetList()
+	seen := map[string]string{}
+	for _, ln := range strings.Split(out, "\n") {
+		f := strings.Split(ln, "\t")
+		if len(f) == 11 && !strings.HasPrefix(ln, "#") {
+			seen[f[0]] = f[10]
+		}
+	}
+	if seen["acme-ip"] != googleDNSName {
+		t.Errorf("acme-ip row: resolvers column = %q, want %q", seen["acme-ip"], googleDNSName)
+	}
+	if v, ok := seen["acme"]; !ok || v != "" {
+		t.Errorf("a domain preset has an empty resolvers column, got %q (row seen: %v)", v, ok)
+	}
+}
+
+func TestParsePresetList_PublicDNSColumn(t *testing.T) {
+	pm := parsePresetList(strings.Join([]string{
+		"google\tgoogle\tGoogle\tТест\tdomains\t200\t0\t0\t0\t1018\t",
+		"google-ip\tgoogle\tGoogle\tТест\tcidr\t90\t0\t0\t0\t0\t" + googleDNSName + "; Cloudflare (1.1.1.1)",
+		"old\told\tOld\tТест\tdomains\t100\t0\t0\t0\t0", // an agent without the column
+		"last\tlast\tLast\tТест\tcidr\t5\t0\t0\t0\t0\t", // a trailing empty field the parser may see trimmed
+	}, "\n"))
+	if len(pm.items) != 4 {
+		t.Fatalf("items = %d, want 4", len(pm.items))
+	}
+	if got := pm.items[1].resolvers; len(got) != 2 || got[0] != googleDNSName || got[1] != "Cloudflare (1.1.1.1)" {
+		t.Errorf("resolvers parsed as %q", got)
+	}
+	for _, i := range []int{0, 2, 3} {
+		if pm.items[i].resolvers != nil {
+			t.Errorf("item %d (%s): resolvers = %q, want none", i, pm.items[i].name, pm.items[i].resolvers)
+		}
+	}
+	comp, ok := pm.companion("google")
+	if !ok || comp.name != "google-ip" || len(comp.resolvers) != 2 {
+		t.Errorf("companion(google) = %+v (%v)", comp, ok)
+	}
+	if _, ok := pm.companion("old"); ok || pm.hasCompanion("old") {
+		t.Error("a preset without an -ip row has no companion")
+	}
+}
+
+// The warning sits on the domain preset's screen, where the operator chooses
+// "Домены + IP-диапазоны" -- and only when there is an IP list to choose.
+func TestPresetScreenText_WarnsAboutPublicDNSInTheIPList(t *testing.T) {
+	it := presetItem{title: "Google", category: "Тест", kind: "domains", count: 150}
+	text := presetScreenText(it, true, []string{googleDNSName})
+	for _, want := range []string{"⚠️ в IP-диапазонах есть публичный DNS — " + googleDNSName, "UDP/53", "Список не менялся"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("%q not in:\n%s", want, text)
+		}
+	}
+	if text = presetScreenText(it, true, nil); strings.Contains(text, "публичный DNS") {
+		t.Errorf("no resolvers, yet a warning:\n%s", text)
+	}
+	if text = presetScreenText(it, false, []string{googleDNSName}); strings.Contains(text, "публичный DNS") {
+		t.Errorf("no IP list to choose, yet a warning:\n%s", text)
 	}
 }

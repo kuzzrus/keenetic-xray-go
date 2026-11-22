@@ -675,7 +675,10 @@ func carrySourceCounts(rows []manifestRow, old *manifestFile) {
 		if !ok || o.Rev != rows[i].Rev || o.SourceCount == 0 {
 			continue
 		}
-		if rows[i].SourceCount > 0 || rows[i].keptPrev {
+		// Kept only while it is still about right: a list whose top entries stay
+		// put (so its rev does too) can see its source double over a few months,
+		// and "из 540" must not outlive that.
+		if rows[i].keptPrev || (rows[i].SourceCount > 0 && withinQuarter(rows[i].SourceCount, o.SourceCount)) {
 			rows[i].SourceCount = o.SourceCount
 		}
 	}
@@ -743,4 +746,13 @@ func shortHost(u string) string {
 		return s[:i]
 	}
 	return s
+}
+
+// withinQuarter reports whether a is within 25% of b.
+func withinQuarter(a, b int) bool {
+	d := a - b
+	if d < 0 {
+		d = -d
+	}
+	return d*4 <= b
 }

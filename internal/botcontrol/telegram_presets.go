@@ -273,7 +273,7 @@ func presetScreenText(it presetItem, hasIP bool) string {
 		b2.WriteString(" (+ список IP-диапазонов)")
 	}
 	if it.capped() {
-		fmt.Fprintf(&b2, "\n\n✂️ Список урезан: в источнике %d, оставлены %d самых общих (корневые домены раньше поддоменов) — остальных в нём нет. Нужный можно добавить руками в 📍 Маршруты.", it.sourceCount, it.count)
+		fmt.Fprintf(&b2, "\n\n✂️ Список урезан: %s", presets.CutNote(it.kind, it.count, it.sourceCount))
 	}
 	if it.installed {
 		if it.driftAdd+it.driftRemove > 0 {

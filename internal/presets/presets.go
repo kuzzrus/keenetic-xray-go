@@ -14,6 +14,7 @@ package presets
 import (
 	"embed"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -273,4 +274,15 @@ func Entries(name string) ([]string, bool) {
 		out = append(out, ln)
 	}
 	return out, true
+}
+
+// CutNote says what a list that was cut to fit a router's group lacks, in the
+// words the CLI and the bot share. The generator ranks domains apex-first
+// ("paypal.com" survives where "paypal.com.hk" does not) and subnets by block
+// size, so what is missing is the long tail.
+func CutNote(kind string, count, source int) string {
+	if kind == "cidr" {
+		return fmt.Sprintf("в источнике %d подсетей (после объединения соседних), оставлены %d самых крупных — остальных в списке нет", source, count)
+	}
+	return fmt.Sprintf("в источнике %d доменов, оставлены %d самых общих (корневые раньше поддоменов и региональных зон) — остальных в списке нет; нужный можно добавить руками: routes add <список> <домен>", source, count)
 }

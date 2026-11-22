@@ -91,13 +91,15 @@ func TestBuildFile_SanityHoldHasNoCountOfItsOwn(t *testing.T) {
 func TestCarrySourceCounts(t *testing.T) {
 	old := &manifestFile{Presets: []manifestRow{
 		{Name: "same", Rev: "r1", SourceCount: 540},
+		{Name: "grew", Rev: "r1", SourceCount: 540},
 		{Name: "changed", Rev: "r1", SourceCount: 540},
 		{Name: "held", Rev: "r1", SourceCount: 540},
 		{Name: "nowfits", Rev: "r1", SourceCount: 540},
 		{Name: "firsttime", Rev: "r1"},
 	}}
 	rows := []manifestRow{
-		{Name: "same", Rev: "r1", SourceCount: 561},      // the source drifted, the list did not: keep the old figure
+		{Name: "same", Rev: "r1", SourceCount: 561},      // drifted <25%, list unchanged: keep the old figure
+		{Name: "grew", Rev: "r1", SourceCount: 900},      // the source grew well past a quarter: the new figure
 		{Name: "changed", Rev: "r2", SourceCount: 561},   // the list changed: the new figure
 		{Name: "held", Rev: "r1", keptPrev: true},        // a sanity hold has no figure: bring the old one back
 		{Name: "nowfits", Rev: "r1"},                     // no longer cut: nothing to say
@@ -105,7 +107,7 @@ func TestCarrySourceCounts(t *testing.T) {
 		{Name: "brandnew", Rev: "r9", SourceCount: 250},
 	}
 	carrySourceCounts(rows, old)
-	want := map[string]int{"same": 540, "changed": 561, "held": 540, "nowfits": 0, "firsttime": 300, "brandnew": 250}
+	want := map[string]int{"same": 540, "grew": 900, "changed": 561, "held": 540, "nowfits": 0, "firsttime": 300, "brandnew": 250}
 	for _, r := range rows {
 		if r.SourceCount != want[r.Name] {
 			t.Errorf("%s: source_count %d, want %d", r.Name, r.SourceCount, want[r.Name])

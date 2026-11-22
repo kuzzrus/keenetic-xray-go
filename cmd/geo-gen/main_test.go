@@ -36,7 +36,7 @@ func buildDomains(t *testing.T, dir string, entries []string, cap int) *manifest
 	t.Helper()
 	s := &sourcesFile{}
 	s.applyDefaults()
-	row, _ := buildFile(dir, "svc", "svc", "Svc", "Cat", "domains", []string{listServer(t, entries)}, []string{"src"}, config.RouteDomain, cap, nil, s, false)
+	row, _, _ := buildFile(dir, "svc", "svc", "Svc", "Cat", "domains", []string{listServer(t, entries)}, []string{"src"}, config.RouteDomain, cap, nil, s, false)
 	if row == nil {
 		t.Fatal("buildFile produced no row")
 	}
@@ -71,7 +71,7 @@ func TestBuildFile_SourceCountOfACIDRListIsAfterMerging(t *testing.T) {
 	entries = append(entries, "198.51.100.0/25", "198.51.100.128/25") // these two merge into one /24
 	s := &sourcesFile{}
 	s.applyDefaults()
-	row, _ := buildFile(t.TempDir(), "svc-ip", "svc", "Svc", "Cat", "cidr", []string{listServer(t, entries)}, []string{"src"}, config.RouteSubnet, 48, nil, s, false)
+	row, _, _ := buildFile(t.TempDir(), "svc-ip", "svc", "Svc", "Cat", "cidr", []string{listServer(t, entries)}, []string{"src"}, config.RouteSubnet, 48, nil, s, false)
 	if row == nil || row.Count != 48 || row.SourceCount != 101 {
 		t.Errorf("row = %+v, want count 48 and source_count 101 (100 + the merged pair)", row)
 	}

@@ -234,7 +234,10 @@ names after the fold, or of subnets after merging siblings; set only when the
 cut happened, kept while the list itself is unchanged so the daily refresh does
 not commit over it, and absent from manifests written by an older generator).
 A name or subnet that is missing from a cut list may simply not have made the
-cut — add it by hand with `routes add <list> <name>`.
+cut — add it by hand with `routes add <list> <name>`. A list that is already
+applied picks the new selection up through preset drift (`routes preset sync`),
+which also drops the regional zones of a brand (`google.de`, `google.ru`, …)
+from a cut list; one you actually use can be added back the same way.
 
 **Public DNS inside an IP list.** A provider's published ranges include its
 public resolver: `google-ip`, `youtube-ip` and `google-ai-ip` carry Google Public

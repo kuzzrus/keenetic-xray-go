@@ -65,12 +65,16 @@ func collapseDomains(set map[string]struct{}) (roots []string, covers map[string
 // collapsedLen is how many entries of a written list would remain after the same
 // collapse: what a list from before the collapse is worth today.
 func collapsedLen(entries []string) int {
-	set := make(map[string]struct{}, len(entries))
-	for _, e := range entries {
-		set[e] = struct{}{}
-	}
-	roots, _ := collapseDomains(set)
+	roots, _ := collapseDomains(toSet(entries))
 	return len(roots)
+}
+
+func toSet(names []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		set[n] = struct{}{}
+	}
+	return set
 }
 
 // countrySuffix matches what follows the brand label in a country variant:
@@ -132,10 +136,7 @@ func countryVariants(roots []string, covers map[string]int) map[string]bool {
 // renamed them). A pin that a listed parent already covers is satisfied by the
 // parent, which then holds the pin's place.
 func selectDomains(entries, keep []string, limit int) (kept []string, roots int, missingKeep []string) {
-	set := make(map[string]struct{}, len(entries))
-	for _, e := range entries {
-		set[e] = struct{}{}
-	}
+	set := toSet(entries)
 	rs, covers := collapseDomains(set)
 
 	pinRank := map[string]int{} // root -> the place of the first pin it holds

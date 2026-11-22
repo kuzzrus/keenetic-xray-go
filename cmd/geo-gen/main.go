@@ -166,8 +166,10 @@ func run(dir string, dryRun bool) error {
 			fmt.Fprintf(summary, "| %s | домены | — | ⚠️ тег не найден в каталоге |\n", p.Name)
 			continue
 		}
-		if row, note := buildFile(dir, p.Name, p.Name, p.Title, p.Category, "domains",
-			[]string{domURL}, []string{domLabel}, config.RouteDomain, src.MaxDomains, p.Keep, &src, dryRun); row != nil {
+		row, note, warns := buildFile(dir, p.Name, p.Name, p.Title, p.Category, "domains",
+			[]string{domURL}, []string{domLabel}, config.RouteDomain, src.MaxDomains, p.Keep, &src, dryRun)
+		problems = append(problems, warns...)
+		if row != nil {
 			rows = append(rows, *row)
 			fmt.Fprintf(summary, "| %s | домены | %d | %s |\n", p.Name, row.Count, note)
 		}
@@ -185,7 +187,7 @@ func run(dir string, dryRun bool) error {
 			ipURLs = append(ipURLs, u)
 			ipSrcLabels = append(ipSrcLabels, shortHost(u))
 		}
-		if row, note := buildFile(dir, p.Name+"-ip", p.Name, p.Title, p.Category, "cidr",
+		if row, note, _ := buildFile(dir, p.Name+"-ip", p.Name, p.Title, p.Category, "cidr",
 			ipURLs, ipSrcLabels, config.RouteSubnet, src.MaxCIDRs, nil, &src, dryRun); row != nil {
 			rows = append(rows, *row)
 			fmt.Fprintf(summary, "| %s-ip | CIDR | %d | %s |\n", p.Name, row.Count, note)
@@ -242,10 +244,11 @@ func run(dir string, dryRun bool) error {
 }
 
 func (s *sourcesFile) applyDefaults() {
-	if s.MaxDomains == 0 {
+	// "<= 0", not "== 0": a negative cap would be a slice-bounds panic, not a limit.
+	if s.MaxDomains <= 0 {
 		s.MaxDomains = 250
 	}
-	if s.MaxCIDRs == 0 {
+	if s.MaxCIDRs <= 0 {
 		s.MaxCIDRs = 48
 	}
 	if s.MinKeep == 0 {
@@ -267,7 +270,7 @@ func (s *sourcesFile) applyDefaults() {
 // the main names of a domain list (selectDomains); it is nil for CIDR lists.
 func buildFile(dir, name, service, title, category, kind string,
 	urls, srcLabels []string, want config.RouteEntryKind, cap int, keep []string,
-	s *sourcesFile, dryRun bool) (*manifestRow, string) {
+	s *sourcesFile, dryRun bool) (*manifestRow, string, []string) {
 
 	path := filepath.Join(dir, name+".lst")
 	prev := readEntries(path)
@@ -346,21 +349,24 @@ func buildFile(dir, name, service, title, category, kind string,
 		keepPrev, reason = true, fmt.Sprintf("держим прежние %d (все источники недоступны)", len(prev))
 	case len(got) == 0 && len(prev) == 0:
 		if fetchErrs > 0 {
-			return nil, "пусто, источники недоступны — пропуск"
+			return nil, "пусто, источники недоступны — пропуск", nil
 		}
-		return nil, "пусто — пропуск"
+		return nil, "пусто — пропуск", nil
 	case prevWorth >= s.MinKeep && float64(len(got)) < float64(prevWorth)*s.DriftGateLow:
 		keepPrev, reason = true, fmt.Sprintf("держим прежние %d (свежих только %d, < %.0f%% от %d)", len(prev), len(got), s.DriftGateLow*100, prevWorth)
 	case len(prev) >= s.MinKeep && float64(len(got)) > float64(len(prev))*s.DriftGateHigh:
 		keepPrev, reason = true, fmt.Sprintf("держим прежние %d (свежих %d, > %.0fx)", len(prev), len(got), s.DriftGateHigh)
 	}
 
-	// Pins the source does not carry: said out loud in the run summary (a renamed
-	// domain upstream, or a typo here), never added from nowhere.
+	// Pins the source does not carry (a renamed domain upstream, or a typo here)
+	// are returned as warnings, which run() reports like any other problem, and
+	// flagged in the table row -- never added from nowhere. A held list discards
+	// the fresh selection, so it has nothing to say.
 	pinNote := ""
-	if len(missingKeep) > 0 && !keepPrev {
+	var warns []string
+	if len(missingKeep) > 0 {
 		pinNote = " ⚠️ закреплённых нет в источнике: " + strings.Join(missingKeep, ", ")
-		fmt.Fprintf(os.Stderr, "  %s: pinned but not in the source: %s\n", name, strings.Join(missingKeep, ", "))
+		warns = append(warns, fmt.Sprintf("%s: pinned but not in the source: %s", name, strings.Join(missingKeep, ", ")))
 	}
 
 	final := got
@@ -375,7 +381,7 @@ func buildFile(dir, name, service, title, category, kind string,
 
 	if keepPrev {
 		row.keptPrev = true
-		return row, reason
+		return row, reason, nil
 	}
 	if capped {
 		row.SourceCount = total
@@ -389,7 +395,7 @@ func buildFile(dir, name, service, title, category, kind string,
 		if capped {
 			note += fmt.Sprintf(", срезано до %d", cap)
 		}
-		return row, note + pinNote
+		return row, note + pinNote, warns
 	}
 
 	note := "обновлено"
@@ -403,14 +409,14 @@ func buildFile(dir, name, service, title, category, kind string,
 	if dryRun {
 		added, removed := diffCount(prev, final)
 		fmt.Printf("[dry-run] %s.lst: +%d -%d (итого %d)\n", name, added, removed, len(final))
-		return row, note + pinNote
+		return row, note + pinNote, warns
 	}
 
 	if err := os.WriteFile(path, renderList(title, kind, srcLabels, final), 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "  %s: write: %v\n", name, err)
-		return row, "ОШИБКА записи"
+		return row, "ОШИБКА записи", warns
 	}
-	return row, note + pinNote
+	return row, note + pinNote, warns
 }
 
 func renderList(title, kind string, srcLabels, entries []string) []byte {

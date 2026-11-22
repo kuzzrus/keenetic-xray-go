@@ -12,13 +12,7 @@ import (
 	"github.com/kuzzrus/keenetic-xray-go/internal/config"
 )
 
-func setOf(names ...string) map[string]struct{} {
-	m := make(map[string]struct{}, len(names))
-	for _, n := range names {
-		m[n] = struct{}{}
-	}
-	return m
-}
+func setOf(names ...string) map[string]struct{} { return toSet(names) }
 
 func TestRootOf(t *testing.T) {
 	set := setOf("example.com", "a.example.com", "notexample.com", "c.b.other.org", "b.other.org", "other.org")
@@ -223,13 +217,19 @@ func containsStr(xs []string, s string) bool {
 
 func buildDomainsKeep(t *testing.T, dir string, entries, keep []string, cap int) (*manifestRow, string) {
 	t.Helper()
+	row, note, _ := buildDomainsWarn(t, dir, entries, keep, cap)
+	return row, note
+}
+
+func buildDomainsWarn(t *testing.T, dir string, entries, keep []string, cap int) (*manifestRow, string, []string) {
+	t.Helper()
 	s := &sourcesFile{}
 	s.applyDefaults()
-	row, note := buildFile(dir, "svc", "svc", "Svc", "Cat", "domains", []string{listServer(t, entries)}, []string{"src"}, config.RouteDomain, cap, keep, s, false)
+	row, note, warns := buildFile(dir, "svc", "svc", "Svc", "Cat", "domains", []string{listServer(t, entries)}, []string{"src"}, config.RouteDomain, cap, keep, s, false)
 	if row == nil {
 		t.Fatal("buildFile produced no row")
 	}
-	return row, note
+	return row, note, warns
 }
 
 // End to end: what lands in the file is the selection, and the row says how many
@@ -403,5 +403,36 @@ func TestApplyDefaults_DomainCap(t *testing.T) {
 	s.applyDefaults()
 	if s.MaxDomains != 250 {
 		t.Errorf("default max_domains = %d, want 250", s.MaxDomains)
+	}
+}
+
+// A missing pin is a warning run() reports with the other problems -- not only a
+// cell of the summary table. A held list discards the fresh selection, so a pin
+// it could not honour is not worth a warning.
+func TestBuildFile_MissingPinIsAWarning(t *testing.T) {
+	_, _, warns := buildDomainsWarn(t, t.TempDir(), googleLike(5), []string{"google.com", "gone.example"}, 100)
+	if len(warns) != 1 || !strings.Contains(warns[0], "gone.example") || strings.Contains(warns[0], "google.com") {
+		t.Errorf("warns = %v, want exactly one naming gone.example", warns)
+	}
+	if _, _, warns = buildDomainsWarn(t, t.TempDir(), googleLike(5), []string{"google.com"}, 100); len(warns) != 0 {
+		t.Errorf("a pin the source carries produced warnings: %v", warns)
+	}
+
+	// Held by the sanity gate: 100 names written, the source now gives 10.
+	dir := t.TempDir()
+	buildDomainsWarn(t, dir, nDomains(100), nil, 250)
+	row, _, warns := buildDomainsWarn(t, dir, nDomains(10), []string{"gone.example"}, 250)
+	if !row.keptPrev || len(warns) != 0 {
+		t.Errorf("held list: keptPrev %v warns %v, want held and silent", row.keptPrev, warns)
+	}
+}
+
+// A non-positive cap in sources.json falls back to the default instead of
+// reaching a slice expression.
+func TestApplyDefaults_NegativeCaps(t *testing.T) {
+	s := sourcesFile{MaxDomains: -1, MaxCIDRs: -5}
+	s.applyDefaults()
+	if s.MaxDomains != 250 || s.MaxCIDRs != 48 {
+		t.Errorf("caps = %d / %d, want the defaults 250 / 48", s.MaxDomains, s.MaxCIDRs)
 	}
 }

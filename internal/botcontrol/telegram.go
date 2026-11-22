@@ -795,6 +795,7 @@ const helpText = `/menu — меню с кнопками (проще всего)
 /status <router>
 /doctor <router>
 /diag <router> — диагностика файлом: конфиг без секретов, память, Proxy0, DNS-маршруты, наши правила iptables, хвост лога
+/why <router> <имя сайта|IPv4> — идёт ли он через туннель и почему: списки роутера и конфига, адаптивный набор, исключения, российские диапазоны
 /switch <router> primary|backup
 /profile_list <router>
 /sub_seturl <router> <url>
@@ -846,6 +847,11 @@ func (b *TelegramBot) dispatch(ctx context.Context, text string) string {
 		return b.runRouterCommand(ctx, args, ActionStatus, nil)
 	case "/doctor":
 		return b.runRouterCommand(ctx, args, ActionDoctor, nil)
+	case "/why":
+		if len(args) != 2 {
+			return "формат: /why <роутер> <имя сайта или IPv4> — идёт ли он через туннель и почему"
+		}
+		return b.runRouterCommand(ctx, args[:1], ActionExplain, args[1:])
 	case "/switch":
 		return b.dispatchSwitch(ctx, args)
 	case "/profile_list":

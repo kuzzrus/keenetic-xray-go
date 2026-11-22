@@ -145,6 +145,11 @@ const (
 	// stand (adaptive routing, L7 SNI, the QUIC mode) and what to press next --
 	// human text, what the screen shows when it opens.
 	ActionL7SNIShow = "l7sni_show"
+	// ActionExplain: args[0] = a name, a URL or an IPv4 address -> why that site
+	// goes through the tunnel or does not: the router's and the config's lists,
+	// the adaptive set, the exclusions, the Russian ranges (human text; the same
+	// as `keenetic-xray explain`). Read-only.
+	ActionExplain = "explain"
 	// Keenetic dns-proxy secure upstreams (DoT/DoH). See
 	// internal/keenetic.ApplyDNS + internal/dnsupstream.
 	ActionDNSShow    = "dns_show"     // no args -> config + live upstreams (human text)

@@ -234,6 +234,7 @@ func adaptiveRouteScreenText(id string) string {
 		"Памятка для SSH:\n" +
 		"`transport adaptive show|on|off|flush` — статус/вкл/выкл/очистить список адресов\n" +
 		"`transport adaptive list` — что сейчас перенаправлено и почему (то же, что 📋 ниже)\n" +
+		"`explain <имя|ip>` — идёт ли сайт в туннель и почему (в боте: /why " + id + " <имя|ip>)\n" +
 		"`transport adaptive excluded|exclude <ip|сеть>|include <ip|сеть>` — список исключений\n" +
 		"`keenetic-xray logs 200 | grep adaptive-route` — лог классификатора\n" +
 		"`tail -f /opt/var/log/keenetic-xray/daemon.log` — живой лог на лету, что куда редиректится прямо сейчас\n" +

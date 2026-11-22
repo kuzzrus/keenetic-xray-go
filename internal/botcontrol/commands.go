@@ -177,6 +177,11 @@ type RouterHandler struct {
 	// say.
 	L7SNINames func(ctx context.Context) (line string, none bool)
 
+	// Explain answers the explain action: why a name or an address goes through
+	// the tunnel or does not (cmd/keenetic-xray's explainNow, the same text as
+	// `keenetic-xray explain`). nil -> the action says this agent cannot.
+	Explain func(ctx context.Context, query string) (string, error)
+
 	// SelfUpdateEvents, if set, receives one Event when the detached
 	// install.sh run started by selfUpdate fails outright (before ever
 	// reaching a daemon restart). Logf already records the same failure
@@ -335,6 +340,8 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 		return h.l7sniStats()
 	case ActionL7SNIShow:
 		return h.l7sniShow(ctx), nil
+	case ActionExplain:
+		return h.explain(ctx, cmd.Args)
 	case ActionRCIShow:
 		return h.rciShow(ctx), nil
 	case ActionRCIOn:

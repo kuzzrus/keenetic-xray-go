@@ -313,3 +313,35 @@ func TestFetch_TruncatedBodyIsRetriedNotSilentlyAccepted(t *testing.T) {
 		t.Errorf("fetch(truncated body) took %s -- want it to have retried once (~3s sleep)", elapsed)
 	}
 }
+
+// A hold never ends by itself -- the next run compares with the held file -- so
+// the upper gate must let a small list that legitimately grew through: anthropic
+// went from 9 to 21 names and stayed at 9 for seven weeks.
+func TestBuildFile_UpperGateLetsASmallListGrow(t *testing.T) {
+	grow := func(prev, fresh int) *manifestRow {
+		dir := t.TempDir()
+		writePrev(t, dir, nDomains(prev))
+		row, _ := buildDomainsKeep(t, dir, nDomains(fresh), nil, 250)
+		return row
+	}
+	for _, c := range []struct {
+		prev, fresh int
+		held        bool
+		why         string
+	}{
+		{9, 21, false, "more than double, but only 12 names"},
+		{9, 28, false, "19 names is the most a list may gain whatever the ratio"},
+		{9, 29, true, "20 names and more than double: a real explosion"},
+		{100, 130, false, "20+ names, but not more than double"},
+		{100, 201, true, "more than double and far past the slack"},
+	} {
+		row := grow(c.prev, c.fresh)
+		wantCount := c.fresh
+		if c.held {
+			wantCount = c.prev
+		}
+		if row.keptPrev != c.held || row.Count != wantCount {
+			t.Errorf("%d -> %d (%s): keptPrev %v count %d, want held=%v count %d", c.prev, c.fresh, c.why, row.keptPrev, row.Count, c.held, wantCount)
+		}
+	}
+}

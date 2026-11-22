@@ -262,6 +262,14 @@ func (s *sourcesFile) applyDefaults() {
 	}
 }
 
+// driftSlack is how many names a list may gain in one run without tripping the
+// upper sanity gate, whatever the ratio. A held list is what the next run
+// compares against, so a hold never ends by itself: a small list that doubled
+// for a good reason (anthropic: 9 -> 21 names) would stay stale for good, while
+// a hold on a gain this small protects nothing -- a flaky upstream cannot do much
+// harm to a list in a dozen names.
+const driftSlack = 20
+
 // buildFile fetches every URL, keeps the lines whose ClassifyRouteEntry
 // kind matches want, dedupes/sorts/caps, applies the sanity gate against
 // any existing file, writes the result (unless dryRun) and returns its
@@ -354,8 +362,8 @@ func buildFile(dir, name, service, title, category, kind string,
 		return nil, "пусто — пропуск", nil
 	case prevWorth >= s.MinKeep && float64(len(got)) < float64(prevWorth)*s.DriftGateLow:
 		keepPrev, reason = true, fmt.Sprintf("держим прежние %d (свежих только %d, < %.0f%% от %d)", len(prev), len(got), s.DriftGateLow*100, prevWorth)
-	case len(prev) >= s.MinKeep && float64(len(got)) > float64(len(prev))*s.DriftGateHigh:
-		keepPrev, reason = true, fmt.Sprintf("держим прежние %d (свежих %d, > %.0fx)", len(prev), len(got), s.DriftGateHigh)
+	case len(prev) >= s.MinKeep && float64(len(got)) > float64(len(prev))*s.DriftGateHigh && len(got)-len(prev) >= driftSlack:
+		keepPrev, reason = true, fmt.Sprintf("держим прежние %d (свежих %d, > %.0fx и +%d)", len(prev), len(got), s.DriftGateHigh, driftSlack)
 	}
 
 	// Pins the source does not carry (a renamed domain upstream, or a typo here)

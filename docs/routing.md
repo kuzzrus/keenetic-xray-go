@@ -212,19 +212,32 @@ Bot: `📍 Маршруты` → `📦 Готовые списки` → category
 `Добавить (домены)` / `Домены + IP‑диапазоны`; `🔄 Обновить из
 репозитория` on the category screen.
 
-**A list can be shorter than its source.** The generator caps a domain list
-at 200 entries and a CIDR list at 250 (`max_domains` / `max_cidrs` in
-`sources.json`: a router's object-group has a limited size, with room to
-spare), keeping apex domains before subdomains and
-regional zones (`paypal.com` survives where `paypal.com.hk` does not) and the
-largest subnets first. A list that was cut says so: `routes preset list` and
-the bot show `200 из 540` instead of `200`, `routes preset show` and the
-preset's screen say how much was left out, and `source_count` in
-`manifest.json` holds the figure (set only when the cut happened, kept while
-the list itself is unchanged so the daily refresh does not commit over it, and
-absent from manifests written by an older generator). A name or subnet that
-is missing from a cut list may simply not have made the cut — add it by hand
-with `routes add <list> <name>`.
+**A list can be shorter than its source.** A router's object-group has a
+limited size, so the generator caps a domain list at 250 entries and a CIDR
+list at 250 (`max_domains` / `max_cidrs` in `sources.json`, with room to
+spare). A domain list is first **folded**: a name whose parent domain is also
+in the list is dropped, because the router's DNS routing matches subdomains
+itself (`mail.google.com` adds nothing next to `google.com`), so a fold never
+loses coverage. What does not fit after that is cut in this order: the
+service's **pinned** main domains (`keep` in `sources.json` — `google.com`,
+`googlevideo.com`, `microsoftonline.com`, `icloud-content.com`, …), then the
+names that cover the most others, then the shortest of the rest; the regional
+zones of one brand (`google.de`, `google.co.uk`, … — a family of five or more
+that differ only by a country suffix) go last, the family's head excepted. A
+pinned name the source no longer carries is reported in the run summary, never
+invented. Subnets are kept largest first.
+
+A list that was cut says so: `routes preset list` and the bot show `250 из 827`
+instead of `250`, `routes preset show` and the preset's screen say how much was
+left out, and `source_count` in `manifest.json` holds the figure (the number of
+names after the fold, or of subnets after merging siblings; set only when the
+cut happened, kept while the list itself is unchanged so the daily refresh does
+not commit over it, and absent from manifests written by an older generator).
+A name or subnet that is missing from a cut list may simply not have made the
+cut — add it by hand with `routes add <list> <name>`. A list that is already
+applied picks the new selection up through preset drift (`routes preset sync`),
+which also drops the regional zones of a brand (`google.de`, `google.ru`, …)
+from a cut list; one you actually use can be added back the same way.
 
 **Public DNS inside an IP list.** A provider's published ranges include its
 public resolver: `google-ip`, `youtube-ip` and `google-ai-ip` carry Google Public

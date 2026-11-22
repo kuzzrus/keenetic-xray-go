@@ -14,7 +14,9 @@
 //
 // Every line is validated through config.ClassifyRouteEntry -- the same
 // gate the router applies to a hand-typed entry -- then deduped, sorted
-// and capped. A per-file sanity gate keeps the previous list untouched
+// and capped (a domain list is first folded: a name under a listed parent
+// goes, and the cut keeps a service's pinned main domains first -- see
+// select.go). A per-file sanity gate keeps the previous list untouched
 // when a fresh fetch shrinks or grows past the configured ratio, so one
 // flaky upstream can't nuke a preset. The process exits non-zero only on
 // a real error (unreadable sources.json, an unknown Geo-Aggregator tag,
@@ -59,6 +61,11 @@ type presetSpec struct {
 	GATags        []string `json:"ga_tags"`
 	CIDRProviders []string `json:"cidr_providers"`
 	CIDRExtra     []string `json:"cidr_extra"`
+
+	// Keep pins the main domains of a service that does not fit the cap: they
+	// are kept first, in this order, whatever else is cut (see selectDomains). A
+	// name the source does not carry is reported, not invented.
+	Keep []string `json:"keep,omitempty"`
 }
 
 // manifestRow is one line of presets/manifest.json. internal/presets
@@ -159,8 +166,10 @@ func run(dir string, dryRun bool) error {
 			fmt.Fprintf(summary, "| %s | домены | — | ⚠️ тег не найден в каталоге |\n", p.Name)
 			continue
 		}
-		if row, note := buildFile(dir, p.Name, p.Name, p.Title, p.Category, "domains",
-			[]string{domURL}, []string{domLabel}, config.RouteDomain, src.MaxDomains, &src, dryRun); row != nil {
+		row, note, warns := buildFile(dir, p.Name, p.Name, p.Title, p.Category, "domains",
+			[]string{domURL}, []string{domLabel}, config.RouteDomain, src.MaxDomains, p.Keep, &src, dryRun)
+		problems = append(problems, warns...)
+		if row != nil {
 			rows = append(rows, *row)
 			fmt.Fprintf(summary, "| %s | домены | %d | %s |\n", p.Name, row.Count, note)
 		}
@@ -178,8 +187,8 @@ func run(dir string, dryRun bool) error {
 			ipURLs = append(ipURLs, u)
 			ipSrcLabels = append(ipSrcLabels, shortHost(u))
 		}
-		if row, note := buildFile(dir, p.Name+"-ip", p.Name, p.Title, p.Category, "cidr",
-			ipURLs, ipSrcLabels, config.RouteSubnet, src.MaxCIDRs, &src, dryRun); row != nil {
+		if row, note, _ := buildFile(dir, p.Name+"-ip", p.Name, p.Title, p.Category, "cidr",
+			ipURLs, ipSrcLabels, config.RouteSubnet, src.MaxCIDRs, nil, &src, dryRun); row != nil {
 			rows = append(rows, *row)
 			fmt.Fprintf(summary, "| %s-ip | CIDR | %d | %s |\n", p.Name, row.Count, note)
 		}
@@ -235,10 +244,11 @@ func run(dir string, dryRun bool) error {
 }
 
 func (s *sourcesFile) applyDefaults() {
-	if s.MaxDomains == 0 {
-		s.MaxDomains = 200
+	// "<= 0", not "== 0": a negative cap would be a slice-bounds panic, not a limit.
+	if s.MaxDomains <= 0 {
+		s.MaxDomains = 250
 	}
-	if s.MaxCIDRs == 0 {
+	if s.MaxCIDRs <= 0 {
 		s.MaxCIDRs = 48
 	}
 	if s.MinKeep == 0 {
@@ -256,10 +266,11 @@ func (s *sourcesFile) applyDefaults() {
 // kind matches want, dedupes/sorts/caps, applies the sanity gate against
 // any existing file, writes the result (unless dryRun) and returns its
 // manifest row plus a short human note for the summary table. A nil row
-// means nothing usable was produced and no previous file exists.
+// means nothing usable was produced and no previous file exists. keep pins
+// the main names of a domain list (selectDomains); it is nil for CIDR lists.
 func buildFile(dir, name, service, title, category, kind string,
-	urls, srcLabels []string, want config.RouteEntryKind, cap int,
-	s *sourcesFile, dryRun bool) (*manifestRow, string) {
+	urls, srcLabels []string, want config.RouteEntryKind, cap int, keep []string,
+	s *sourcesFile, dryRun bool) (*manifestRow, string, []string) {
 
 	path := filepath.Join(dir, name+".lst")
 	prev := readEntries(path)
@@ -292,7 +303,8 @@ func buildFile(dir, name, service, title, category, kind string,
 	}
 
 	capped := false
-	total := 0 // what the upstream held (merged, for CIDRs) before the cap
+	total := 0 // what the upstream held (merged, for CIDRs; collapsed, for domains) before the cap
+	var missingKeep []string
 	if kind == "cidr" {
 		// Provider CIDR dumps are huge and highly fragmented (github ~6k,
 		// google ~1k). Collapse siblings / contained blocks first, then --
@@ -313,19 +325,23 @@ func buildFile(dir, name, service, title, category, kind string,
 		}
 		sortEntries(got, kind)
 	} else {
-		// Domains: rank apex/short names above regional ccTLD spam so a
-		// cap never drops "paypal.com" in favour of "paypal.com.hk".
-		sort.Slice(got, func(i, j int) bool { return domainRank(got[i]) < domainRank(got[j]) })
-		total = len(got)
-		if len(got) > cap {
-			got = got[:cap]
-			capped = true
-		}
+		// Domains: drop the names a listed parent already covers, then keep the
+		// pinned main names, the broadest of the rest, and the head of each
+		// country-variant family -- not "google.bf" in place of "google.com".
+		got, total, missingKeep = selectDomains(got, keep, cap)
+		capped = total > len(got)
 		sortEntries(got, kind)
 	}
 
 	// Sanity gate: an established file that suddenly collapses or explodes
-	// is almost always an upstream problem -- keep what we had.
+	// is almost always an upstream problem -- keep what we had. A domain list
+	// written before the selection collapsed subdomains is measured by what it
+	// is worth now: otherwise the first refresh after that change would read as a
+	// collapse, and the old uncollapsed list would stay for good.
+	prevWorth := len(prev)
+	if kind != "cidr" {
+		prevWorth = collapsedLen(prev)
+	}
 	keepPrev := false
 	reason := ""
 	switch {
@@ -333,13 +349,24 @@ func buildFile(dir, name, service, title, category, kind string,
 		keepPrev, reason = true, fmt.Sprintf("держим прежние %d (все источники недоступны)", len(prev))
 	case len(got) == 0 && len(prev) == 0:
 		if fetchErrs > 0 {
-			return nil, "пусто, источники недоступны — пропуск"
+			return nil, "пусто, источники недоступны — пропуск", nil
 		}
-		return nil, "пусто — пропуск"
-	case len(prev) >= s.MinKeep && float64(len(got)) < float64(len(prev))*s.DriftGateLow:
-		keepPrev, reason = true, fmt.Sprintf("держим прежние %d (свежих только %d, < %.0f%%)", len(prev), len(got), s.DriftGateLow*100)
+		return nil, "пусто — пропуск", nil
+	case prevWorth >= s.MinKeep && float64(len(got)) < float64(prevWorth)*s.DriftGateLow:
+		keepPrev, reason = true, fmt.Sprintf("держим прежние %d (свежих только %d, < %.0f%% от %d)", len(prev), len(got), s.DriftGateLow*100, prevWorth)
 	case len(prev) >= s.MinKeep && float64(len(got)) > float64(len(prev))*s.DriftGateHigh:
 		keepPrev, reason = true, fmt.Sprintf("держим прежние %d (свежих %d, > %.0fx)", len(prev), len(got), s.DriftGateHigh)
+	}
+
+	// Pins the source does not carry (a renamed domain upstream, or a typo here)
+	// are returned as warnings, which run() reports like any other problem, and
+	// flagged in the table row -- never added from nowhere. A held list discards
+	// the fresh selection, so it has nothing to say.
+	pinNote := ""
+	var warns []string
+	if len(missingKeep) > 0 {
+		pinNote = " ⚠️ закреплённых нет в источнике: " + strings.Join(missingKeep, ", ")
+		warns = append(warns, fmt.Sprintf("%s: pinned but not in the source: %s", name, strings.Join(missingKeep, ", ")))
 	}
 
 	final := got
@@ -354,7 +381,7 @@ func buildFile(dir, name, service, title, category, kind string,
 
 	if keepPrev {
 		row.keptPrev = true
-		return row, reason
+		return row, reason, nil
 	}
 	if capped {
 		row.SourceCount = total
@@ -368,7 +395,7 @@ func buildFile(dir, name, service, title, category, kind string,
 		if capped {
 			note += fmt.Sprintf(", срезано до %d", cap)
 		}
-		return row, note
+		return row, note + pinNote, warns
 	}
 
 	note := "обновлено"
@@ -382,14 +409,14 @@ func buildFile(dir, name, service, title, category, kind string,
 	if dryRun {
 		added, removed := diffCount(prev, final)
 		fmt.Printf("[dry-run] %s.lst: +%d -%d (итого %d)\n", name, added, removed, len(final))
-		return row, note
+		return row, note + pinNote, warns
 	}
 
 	if err := os.WriteFile(path, renderList(title, kind, srcLabels, final), 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "  %s: write: %v\n", name, err)
-		return row, "ОШИБКА записи"
+		return row, "ОШИБКА записи", warns
 	}
-	return row, note
+	return row, note + pinNote, warns
 }
 
 func renderList(title, kind string, srcLabels, entries []string) []byte {
@@ -443,9 +470,10 @@ func sortEntries(xs []string, kind string) {
 	sort.Strings(xs)
 }
 
-// domainRank orders domains so a byte-budget cap keeps the important
-// ones: fewest labels first (apex before deep subdomain), then shortest,
-// then lexical. "paypal.com" (2 labels, 10 chars) outranks "paypal.com.hk".
+// domainRank is the order of last resort among domains that tie on everything
+// selectDomains looks at: fewest labels first (apex before deep subdomain), then
+// shortest, then lexical. "paypal.com" (2 labels, 10 chars) outranks
+// "paypal.com.hk".
 func domainRank(d string) string {
 	labels := strings.Count(d, ".") + 1
 	return fmt.Sprintf("%02d%03d%s", labels, len(d), d)

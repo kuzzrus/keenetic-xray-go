@@ -71,7 +71,7 @@ func TestParsePresetList_SourceCountAndOlderAgents(t *testing.T) {
 func TestPresetScreenText_SaysWhenTheListWasCut(t *testing.T) {
 	cut := presetItem{title: "Acme", category: "Тест", kind: "domains", count: 200, sourceCount: 540}
 	text := presetScreenText(cut, true, nil)
-	for _, want := range []string{"200 из 540 доменов", "(+ список IP-диапазонов)", "Список урезан: в источнике 540 доменов, оставлены 200", "ещё не применён"} {
+	for _, want := range []string{"200 из 540 доменов", "(+ список IP-диапазонов)", "Список урезан: в источнике 540 доменов (без поддоменов, уже покрытых родителем), оставлены 200: главные домены сервиса", "ещё не применён"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("%q not in:\n%s", want, text)
 		}

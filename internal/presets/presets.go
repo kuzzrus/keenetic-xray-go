@@ -277,12 +277,13 @@ func Entries(name string) ([]string, bool) {
 }
 
 // CutNote says what a list that was cut to fit a router's group lacks, in the
-// words the CLI and the bot share. The generator ranks domains apex-first
-// ("paypal.com" survives where "paypal.com.hk" does not) and subnets by block
-// size, so what is missing is the long tail.
+// words the CLI and the bot share. The generator folds the subdomains a listed
+// parent already covers away, then keeps a service's pinned main domains, then
+// the names that cover the most others, with the regional zones of a brand
+// ("google.de") last; subnets go by block size. What is missing is the long tail.
 func CutNote(kind string, count, source int) string {
 	if kind == "cidr" {
 		return fmt.Sprintf("в источнике %d подсетей (после объединения соседних), оставлены %d самых крупных — остальных в списке нет", source, count)
 	}
-	return fmt.Sprintf("в источнике %d доменов, оставлены %d самых общих (корневые раньше поддоменов и региональных зон) — остальных в списке нет; нужный можно добавить руками: routes add <список> <домен>", source, count)
+	return fmt.Sprintf("в источнике %d доменов (без поддоменов, уже покрытых родителем), оставлены %d: главные домены сервиса, затем те, что покрывают больше имён; региональные зоны вроде google.de — в последнюю очередь, остальных в списке нет; нужный можно добавить руками: routes add <список> <домен>", source, count)
 }

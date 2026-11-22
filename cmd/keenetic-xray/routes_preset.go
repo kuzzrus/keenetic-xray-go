@@ -38,6 +38,7 @@ func routesPreset(cfg *config.Config, args []string) error {
 }
 
 func presetList(cfg *config.Config) error {
+	warned := false // some "-ip" list covers a public DNS service
 	fmt.Printf("встроенные списки (обновляются в репозитории, сборка от %s)\n\n", presets.Generated())
 	for _, cat := range presets.ByCategory() {
 		fmt.Printf("  %s\n", cat.Name)
@@ -53,9 +54,15 @@ func presetList(cfg *config.Config) error {
 			ip := ""
 			if presets.HasCIDR(p.Name) {
 				ip = " +IP"
+				if c, ok := presets.Find(p.Name + "-ip"); ok && len(c.Resolvers()) > 0 {
+					ip, warned = " +IP⚠", true
+				}
 			}
 			fmt.Printf("    %-16s %11s дом.%-5s %s\n", p.Name, p.CountText(), ip, mark)
 		}
+	}
+	if warned {
+		fmt.Println("\n⚠ — в IP-диапазонах есть публичный DNS (какой — routes preset show <имя>)")
 	}
 	fmt.Println("\nдобавить: keenetic-xray routes preset add <name> [--ip]")
 	return nil
@@ -82,14 +89,10 @@ func presetShow(cfg *config.Config, name string) error {
 			if ipp.Capped() {
 				fmt.Printf("  урезан:     %s\n", presets.CutNote(ipp.Kind, ipp.Count, ipp.SourceCount))
 			}
-			if names := ipp.Resolvers(); len(names) > 0 {
-				fmt.Printf("  ⚠️ DNS:     %s\n", presets.ResolverNote(names))
-			}
+			printResolverWarning(ipp)
 		}
 	}
-	if names := p.Resolvers(); len(names) > 0 { // the subnet preset itself
-		fmt.Printf("  ⚠️ DNS:     %s\n", presets.ResolverNote(names))
-	}
+	printResolverWarning(p) // the subnet preset itself
 	if l := presets.BoundList(cfg, p.Name); l != nil {
 		a, r, _, _ := presets.Drift(*l)
 		state := "актуально"
@@ -168,4 +171,12 @@ func presetSyncCmd(cfg *config.Config, args []string) error {
 		return nil
 	}
 	return routesApply(cfg, fmt.Sprintf("синхронизировано списков: %d", changed))
+}
+
+// printResolverWarning says, on `show`, which public DNS services a subnet preset
+// covers (nothing when it covers none).
+func printResolverWarning(p presets.Preset) {
+	if names := p.Resolvers(); len(names) > 0 {
+		fmt.Printf("  ⚠️ DNS:     %s\n", presets.ResolverNote(names))
+	}
 }

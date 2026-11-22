@@ -96,3 +96,25 @@ func TestPresetShow_WarnsAboutPublicDNSInAnIPList(t *testing.T) {
 		}
 	}
 }
+
+// Someone who applied a list last month never runs `show`: the browse list marks
+// the domain presets whose IP list covers a public resolver, with a legend.
+func TestPresetList_MarksIPListsThatCoverPublicDNS(t *testing.T) {
+	withCutPresets(t)
+	out := captureStdout(t, func() { _ = presetList(config.Default()) })
+	var acme, small string
+	for _, ln := range strings.Split(out, "\n") {
+		switch {
+		case strings.Contains(ln, "acme "):
+			acme = ln
+		case strings.Contains(ln, "small "):
+			small = ln
+		}
+	}
+	if !strings.Contains(acme, "+IP⚠") || !strings.Contains(out, "⚠ — в IP-диапазонах есть публичный DNS") {
+		t.Errorf("the list with Google DNS in its ranges is not marked (line %q), or the legend is missing:\n%s", acme, out)
+	}
+	if !strings.Contains(small, "+IP") || strings.Contains(small, "⚠") {
+		t.Errorf("the clean list: %q", small)
+	}
+}

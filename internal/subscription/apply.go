@@ -32,6 +32,10 @@ import (
 //     that may simply have vanished from the list; the operator gets a
 //     loud warning to re-pick. With exactly one fresh profile the slot
 //     defaults to it instead (no real choice to make).
+//
+// The returned warnings are result.Warnings (the lines the parser skipped) first,
+// then the notes about the slots; RefreshConfig tells them apart by that position,
+// so keep it.
 func ApplyResult(cfg *config.Config, result RefreshResult) (warnings []string) {
 	warnings = append(warnings, result.Warnings...)
 	independent := cfg.SnapshotIndependentSlots()
@@ -102,7 +106,7 @@ func resolveSharedSlot(cfg *config.Config, label string, matchIndex int, status 
 		for i := range cfg.Profiles {
 			if cfg.Profiles[i].ImportKey() == want {
 				setKey(cfg.Profiles[i].Remark)
-				warnings = append(warnings, fmt.Sprintf("%s: сервер переименован в подписке — сопоставлен по отпечатку соединения (%s)", label, cfg.Profiles[i].Remark))
+				warnings = append(warnings, fmt.Sprintf("%s: "+renamedNote+" — сопоставлен по отпечатку соединения (%s)", label, cfg.Profiles[i].Remark))
 				return i, warnings
 			}
 		}
@@ -139,3 +143,8 @@ func matchStatusReason(s MatchResult) string {
 		return "no prior selection"
 	}
 }
+
+// renamedNote is the part of a slot note that says the server was only renamed
+// by the provider and has been matched by its connection fingerprint: good news
+// dressed as a warning, which RefreshConfig keeps out of Report.SlotNotes.
+const renamedNote = "сервер переименован в подписке"

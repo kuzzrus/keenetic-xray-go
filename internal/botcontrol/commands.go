@@ -130,6 +130,11 @@ type RouterHandler struct {
 	// (health.State). Empty or absent -> status just omits that block.
 	QualityStatePath string
 
+	// SubRefreshStatePath is the daemon's periodic subscription refresh
+	// bookkeeping (subscription.RefreshState). Empty or absent -> status says
+	// the refresh has not happened yet.
+	SubRefreshStatePath string
+
 	// SelfUpdateMarker is where selfUpdate drops its rollback marker
 	// (selfupdate.Marker) before re-running install.sh. Empty -> no
 	// rollback point is recorded (the update still runs).
@@ -278,6 +283,8 @@ func (h *RouterHandler) handle(ctx context.Context, cmd Command) (string, error)
 		return h.subSetRole(ctx, cmd.Args, true)
 	case ActionSubSetBackup:
 		return h.subSetRole(ctx, cmd.Args, false)
+	case ActionSubAuto:
+		return h.subAuto(cmd.Args)
 	case ActionSetPrimarySource:
 		return h.setSlotSource(ctx, true, cmd.Args)
 	case ActionSetBackupSource:
@@ -515,12 +522,17 @@ func (h *RouterHandler) status(ctx context.Context) string {
 	}
 
 	if s := h.Config.Subscription; s != nil && s.URL != "" {
-		if s.LastFetchedAt.IsZero() {
+		// A refresh by the daemon with nothing to change leaves this handler's
+		// copy of the config alone, so "when" also comes from its own state file.
+		st := subscription.LoadRefreshState(h.SubRefreshStatePath)
+		if last := subscription.LastRefresh(h.Config, st); last.IsZero() {
 			fmt.Fprintf(&b, "подписка: %d профилей, ещё не обновлялась\n", len(h.Config.Profiles))
 		} else {
 			fmt.Fprintf(&b, "подписка: %d профилей, обновлена %s назад\n",
-				len(h.Config.Profiles), shortDur(time.Since(s.LastFetchedAt)))
+				len(h.Config.Profiles), shortDur(time.Since(last)))
 		}
+		b.WriteString(subscription.AutoStatus(h.Config, st, time.Now(), false))
+		b.WriteByte('\n')
 	}
 
 	if h.QualityStatePath != "" {
@@ -1881,60 +1893,31 @@ func (h *RouterHandler) subSetURL(args []string) (string, error) {
 }
 
 func (h *RouterHandler) subRefresh(ctx context.Context) (string, error) {
-	hasShared := h.Config.Subscription != nil && h.Config.Subscription.URL != ""
-	hasSlots := h.Config.PrimarySource != nil || h.Config.BackupSource != nil
-	if !hasShared && !hasSlots {
+	rep, err := subscription.RefreshConfig(ctx, h.Config)
+	if errors.Is(err, subscription.ErrNothingToRefresh) {
 		return "", fmt.Errorf("нет ни подписки, ни источников слотов -- задай sub_seturl или 🔗 Источники")
+	}
+	if err != nil {
+		return "", err
 	}
 
 	var b strings.Builder
-
-	if hasShared {
-		var primaryKey, backupKey string
-		if p := h.Config.Primary(); p != nil {
-			primaryKey = p.Remark
-		}
-		if bk := h.Config.Backup(); bk != nil {
-			backupKey = bk.Remark
-		}
-		result, err := subscription.Refresh(ctx, h.Config.Subscription.URL, primaryKey, backupKey)
-		if err != nil {
-			return "", err
-		}
-		for _, w := range subscription.ApplyResult(h.Config, result) {
-			fmt.Fprintf(&b, "⚠️ %s\n", w)
-		}
-		fmt.Fprintf(&b, "подписка: %d профилей\n", len(result.Profiles))
+	for _, w := range rep.Warnings {
+		fmt.Fprintf(&b, "⚠️ %s\n", w)
 	}
-
-	// Independently-sourced slots (PrimarySource/BackupSource) are left
-	// untouched by a shared-subscription refresh above, so re-fetch each
-	// here -- otherwise a provider's node changes (and this build's new
-	// xhttp_extra parsing) never land without re-pasting the URL by hand.
-	for _, s := range []struct {
-		name    string
-		src     *config.SlotSource
-		primary bool
-	}{
-		{"основной", h.Config.PrimarySource, true},
-		{"резервный", h.Config.BackupSource, false},
-	} {
-		if s.src == nil {
+	if rep.Shared {
+		fmt.Fprintf(&b, "подписка: %d профилей\n", rep.Profiles)
+	}
+	for _, s := range rep.Sources {
+		slot := "основной"
+		if s.Slot == "backup" {
+			slot = "резервный"
+		}
+		if s.Err != nil {
+			fmt.Fprintf(&b, "⚠️ источник (%s): %v\n", slot, s.Err)
 			continue
 		}
-		prof, key, err := subscription.ResolveSourcePinned(ctx, s.src.URL, s.src.Selector, s.src.ImportKey)
-		if err != nil {
-			fmt.Fprintf(&b, "⚠️ источник (%s): %v\n", s.name, err)
-			continue
-		}
-		s.src.ImportKey = key // anchor (or backfill) so future refreshes stay on this server
-		idx := h.Config.UpsertProfile(prof)
-		if s.primary {
-			h.Config.PrimaryIndex = idx
-		} else {
-			h.Config.BackupIndex = idx
-		}
-		fmt.Fprintf(&b, "источник (%s) ← %s\n", s.name, prof.Remark)
+		fmt.Fprintf(&b, "источник (%s) ← %s\n", slot, s.Remark)
 	}
 
 	if err := h.Config.Save(h.ConfigPath); err != nil {
@@ -1946,6 +1929,26 @@ func (h *RouterHandler) subRefresh(ctx context.Context) (string, error) {
 		return "нечего обновлять", nil
 	}
 	return strings.TrimRight(b.String(), "\n"), nil
+}
+
+// subAuto is /sub_auto: show, or set, how the daemon keeps the subscription
+// fresh by itself. The daemon's loop reads the config again at least every ten
+// minutes, so there is nothing to signal.
+func (h *RouterHandler) subAuto(args []string) (string, error) {
+	if len(args) > 1 {
+		return "", fmt.Errorf("usage: sub_auto [off|on|<часы 1..%d>]", config.MaxSubscriptionRefreshHours)
+	}
+	var head string
+	if len(args) == 1 && args[0] != "status" {
+		if err := h.Config.SetSubscriptionAutoRefresh(args[0]); err != nil {
+			return "", err
+		}
+		if err := h.Config.Save(h.ConfigPath); err != nil {
+			return "", err
+		}
+		head = "сохранено; демон подхватит это в течение 10 минут\n"
+	}
+	return head + subscription.AutoStatus(h.Config, subscription.LoadRefreshState(h.SubRefreshStatePath), time.Now(), true), nil
 }
 
 func (h *RouterHandler) subSetRole(ctx context.Context, args []string, primary bool) (string, error) {

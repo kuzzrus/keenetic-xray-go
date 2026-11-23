@@ -124,7 +124,7 @@ commands:
   menu                                              interactive control panel (manage the router over SSH, no bot)
   daemon                                            run the failover daemon in the foreground
   profile {add <vless-uri>|list|remove <index>}
-  subscription {set-url <url>|refresh|list|set-primary <i>|set-backup <i>}
+  subscription {set-url <url>|refresh|list|set-primary <i>|set-backup <i>|auto [off|on|<hours>]}   auto = keep the subscription fresh by itself (default: every 12 h)
   status                                            show configured profiles and variant
   doctor                                            run diagnostic checks
   variant {show|set mini|set full}
@@ -306,20 +306,24 @@ func cmdDaemon(args []string) (err error) {
 	// Only built when the agent can actually deliver it -- presetRefreshLoop
 	// runs regardless (it also keeps the local overlay fresh for CLI-only
 	// use), so a nil channel here just means it skips the notify step.
-	var presetDrift chan botcontrol.Event
+	var presetDrift, subRefreshEvents chan botcontrol.Event
 	if cfg.Agent.Enabled {
 		presetDrift = make(chan botcontrol.Event, 1)
+		subRefreshEvents = make(chan botcontrol.Event, 2)
 	}
 	go routerReconcileLoop(ctx, d, logf)
 	go tunGate.Run(ctx)
 	go presetRefreshLoop(ctx, logf, presetDrift)
+	// Like the preset loop it runs with or without the bot; a nil channel just
+	// means it has nobody to tell.
+	go subscriptionAutoRefreshLoop(ctx, logf, subRefreshEvents)
 	go knownRangesRefreshLoop(ctx, logf)
 	go georangesRefreshLoop(ctx, logf, georangesFetched)
 	startQualitySweep(ctx, cfg, logf)
 	watchReconcileSignal(ctx, func() { reconcileOnce(ctx, d, logf) }) // SIGUSR1 from the netfilter.d hook
 
 	if cfg.Agent.Enabled {
-		h, err := startAgent(ctx, cfg, d, logf, presetDrift)
+		h, err := startAgent(ctx, cfg, d, logf, presetDrift, subRefreshEvents)
 		if err != nil {
 			// Used to be `return err` (2026-09-27 external review,
 			// BOOT-03): the whole daemon, proxy included, down over a
@@ -327,6 +331,7 @@ func cmdDaemon(args []string) (err error) {
 			logf("agent: %v -- running without the bot, the proxy is unaffected; fix the agent settings and restart the daemon", err)
 			sysLog("agent not started: " + err.Error())
 			go drainEvents(ctx, presetDrift) // nobody else will read it now
+			go drainEvents(ctx, subRefreshEvents)
 		} else {
 			handler = h
 		}
@@ -382,7 +387,7 @@ func cmdDaemon(args []string) (err error) {
 // command handler. Both config reads happen before anything is started,
 // so an error leaves nothing half-running; cmdDaemon then carries on
 // without the agent.
-func startAgent(ctx context.Context, cfg *config.Config, d *failover.Daemon, logf func(string, ...any), presetDrift chan botcontrol.Event) (*botcontrol.RouterHandler, error) {
+func startAgent(ctx context.Context, cfg *config.Config, d *failover.Daemon, logf func(string, ...any), presetDrift, subRefreshEvents chan botcontrol.Event) (*botcontrol.RouterHandler, error) {
 	opts, err := loadAgentOptions(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("enabled but misconfigured: %w", err)
@@ -409,6 +414,7 @@ func startAgent(ctx context.Context, cfg *config.Config, d *failover.Daemon, log
 		postUpd,
 		autoRollback,
 		presetDrift,
+		subRefreshEvents,
 		selfUpdateFail,
 	)
 	handler := &botcontrol.RouterHandler{
@@ -421,6 +427,7 @@ func startAgent(ctx context.Context, cfg *config.Config, d *failover.Daemon, log
 		DaemonLog:              daemonLogPath(),
 		Logf:                   logf,
 		QualityStatePath:       qualityStatePath(),
+		SubRefreshStatePath:    subscriptionRefreshStatePath(),
 		SelfUpdateMarker:       selfUpdateMarkerPath(),
 		SelfUpdateLog:          selfUpdateLogPath(),
 		SelfUpdateLock:         selfUpdateLockPath(),

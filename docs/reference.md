@@ -389,7 +389,7 @@ keenetic-xray setup [--from <link|url>] [--primary <sel>] [--backup <sel>] [--pr
 keenetic-xray menu
 keenetic-xray daemon
 keenetic-xray profile {add <vless-uri>|list|remove <index>}
-keenetic-xray subscription {set-url <url>|refresh|list|set-primary <i>|set-backup <i>}
+keenetic-xray subscription {set-url <url>|refresh|list|set-primary <i>|set-backup <i>|auto [off|on|<hours>]}
 keenetic-xray status
 keenetic-xray doctor
 keenetic-xray logs [N] | logs access {on|off}
@@ -410,6 +410,21 @@ keenetic-xray rci {show|probe [url]|enable [url]|disable|token [<токен>|cle
 доступа: веб-интерфейс → Пользователи и доступ → Токены доступа → Добавить
 токен, затем `keenetic-xray rci token <токен>` или в боте `🔌 RCI →
 🔑 Ввести токен` (сообщение с токеном бот сразу удаляет из чата).
+
+`subscription auto` — автообновление подписки. Демон сам заново скачивает
+подписку (и источники слотов из `🔗 Источники`) раз в 12 часов; включено по
+умолчанию, если подписка задана ссылкой. `subscription auto` показывает
+состояние (когда было последнее обновление и когда следующее), `auto 6`
+ставит интервал в часах (1–168), `auto off` / `auto on` выключает и включает.
+То же в боте: `/sub_auto <роутер> [off|on|<часы>]`. Применяется само, без
+рестарта: демон перечитывает настройку не реже раза в 10 минут. Что делает
+автообновление иначе, чем кнопка `🔄 Обновить подписку`: перезапускает xray
+только если сервер действительно изменился (переименование и смена порядка —
+нет: счётчики трафика в названиях узлов не повод для рестарта); не подменяет рабочий
+список, если провайдер вернул меньше половины прежних профилей (бот скажет, и
+`/sub_refresh` применит как есть); при ошибке повторяет через 10 мин, 30 мин,
+2 ч, затем раз в 6 ч, а если подписка не обновляется целый интервал — один раз
+пишет в бот. Состояние — в `subscription-refresh.json` рядом с логами.
 
 Ключи `failover set`: `check_interval_seconds`, `failures_required`,
 `recovery_successes_required`, `cooldown_cycles`, `rollback_backoff_seconds`,

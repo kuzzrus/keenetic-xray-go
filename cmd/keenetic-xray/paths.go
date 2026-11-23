@@ -266,3 +266,10 @@ func envOr(key, fallback string) string {
 func l7sniStatsPath() string {
 	return envOr("KEENETIC_XRAY_L7SNI_STATS", "/tmp/keenetic-xray-l7sni.json")
 }
+
+// subscriptionRefreshStatePath is where the daemon's periodic subscription
+// refresh keeps its bookkeeping (subscription.RefreshState), read by
+// `subscription auto` and the bot's status.
+func subscriptionRefreshStatePath() string {
+	return envOr("KEENETIC_XRAY_SUB_REFRESH_STATE", logDir()+"/subscription-refresh.json")
+}

@@ -47,7 +47,9 @@ func AutoStatus(cfg *config.Config, st RefreshState, now time.Time, withLast boo
 	} else {
 		b.WriteString(", следующее — с минуты на минуту")
 	}
-	if st.Failures > 0 {
+	// A refresh by hand after the failed attempt ended the streak; the state only
+	// catches up at the next automatic attempt.
+	if st.Failures > 0 && !LastRefresh(cfg, st).After(st.LastAttempt) {
 		fmt.Fprintf(&b, "\n⚠️ последняя попытка не удалась (подряд: %d): %s", st.Failures, st.LastError)
 	}
 	return b.String()

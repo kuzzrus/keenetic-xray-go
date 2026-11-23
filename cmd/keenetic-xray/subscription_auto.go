@@ -144,7 +144,7 @@ func (r *autoRefresher) refresh(ctx context.Context, cfg *config.Config, st subs
 		// A note about a slot is said once per wording, not every twelve hours.
 		if len(res.Notes) == 0 {
 			st.WarnHash = ""
-		} else if h := hashLines(res.Notes); h != st.WarnHash {
+		} else if h := fingerprint(res.Notes); h != st.WarnHash {
 			st.WarnHash = h
 			r.push("⚠️ Подписка: " + strings.Join(res.Notes, "\n⚠️ "))
 		}
@@ -401,8 +401,6 @@ func slotRu(slot string) string {
 	}
 	return "основной"
 }
-
-func hashLines(lines []string) string { return fingerprint(lines) }
 
 func changedWord(changed bool) string {
 	if changed {

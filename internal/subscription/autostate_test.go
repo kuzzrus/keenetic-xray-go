@@ -195,3 +195,18 @@ func TestHumanDuration(t *testing.T) {
 		}
 	}
 }
+
+// A refresh by hand after the failed attempt ends the streak; the status must
+// not keep warning until the next automatic attempt rewrites the state.
+func TestAutoStatus_ManualRefreshAfterFailuresClearsTheWarning(t *testing.T) {
+	cfg := config.Default()
+	cfg.Subscription = &config.Subscription{URL: "u", LastFetchedAt: t0.Add(-time.Hour)}
+	st := RefreshState{LastAttempt: t0.Add(-3 * time.Hour), Failures: 2, LastError: "boom"}
+	if got := AutoStatus(cfg, st, t0, true); strings.Contains(got, "не удалась") {
+		t.Errorf("stale failure shown after a later success: %q", got)
+	}
+	st.LastAttempt = t0.Add(-time.Minute) // the failure is the latest thing that happened
+	if got := AutoStatus(cfg, st, t0, true); !strings.Contains(got, "не удалась (подряд: 2): boom") {
+		t.Errorf("current failure not shown: %q", got)
+	}
+}

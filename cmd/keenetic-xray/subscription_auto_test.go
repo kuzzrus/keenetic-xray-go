@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"hash/crc32"
 	"net/http"
@@ -651,5 +652,39 @@ func TestCmdSubscriptionAuto(t *testing.T) {
 	}
 	if err := run([]string{"subscription", "auto", "6", "7"}); err == nil {
 		t.Error("extra arguments were accepted")
+	}
+}
+
+// adoptRefresh and refreshInputs hard-code the fields RefreshConfig owns. If it
+// ever starts writing another one, the transplant would silently drop it: this
+// fails first.
+func TestRefreshConfig_OnlyTouchesTheFieldsTheAutoRefreshTransplants(t *testing.T) {
+	e := newAutoEnv(t, subBody("alpha", "beta", "gamma"), 13*time.Hour)
+	cfg := e.cfg()
+	cfg.PrimarySource = &config.SlotSource{URL: e.srv.URL + "/sub/x", Selector: "gamma"}
+	cfg.XHTTPMode = "packet-up"
+	cfg.PresetsNoAutoUpdate = true
+	cfg.SubscriptionRefreshHours = 6
+	e.srv.set(subBody("alpha", "gamma", "delta"))
+
+	top := func(c *config.Config) map[string]string {
+		var m map[string]json.RawMessage
+		b, _ := json.Marshal(c)
+		_ = json.Unmarshal(b, &m)
+		out := map[string]string{}
+		for k, v := range m {
+			out[k] = string(v)
+		}
+		return out
+	}
+	before := top(cfg)
+	if _, err := subscription.RefreshConfig(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	owned := map[string]bool{"profiles": true, "primary_index": true, "backup_index": true, "subscription": true, "primary_source": true, "backup_source": true}
+	for k, v := range top(cfg) {
+		if before[k] != v && !owned[k] {
+			t.Errorf("RefreshConfig changed %q, which adoptRefresh does not carry over", k)
+		}
 	}
 }

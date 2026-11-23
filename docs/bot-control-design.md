@@ -273,6 +273,27 @@ new build's parsing, e.g. the v0.12.0 xhttp `extra` blob) never reach an
 independently-sourced slot without re-pasting its URL by hand. Errors on
 one source don't abort the others.
 
+The daemon also does this **by itself**: `subscriptionAutoRefreshLoop`
+(`cmd/keenetic-xray/subscription_auto.go`) runs the same
+`subscription.RefreshConfig` every 12 hours (`subscription_refresh_hours`, off
+with `subscription_no_auto_refresh`; `/sub_auto`, `keenetic-xray subscription
+auto`). Differences from the button, all because nobody is watching: it fetches
+first and only then re-reads the config and transplants the refreshed fields into
+it, aborting if the operator changed what the refresh depends on meanwhile (so a
+40-second fetch cannot overwrite a change made during it); it reloads the daemon
+(a SIGHUP to itself, which restarts xray) only when a server it can use, or one in
+its two slots, actually changed -- a server is its connection fingerprint
+(`Profile.ImportKey`), so the counters panels put in node names, and a reordered
+list, change the file on disk but restart nothing and say nothing; it does not apply a list that came back with less than half of its
+profiles (a provider hiccup, or an expired subscription answered with a
+placeholder node) and says so instead; a failed fetch is retried after 10 min,
+30 min, 2 h and then every 6 h, and the operator hears about it once after a whole
+interval of failing; a server that vanished from the provider's list (kept, see
+`ApplyResult`) is reported once per wording. Its bookkeeping lives in
+`subscription-refresh.json` next to the logs, not in `config.json`; every URL in
+its log lines, state file and messages is redacted first. A push to the bot is sent
+only when something is worth saying (`Kind: "sub_refresh"`).
+
 There used to be a `📋 Профили` card button (an interactive screen for
 picking among *already loaded* profiles by index, `pfp:`/`pfb:`
 callbacks). Removed as low-value next to `🔗 Источники` -- it invited
@@ -415,6 +436,7 @@ ones are text-only:
 /profile_list <router>
 /sub_seturl <router> <url>
 /sub_refresh <router>
+/sub_auto <router> [off|on|<hours>]   show or set the automatic subscription refresh (default every 12 h)
 /sub_list <router>
 /sub_setprimary <router> <index>
 /sub_setbackup <router> <index>

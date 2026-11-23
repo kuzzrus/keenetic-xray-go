@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -12,7 +13,7 @@ import (
 
 func cmdSubscription(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: keenetic-xray subscription {set-url|refresh|list|set-primary|set-backup} [args]")
+		return fmt.Errorf("usage: keenetic-xray subscription {set-url|refresh|list|set-primary|set-backup|auto} [args]")
 	}
 	switch args[0] {
 	case "set-url":
@@ -25,6 +26,8 @@ func cmdSubscription(args []string) error {
 		return subscriptionSetRole(args[1:], true)
 	case "set-backup":
 		return subscriptionSetRole(args[1:], false)
+	case "auto":
+		return subscriptionAuto(args[1:])
 	default:
 		return fmt.Errorf("unknown subscription subcommand %q", args[0])
 	}
@@ -51,63 +54,55 @@ func subscriptionRefresh() error {
 	if err != nil {
 		return err
 	}
-	hasShared := cfg.Subscription != nil && cfg.Subscription.URL != ""
-	hasSlots := cfg.PrimarySource != nil || cfg.BackupSource != nil
-	if !hasShared && !hasSlots {
+	rep, err := subscription.RefreshConfig(context.Background(), cfg)
+	if errors.Is(err, subscription.ErrNothingToRefresh) {
 		return fmt.Errorf("no subscription URL or slot sources set -- run `keenetic-xray subscription set-url <url>` first")
 	}
-	ctx := context.Background()
-
-	if hasShared {
-		var primaryKey, backupKey string
-		if p := cfg.Primary(); p != nil {
-			primaryKey = p.Remark
-		}
-		if b := cfg.Backup(); b != nil {
-			backupKey = b.Remark
-		}
-		result, err := subscription.Refresh(ctx, cfg.Subscription.URL, primaryKey, backupKey)
-		if err != nil {
-			return fmt.Errorf("refreshing subscription: %w", err)
-		}
-		for _, w := range subscription.ApplyResult(cfg, result) {
-			fmt.Println("warning:", w)
-		}
-		fmt.Printf("subscription: %d profiles\n", len(result.Profiles))
+	if err != nil {
+		return fmt.Errorf("refreshing subscription: %w", err)
 	}
-
-	// Re-fetch independently-sourced slots too -- a shared-subscription
-	// refresh deliberately leaves them alone.
-	for _, s := range []struct {
-		name    string
-		src     *config.SlotSource
-		primary bool
-	}{
-		{"primary", cfg.PrimarySource, true},
-		{"backup", cfg.BackupSource, false},
-	} {
-		if s.src == nil {
+	for _, w := range rep.Warnings {
+		fmt.Println("warning:", w)
+	}
+	if rep.Shared {
+		fmt.Printf("subscription: %d profiles\n", rep.Profiles)
+	}
+	for _, s := range rep.Sources {
+		if s.Err != nil {
+			fmt.Printf("warning: source (%s): %v\n", s.Slot, s.Err)
 			continue
 		}
-		prof, key, err := subscription.ResolveSourcePinned(ctx, s.src.URL, s.src.Selector, s.src.ImportKey)
-		if err != nil {
-			fmt.Printf("warning: source (%s): %v\n", s.name, err)
-			continue
-		}
-		s.src.ImportKey = key // anchor (or backfill) so future refreshes stay on this server
-		idx := cfg.UpsertProfile(prof)
-		if s.primary {
-			cfg.PrimaryIndex = idx
-		} else {
-			cfg.BackupIndex = idx
-		}
-		fmt.Printf("source (%s) <- %s\n", s.name, prof.Remark)
+		fmt.Printf("source (%s) <- %s\n", s.Slot, s.Remark)
 	}
 
 	if err := cfg.Save(configPath()); err != nil {
 		return err
 	}
 	applyDaemonChange(nil, false)
+	return nil
+}
+
+// subscriptionAuto is `subscription auto [status|off|on|<hours>]`: show or set
+// how the daemon keeps the subscription fresh by itself. Nothing to signal: the
+// daemon's loop reads the config again at least every ten minutes.
+func subscriptionAuto(args []string) error {
+	if len(args) > 1 {
+		return fmt.Errorf("usage: keenetic-xray subscription auto [status|off|on|<hours 1..%d>]", config.MaxSubscriptionRefreshHours)
+	}
+	cfg, err := config.Load(configPath())
+	if err != nil {
+		return err
+	}
+	if len(args) == 1 && args[0] != "status" {
+		if err := cfg.SetSubscriptionAutoRefresh(args[0]); err != nil {
+			return err
+		}
+		if err := cfg.Save(configPath()); err != nil {
+			return err
+		}
+		fmt.Println("сохранено; демон подхватит это в течение 10 минут")
+	}
+	fmt.Println(subscription.AutoStatus(cfg, subscription.LoadRefreshState(subscriptionRefreshStatePath()), time.Now(), true))
 	return nil
 }
 

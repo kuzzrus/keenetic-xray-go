@@ -800,6 +800,7 @@ const helpText = `/menu — меню с кнопками (проще всего)
 /profile_list <router>
 /sub_seturl <router> <url>
 /sub_refresh <router>
+/sub_auto <router> [off|on|<часы>] — автообновление подписки (по умолчанию каждые 12 ч)
 /sub_list <router>
 /sub_setprimary <router> <index>
 /sub_setbackup <router> <index>
@@ -860,6 +861,8 @@ func (b *TelegramBot) dispatch(ctx context.Context, text string) string {
 		return b.dispatchSubSetURL(ctx, args)
 	case "/sub_refresh":
 		return b.runRouterCommand(ctx, args, ActionSubRefresh, nil)
+	case "/sub_auto":
+		return b.dispatchSubAuto(ctx, args)
 	case "/sub_list":
 		return b.runRouterCommand(ctx, args, ActionSubList, nil)
 	case "/sub_setprimary":
@@ -1282,6 +1285,13 @@ func (b *TelegramBot) dispatchSubSetURL(ctx context.Context, args []string) stri
 		return "формат: /sub_seturl <роутер> <url>"
 	}
 	return b.runRouterCommand(ctx, args[:1], ActionSubSetURL, []string{args[1]})
+}
+
+func (b *TelegramBot) dispatchSubAuto(ctx context.Context, args []string) string {
+	if len(args) < 1 || len(args) > 2 {
+		return "формат: /sub_auto <роутер> [off|on|<часы>]"
+	}
+	return b.runRouterCommand(ctx, args[:1], ActionSubAuto, args[1:])
 }
 
 func (b *TelegramBot) dispatchSubSetRole(ctx context.Context, args []string, action string) string {

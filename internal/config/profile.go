@@ -366,6 +366,46 @@ type Subscription struct {
 	BackupKey     string    `json:"backup_key,omitempty"`
 }
 
+const (
+	// DefaultSubscriptionRefreshHours is how often the daemon refreshes the
+	// subscription by itself when the config says nothing.
+	DefaultSubscriptionRefreshHours = 12
+	// MaxSubscriptionRefreshHours caps the configurable interval at a week.
+	MaxSubscriptionRefreshHours = 168
+)
+
+// SubscriptionRefreshInterval is how often the daemon should refresh the
+// subscription by itself; 0 means never (switched off).
+func (c *Config) SubscriptionRefreshInterval() time.Duration {
+	if c.SubscriptionNoAutoRefresh {
+		return 0
+	}
+	h := c.SubscriptionRefreshHours
+	if h <= 0 {
+		h = DefaultSubscriptionRefreshHours
+	}
+	return time.Duration(h) * time.Hour
+}
+
+// SetSubscriptionAutoRefresh applies what the operator typed for the automatic
+// refresh -- "off", "on", or an interval in whole hours -- shared by the CLI's
+// `subscription auto` and the bot's /sub_auto. A number also switches it on.
+func (c *Config) SetSubscriptionAutoRefresh(arg string) error {
+	switch a := strings.ToLower(strings.TrimSpace(arg)); a {
+	case "off":
+		c.SubscriptionNoAutoRefresh = true
+	case "on":
+		c.SubscriptionNoAutoRefresh = false
+	default:
+		h, err := strconv.Atoi(a)
+		if err != nil || h < 1 || h > MaxSubscriptionRefreshHours {
+			return fmt.Errorf("%q: нужно off, on или число часов 1..%d", arg, MaxSubscriptionRefreshHours)
+		}
+		c.SubscriptionRefreshHours, c.SubscriptionNoAutoRefresh = h, false
+	}
+	return nil
+}
+
 // SlotSource records where a single failover slot's profile came from, so
 // primary and backup can be fed from independent links or subscriptions.
 // URL is a secret (kept in the 0600 config.json, never echoed); Selector
@@ -1049,11 +1089,20 @@ type Config struct {
 	// PrimarySource / BackupSource feed the two slots from independent
 	// links or subscriptions (set via the bot's 🔗 Источники). Optional;
 	// a single shared Subscription still works the old way.
-	PrimarySource *SlotSource    `json:"primary_source,omitempty"`
-	BackupSource  *SlotSource    `json:"backup_source,omitempty"`
-	Failover      FailoverConfig `json:"failover"`
-	Agent         AgentConfig    `json:"agent"`
-	Proxy0        Proxy0Config   `json:"proxy0"`
+	PrimarySource *SlotSource `json:"primary_source,omitempty"`
+	BackupSource  *SlotSource `json:"backup_source,omitempty"`
+
+	// SubscriptionRefreshHours is how often the daemon re-fetches the
+	// subscription (and any independently-sourced slot) on its own: 0 means
+	// DefaultSubscriptionRefreshHours, otherwise 1..MaxSubscriptionRefreshHours.
+	// SubscriptionNoAutoRefresh switches it off (`subscription auto off`), the
+	// same on/off shape as PresetsNoAutoUpdate. See SubscriptionRefreshInterval.
+	SubscriptionRefreshHours  int  `json:"subscription_refresh_hours,omitempty"`
+	SubscriptionNoAutoRefresh bool `json:"subscription_no_auto_refresh,omitempty"`
+
+	Failover FailoverConfig `json:"failover"`
+	Agent    AgentConfig    `json:"agent"`
+	Proxy0   Proxy0Config   `json:"proxy0"`
 
 	// WGTransport, when enabled, stands up a Keenetic WireGuard interface
 	// that carries selected LAN traffic into the local xray `wireguard`
@@ -1553,6 +1602,9 @@ func (c *Config) Validate() error {
 	if m := c.Failover.QualitySweepMinutes; m != 0 && (m < 15 || m > 1440) {
 		return fmt.Errorf("failover.quality_sweep_minutes %d out of range (0 to disable, or 15..1440)", m)
 	}
+	if h := c.SubscriptionRefreshHours; h < 0 || h > MaxSubscriptionRefreshHours {
+		return fmt.Errorf("subscription_refresh_hours %d out of range (0 for the default %d, or 1..%d)", h, DefaultSubscriptionRefreshHours, MaxSubscriptionRefreshHours)
+	}
 	if err := c.WGTransport.validate(); err != nil {
 		return err
 	}
@@ -1810,6 +1862,11 @@ func (c *Config) Redacted() *Config {
 	}
 	return &d
 }
+
+// RedactURL is redactURLPath for callers outside this package: it keeps
+// scheme://host and hides the path and query, where a subscription or DoH
+// URL carries its token.
+func RedactURL(u string) string { return redactURLPath(u) }
 
 // redactURLPath keeps scheme://host of a URL but replaces the path and
 // query with "/<redacted>" -- a DoH URL's path segment is often a

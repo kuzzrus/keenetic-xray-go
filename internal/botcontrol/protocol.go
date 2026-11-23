@@ -23,6 +23,9 @@ const (
 	ActionSubList       = "sub_list"
 	ActionSubSetPrimary = "sub_setprimary"
 	ActionSubSetBackup  = "sub_setbackup"
+	// ActionSubAuto: args[0] = "off", "on" or an interval in hours; no args
+	// just reports how the daemon keeps the subscription fresh by itself.
+	ActionSubAuto = "sub_auto"
 	// ActionSetPrimarySource / ...Backup...: args[0] = a vless:// link or
 	// an http(s):// subscription URL; args[1] = optional selector (index,
 	// Remark substring, or "" for the first). Feeds one slot from its own

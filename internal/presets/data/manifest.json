@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated": "2026-11-22",
+  "generated": "2026-11-24",
   "categories": [
     "Мессенджеры",
     "Видео",
@@ -406,8 +406,8 @@
       "title": "Fastly",
       "category": "CDN и инфраструктура",
       "kind": "domains",
-      "count": 7,
-      "rev": "edc9fcbe21cd",
+      "count": 9,
+      "rev": "d1b968d4e0c1",
       "sources": [
         "Geo-Aggregator: fastly"
       ]
@@ -467,11 +467,11 @@
       "category": "Работа и инструменты",
       "kind": "domains",
       "count": 250,
-      "rev": "ee5a5bc9f958",
+      "rev": "829a654f1141",
       "sources": [
         "Geo-Aggregator: google"
       ],
-      "source_count": 827
+      "source_count": 828
     },
     {
       "name": "google-ai",
@@ -479,8 +479,8 @@
       "title": "Google Gemini",
       "category": "Искусственный интеллект",
       "kind": "domains",
-      "count": 49,
-      "rev": "536597a1d22f",
+      "count": 50,
+      "rev": "5d873f0fa04e",
       "sources": [
         "Geo-Aggregator: google-gemini"
       ]
